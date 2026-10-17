@@ -41,12 +41,12 @@ O conjunto se chama `forge_system`. Os serviços têm nomes diretos:
 | Serviço | Processo |
 | --- | --- |
 | `backend` | A API FastAPI. A API é o backend, e os dois não viram containers separados. |
-| `frontend` | A interface. Ainda não há tela. |
+| `frontend` | A tela escura em JavaScript, React, Tailwind e Vite. Ela mostra áreas vazias e ainda não conversa com a API. |
 | `postgres` | O PostgreSQL do próprio Forge. |
 
-O `frontend` conversa com o `backend`. O `backend` conversa com o `postgres`.
+O `backend` conversa com o `postgres`. O `frontend` ainda não está configurado para chamar o `backend`.
 
-Na primeira execução, o Compose sobe somente o `postgres`. O `backend` roda na máquina, e por isso alcança o banco em `localhost`. O nome `postgres` passa a ser o endereço quando o `backend` também estiver na rede do Compose. Os detalhes dessa execução estão em [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+O Compose sobe `postgres` e `frontend`. A tela abre em `http://127.0.0.1:8080`. O `backend` continua na máquina enquanto a ligação da tela não existir. Os detalhes estão em [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 O plano operacional está em [.specs/IMPLEMENTATION_PLAN.md](.specs/IMPLEMENTATION_PLAN.md).
 

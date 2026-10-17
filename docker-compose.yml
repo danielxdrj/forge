@@ -12,5 +12,10 @@ services:
     volumes:
       - forge_postgres_data:/var/lib/postgresql/data
 
+  frontend:
+    build: ./frontend
+    ports:
+      - "127.0.0.1:8080:80"
+
 volumes:
   forge_postgres_data:
