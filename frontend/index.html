@@ -1,44 +1,12 @@
 <!DOCTYPE html>
 <html lang="pt-BR">
   <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Forge</title>
-    <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
-    <header class="topbar">
-      <div>
-        <p class="mark">Forge</p>
-        <p class="subtitle">Copiloto local</p>
-      </div>
-      <p class="status">Tela visível. A ligação com a API ainda não está configurada.</p>
-    </header>
-
-    <main class="layout">
-      <section class="panel" aria-labelledby="list-title">
-        <div class="panel-head">
-          <h1 id="list-title">Investigações</h1>
-        </div>
-        <form class="composer">
-          <label for="title">Nova investigação</label>
-          <input id="title" name="title" type="text" maxlength="200" placeholder="Título" disabled />
-          <button type="button" disabled>Criar</button>
-        </form>
-        <p class="empty">Nenhuma investigação para mostrar.</p>
-      </section>
-
-      <section class="panel detail" aria-labelledby="detail-title">
-        <div class="panel-head">
-          <h2 id="detail-title">Detalhe</h2>
-        </div>
-        <p class="empty">Selecione uma investigação quando a tela estiver ligada à API.</p>
-        <form class="composer">
-          <label for="log">Log local</label>
-          <textarea id="log" name="log" rows="8" placeholder="O texto do log aparece aqui." disabled></textarea>
-          <button type="button" disabled>Anexar log</button>
-        </form>
-      </section>
-    </main>
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
   </body>
 </html>

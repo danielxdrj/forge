@@ -10,7 +10,7 @@ Este guia descreve o código da etapa que cria e consulta uma investigação. O 
 
 ## API
 
-As duas rotas estão em `backend/app/investigations.py`. A documentação interativa do FastAPI continua sendo o uso da API. A pasta `frontend` mostra a tela escura e ainda não chama essas rotas.
+As duas rotas estão em `backend/app/investigations.py`. A documentação interativa do FastAPI continua sendo o uso da API. A pasta `frontend` é uma aplicação React com Tailwind. Ela mostra a tela escura e ainda não chama essas rotas.
 
 ## FastAPI
 

@@ -25,9 +25,9 @@ A branch-base do projeto é `main`. Trabalho novo sai dela, pelo protocolo em [E
 - Persistência dos dados do próprio Forge: PostgreSQL, no serviço `postgres`.
 - Projeto do Compose: `forge_system`.
 - Serviços previstos: `backend`, `frontend` e `postgres`.
-- Na primeira execução, o Compose sobe somente `postgres`. O `backend` alcança o banco por `localhost`.
+- O Compose sobe `postgres` e `frontend`. O `backend` alcança o banco por `localhost`.
 - O nome `postgres` é o endereço quando o `backend` também estiver na rede do Compose.
-- A interface inicial é a documentação interativa do FastAPI. O `frontend` entra quando houver interface.
+- A documentação interativa do FastAPI continua sendo o uso da API. A tela do `frontend` existe, em React e Tailwind, e ainda não chama a API.
 - A primeira funcionalidade cria uma investigação e a consulta pelo identificador.
 - Os campos desse primeiro registro são identificador, título e data de criação.
 - As rotas previstas são `POST /investigations` e `GET /investigations/{investigation_id}`.

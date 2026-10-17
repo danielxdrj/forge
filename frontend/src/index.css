@@ -1,0 +1,11 @@
+@import "tailwindcss";
+
+@theme {
+  --color-forge-bg: #101114;
+  --color-forge-panel: #181b20;
+  --color-forge-line: #2a2f37;
+  --color-forge-text: #e8eaed;
+  --color-forge-muted: #9aa1ab;
+  --color-forge-copper: #d3924a;
+  --color-forge-copper-dim: #8a5d2e;
+}
