@@ -42,7 +42,7 @@ Pare e pergunte se a tarefa:
 - exige uma decisão listada como pendente;
 - pede escrita em sistema externo, correção automática ou uso de credencial real;
 - exige uma dependência nova que a etapa atual não previu;
-- só fecha se você assumir quem é o usuário, qual é a interface ou qual LLM será usado.
+- só fecha se você assumir campos pendentes, o formato da evidência de log, o lugar do SQLite, o endereço da API ou qual LLM será usado.
 
 ## Definição de pronto de uma alteração
 

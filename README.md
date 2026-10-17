@@ -20,7 +20,18 @@ Um engenheiro encontra um problema e precisa reunir contexto de vários lugares:
 
 ## Estado atual
 
-Etapa 0: fundação documental. O comportamento do produto ainda não foi implementado.
+A fundação documental está registrada. As decisões abaixo valem para a primeira implementação. Ainda não há código, dependências instaladas nem integrações.
+
+## Decisões aprovadas para a primeira implementação
+
+- Linguagem: Python.
+- Backend: FastAPI.
+- Persistência local inicial: SQLite.
+- Interface desta etapa: API local, com a documentação automática do FastAPI.
+- Uso: uma pessoa, nesta máquina.
+- Primeiro caso de uso: registrar uma investigação e analisar evidências fornecidas a partir de um arquivo de log local.
+- Nesta etapa não há conexão com sistemas externos.
+- A integração com LLM espera a definição de como será feita.
 
 Integrações citadas como evolução futura, ainda sem desenho detalhado nem ordem definida: bancos de dados, FTP/SFTP, repositórios GitHub, Portainer e outras ferramentas.
 
@@ -33,6 +44,6 @@ Integrações citadas como evolução futura, ainda sem desenho detalhado nem or
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Proposta inicial de arquitetura e decisões que ainda são hipóteses. |
 | [docs/ROADMAP.md](docs/ROADMAP.md) | Etapas incrementais, do protótipo local até integrações futuras. |
 
-## O que estes documentos não fazem
+## O que ainda não está decidido
 
-Eles não escolhem linguagem, interface, banco local nem provedor de LLM. Essas escolhas estão marcadas como pendências. A implementação começa somente depois que as decisões bloqueantes da primeira etapa forem respondidas.
+Os documentos registram as decisões acima e continuam sem definir campos da investigação, o que guardar de um arquivo de log, o provedor de LLM e a ordem das integrações futuras. A implementação espera a aprovação do recorte vertical.
