@@ -1,12 +1,10 @@
 # 01 — Criar e consultar uma investigação
 
-Estado: bloqueada.
-
-A direção está aprovada. O código não começa enquanto as decisões essenciais abaixo estiverem abertas.
+Estado: concluída.
 
 ## Objetivo e contexto
 
-Persistir uma investigação no PostgreSQL do Forge e recuperá-la pelo identificador. Esta é a primeira funcionalidade de código. Não há aplicação no repositório.
+Persistir uma investigação no PostgreSQL do Forge e recuperá-la pelo identificador. O código desta etapa está em `backend/`.
 
 ## Problema que resolve
 
@@ -28,7 +26,7 @@ Sem um registro reabrível, o restante do copiloto não tem onde guardar evidên
 - `GET /investigations/{investigation_id}`.
 - Testes desses fluxos.
 
-O título vem de quem chama a API. O identificador e a data de criação ficam a cargo do banco, no formato ainda não aprovado.
+O título vem de quem chama a API. O identificador e a data de criação ficam a cargo do banco.
 
 ## Escopo excluído
 
@@ -37,8 +35,6 @@ O título vem de quem chama a API. O identificador e a data de criação ficam a
 Reabrir a investigação é a consulta pelo identificador. Não há etapa separada de histórico.
 
 ## Arquivos previstos
-
-Nenhum existe ainda.
 
 | Arquivo | Responsabilidade |
 | --- | --- |
@@ -55,9 +51,7 @@ Nenhum existe ainda.
 
 Um único módulo de investigação basta para um recurso. Separar pastas e classes quando um segundo recurso mostrar a necessidade.
 
-## Dependências propostas
-
-Ainda não são uma lista fechada e não estão instaladas.
+## Dependências
 
 Para rodar: `fastapi`, `uvicorn`, `psycopg[binary]`. O FastAPI traz o Pydantic.
 
@@ -93,23 +87,20 @@ Cliente HTTP do FastAPI contra um PostgreSQL de teste. Cada teste começa com a 
 
 - `DATABASE_URL` contém segredo e não pode aparecer em código, log, teste ou commit.
 - SQL concatenado permitiria mudar o comando. A etapa usa parâmetros.
-- Sem autenticação, quem alcançar o endereço de escuta usa a API. O endereço ainda não foi escolhido.
+- Sem autenticação, quem alcançar o endereço de escuta usa a API. O endereço só existe quando `FORGE_HOST` e `FORGE_PORT` estão no ambiente.
 - Volume do PostgreSQL dentro da pasta do repositório mistura dado local e Git. Os dados ficam fora do repositório.
 - Teste com banco sujo depende de estado anterior. A tabela de teste começa vazia.
 
-## Decisões pendentes
+## Decisões aprovadas
 
-Essenciais, bloqueiam o código:
-
-1. O identificador é um número gerado pelo PostgreSQL ou outro formato?
-2. Qual é o tamanho máximo do título?
-3. Em qual endereço a API escuta?
-
-Não bloqueiam esta especificação, e também não devem ser escolhidas em silêncio na implementação: nome do banco e nome do usuário. Se continuarem abertos no momento da autorização, pare e pergunte.
+- O identificador é um número gerado pelo PostgreSQL, `bigint GENERATED ALWAYS AS IDENTITY`.
+- O título tem no máximo 200 caracteres. Ausente, vazio ou só com espaços é recusado.
+- O banco e o usuário se chamam `forge`. A senha fica no ambiente e ainda não foi preenchida.
+- A API não escuta em `127.0.0.1:8000` por padrão. `FORGE_HOST` e `FORGE_PORT` vêm do ambiente e continuam vazios até serem definidos. Sem os dois, o processo não escolhe um endereço.
 
 ## Aprovação
 
-Depende da etapa 00, já concluída, e da autorização explícita depois que as três decisões essenciais forem respondidas.
+A etapa 00 está concluída e esta etapa foi autorizada.
 
 ## Commits previstos
 

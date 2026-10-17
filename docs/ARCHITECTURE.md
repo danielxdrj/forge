@@ -1,6 +1,6 @@
 # Arquitetura
 
-Este documento é uma proposta. O repositório ainda não tem módulos, processos nem dependências. O que está marcado como **definido** veio dos princípios do projeto. O que está marcado como **hipótese** pode mudar antes da implementação. O que está marcado como **pendente** bloqueia a etapa que depender dele.
+Este documento registra a forma do Forge. O que está marcado como **definido** já vale. O que está marcado como **hipótese** pode mudar. O que está marcado como **pendente** bloqueia a etapa que depender dele.
 
 ## Definido
 
@@ -89,7 +89,7 @@ Definido:
 
 O `postgres` do Forge é diferente de um banco externo consultado numa investigação futura. Esse banco externo, se entrar, será um conector somente leitura.
 
-Não há `Dockerfile` nem arquivo do Compose no repositório. A senha do PostgreSQL segue a regra dos segredos: fora do código, dos logs, dos prompts e do Git.
+O Compose do `postgres` está em `docker-compose.yml`. Não há `Dockerfile` do `backend`. A senha do PostgreSQL segue a regra dos segredos: fora do código, dos logs, dos prompts e do Git.
 
 ## Decisões da primeira implementação
 
@@ -155,10 +155,8 @@ Fora do desenho atual. Quando chegar, autenticação, exposição de rede e o lu
 
 ## Pendências que a arquitetura não resolve
 
-1. Qual formato identifica uma investigação, e qual é o tamanho máximo do título.
-2. Como o arquivo de log chega à API e o que dele fica persistido.
-3. Em qual endereço a API local escuta.
-4. Provedor de LLM e se a chamada pode sair da máquina.
-5. Mecanismo do cofre.
-6. Confirmação humana do contexto antes do envio ao modelo. A arquitetura recomenda que sim; o produto ainda pergunta.
-7. Primeira fonte externa, quando os conectores entrarem. O log local do primeiro caso de uso não responde a essa escolha.
+1. Como o arquivo de log chega à API e o que dele fica persistido.
+2. Provedor de LLM e se a chamada pode sair da máquina.
+3. Mecanismo do cofre.
+4. Confirmação humana do contexto antes do envio ao modelo. A arquitetura recomenda que sim; o produto ainda pergunta.
+5. Primeira fonte externa, quando os conectores entrarem. O log local do primeiro caso de uso não responde a essa escolha.

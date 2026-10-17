@@ -16,7 +16,7 @@ Não entra: código, dependências, Compose e integrações.
 
 ## Etapa 01 — Criar e consultar uma investigação
 
-Estado: direção aprovada e implementação bloqueada. Nenhum arquivo dessa etapa existe ainda.
+Estado: concluída.
 
 Objetivo: persistir uma investigação e recuperá-la pelo identificador.
 
@@ -24,7 +24,7 @@ Entra: Python, FastAPI na máquina local, PostgreSQL no serviço `postgres`, os 
 
 Não entra: alteração, exclusão e listagem de investigação, `frontend`, imagem do `backend`, LLM, conexões externas, cofre, upload, análise de log e publicação no GitHub.
 
-Bloqueia o início do código: formato do identificador, tamanho máximo do título e endereço de escuta da API.
+Decisões desta etapa: identificador numérico gerado pelo PostgreSQL, título de até 200 caracteres, banco e usuário `forge`. A senha fica no ambiente. A API não usa `127.0.0.1:8000` como padrão; `FORGE_HOST` e `FORGE_PORT` vêm do ambiente.
 
 Pronto quando: criar uma investigação e consultá-la devolve o mesmo registro depois de uma nova conexão com o PostgreSQL, e os testes cobrem título válido, título rejeitado e identificador ausente.
 
