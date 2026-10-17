@@ -1,6 +1,6 @@
 # 02 — Evidência de log local
 
-Estado: bloqueada.
+Estado: concluída.
 
 ## Objetivo e contexto
 
@@ -13,7 +13,6 @@ Uma investigação só com título não guarda o fato que motivou o diagnóstico
 ## Pré-requisitos
 
 - Etapa 01 concluída.
-- Decisão de como o arquivo chega à API e do que fica persistido.
 
 ## Escopo incluído
 
@@ -29,9 +28,13 @@ A primeira versão do roadmap pedia evidência manual: um texto colado pelo oper
 
 A imutabilidade da evidência depois de registrada também estava nessa versão. A arquitetura ainda a trata como hipótese, não como regra aprovada.
 
-## Arquivos
+## Como o log entra
 
-Ainda não conhecidos. Serão definidos quando a forma de recebimento do log for aprovada. A etapa não cria esse contrato agora.
+O texto do log chega no JSON de `POST /investigations/{investigation_id}/evidence`. A API não recebe caminho de disco, não faz upload de arquivo e não usa credencial. Credenciais e tokens ficam para uma correção posterior.
+
+O que fica gravado é o texto inteiro, a origem `local_log` definida pelo servidor, o momento e a ligação com a investigação. Não ficam caminho nem nome de arquivo.
+
+Esta etapa não oferece alteração nem exclusão da evidência. A hipótese de imutabilidade continua sem uma regra extra no banco.
 
 ## Critérios de aceite
 
@@ -53,9 +56,8 @@ Um log pode ser grande e pode conter segredo. O que fica gravado é decisão ess
 
 ## Decisões pendentes
 
-1. Como o arquivo chega à API.
-2. O que dele fica persistido: texto, trecho, nome, caminho, momento ou outra combinação.
-3. Se a evidência, uma vez registrada, pode ser alterada. Isso continua hipótese.
+1. Tamanho máximo do texto. Um log grande continua sendo um risco deixado para correção posterior.
+2. Se a evidência, uma vez registrada, pode ser alterada. Isso continua hipótese.
 
 ## Aprovação
 

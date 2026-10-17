@@ -9,7 +9,9 @@ from app.main import app
 def client() -> TestClient:
     with TestClient(app) as test_client:
         with connect() as connection:
-            connection.execute("TRUNCATE investigations RESTART IDENTITY")
+            connection.execute(
+                "TRUNCATE investigations RESTART IDENTITY CASCADE"
+            )
         yield test_client
 
 
@@ -61,6 +63,80 @@ def test_missing_investigation_returns_not_found(client: TestClient) -> None:
     response = client.get("/investigations/999")
 
     assert response.status_code == 404
+
+
+def test_attached_log_appears_when_investigation_is_reopened(
+    client: TestClient,
+) -> None:
+    created = client.post("/investigations", json={"title": "Fechamento"}).json()
+    content = "erro ao enviar email de mapeamento"
+
+    attached = client.post(
+        f"/investigations/{created['id']}/evidence",
+        json={"content": content},
+    )
+
+    assert attached.status_code == 201
+    assert attached.json()["origin"] == "local_log"
+    assert attached.json()["content"] == content
+    assert attached.json()["created_at"]
+
+    fetched = client.get(f"/investigations/{created['id']}")
+    evidence = fetched.json()["evidence"]
+    assert len(evidence) == 1
+    assert evidence[0]["content"] == content
+    assert evidence[0]["origin"] == "local_log"
+
+
+def test_log_survives_a_new_connection(client: TestClient) -> None:
+    created = client.post("/investigations", json={"title": "Log"}).json()
+    client.post(
+        f"/investigations/{created['id']}/evidence",
+        json={"content": "linha do log"},
+    )
+
+    with connect() as connection:
+        row = connection.execute(
+            "SELECT content FROM evidence WHERE investigation_id = %s",
+            (created["id"],),
+        ).fetchone()
+
+    assert row is not None
+    assert row["content"] == "linha do log"
+
+
+@pytest.mark.parametrize("payload", [{}, {"content": ""}, {"content": "   "}])
+def test_rejects_blank_log(client: TestClient, payload: dict[str, str]) -> None:
+    created = client.post("/investigations", json={"title": "Sem log"}).json()
+    response = client.post(
+        f"/investigations/{created['id']}/evidence",
+        json=payload,
+    )
+
+    assert response.status_code == 422
+    with connect() as connection:
+        count = connection.execute("SELECT count(*) AS total FROM evidence").fetchone()
+    assert count is not None
+    assert count["total"] == 0
+
+
+def test_log_for_missing_investigation_returns_not_found(client: TestClient) -> None:
+    response = client.post("/investigations/999/evidence", json={"content": "log"})
+
+    assert response.status_code == 404
+
+
+def test_log_with_sql_text_is_stored_as_text(client: TestClient) -> None:
+    created = client.post("/investigations", json={"title": "Texto"}).json()
+    content = "log'; DROP TABLE evidence; --"
+    attached = client.post(
+        f"/investigations/{created['id']}/evidence",
+        json={"content": content},
+    )
+
+    assert attached.status_code == 201
+    fetched = client.get(f"/investigations/{created['id']}")
+    assert fetched.json()["evidence"][0]["content"] == content
 
 
 def test_title_with_sql_text_is_stored_as_text(client: TestClient) -> None:

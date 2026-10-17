@@ -32,7 +32,9 @@ Especificação: [.specs/steps/01-create-and-read-investigation.md](../.specs/st
 
 ## Etapa 02 — Evidência de log local
 
-Estado: bloqueada.
+Estado: concluída.
+
+O log chega como texto no JSON. A API grava o texto, a origem `local_log` e o momento. Não lê caminho de disco e não usa credencial.
 
 Objetivo: anexar à investigação a evidência vinda de um arquivo de log local.
 
@@ -42,7 +44,7 @@ Não entra: leitura de sistema externo e análise por LLM. Unir esta etapa à et
 
 Proposta anterior, substituída: texto colado pelo operador, com origem “manual” e o momento do anexo. A fonte atual é o arquivo de log local. A imutabilidade da evidência continua hipótese da arquitetura, sem aprovação.
 
-Bloqueia até responder: como o arquivo chega à API e o que dele fica persistido.
+Ainda em aberto, para correção posterior: tamanho máximo do texto e se a evidência pode ser alterada.
 
 Pronto quando: a investigação reaberta mostra a evidência que foi anexada, e um teste cobre isso.
 

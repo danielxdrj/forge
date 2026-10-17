@@ -44,7 +44,7 @@ Enviar ao modelo um contexto montado a partir da investigação e receber um tex
 
 A primeira implementação cria uma investigação e permite consultá-la depois, nesta máquina. O registro tem identificador, título e data de criação.
 
-O caso mais amplo continua sendo investigar um problema com evidências, inclusive um log local, e mais tarde pedir uma análise ao LLM. Log, upload e análise não fazem parte da primeira implementação.
+Um log local pode ser anexado como texto. A API não lê o arquivo no disco. A análise por LLM continua fora.
 
 ## Tarefas no GitHub
 
