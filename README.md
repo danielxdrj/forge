@@ -20,7 +20,7 @@ Um engenheiro encontra um problema e precisa reunir contexto de vários lugares:
 
 ## Estado atual
 
-A etapa 01 está concluída: a API cria e consulta uma investigação. O banco e o usuário se chamam `forge`. A senha, `FORGE_HOST` e `FORGE_PORT` ficam no ambiente e ainda estão vazios.
+A API cria e consulta uma investigação e anexa o texto de um log local. O banco e o usuário se chamam `forge`. A senha, `FORGE_HOST` e `FORGE_PORT` ficam no ambiente e ainda estão vazios. Credenciais e tokens ficam para uma correção posterior.
 
 ## Decisões aprovadas para a primeira implementação
 

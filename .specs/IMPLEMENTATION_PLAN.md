@@ -1,6 +1,6 @@
 # Plano de implementação
 
-Índice das etapas. O detalhe executável está no arquivo de cada etapa. A etapa 01 está concluída. As seguintes continuam bloqueadas.
+Índice das etapas. O detalhe executável está no arquivo de cada etapa. As etapas 01 e 02 estão concluídas. As seguintes continuam bloqueadas.
 
 A ordem segue o [roadmap](../docs/ROADMAP.md). Uma alternativa considerada no início, ligar um conector real antes de qualquer LLM, não foi adotada. Outra proposta antiga, anexar texto colado à mão, foi substituída pela evidência de log local. As duas permanecem registradas na etapa correspondente. Não são requisitos descartados em silêncio: uma foi preterida, a outra mudou de fonte.
 
@@ -12,7 +12,7 @@ A branch-base é `main`.
 | --- | --- | --- | --- | --- |
 | 00 | Documentação inicial | concluída | — | os documentos atuais do repositório |
 | 01 | Criar e consultar uma investigação | concluída | 00 concluída | [steps/01-create-and-read-investigation.md](steps/01-create-and-read-investigation.md) |
-| 02 | Evidência de log local | bloqueada | 01 concluída | [steps/02-local-log-evidence.md](steps/02-local-log-evidence.md) |
+| 02 | Evidência de log local | concluída | 01 concluída | [steps/02-local-log-evidence.md](steps/02-local-log-evidence.md) |
 | 03 | Análise por LLM | bloqueada | 02 concluída | [steps/03-llm-analysis.md](steps/03-llm-analysis.md) |
 | 04 | Conexão e cofre | bloqueada | 01 concluída | [steps/04-connections-and-vault.md](steps/04-connections-and-vault.md) |
 | 05 | Primeiro conector somente leitura | bloqueada | 02 concluída; 04 se a fonte usar segredo | [steps/05-first-read-connector.md](steps/05-first-read-connector.md) |

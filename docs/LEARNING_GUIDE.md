@@ -6,6 +6,8 @@ Este guia descreve o código da etapa que cria e consulta uma investigação. O 
 
 `POST /investigations` cria o registro e responde `201`. `GET /investigations/{investigation_id}` devolve o mesmo registro, ou `404` quando o identificador não existe. Título ausente, vazio ou só com espaços responde `422`.
 
+`POST /investigations/{investigation_id}/evidence` anexa o texto de um log local. A consulta da investigação devolve essa evidência, com origem `local_log`. A API não lê arquivo do disco e não recebe credencial.
+
 ## API
 
 As duas rotas estão em `backend/app/investigations.py`. A documentação interativa do FastAPI continua sendo a interface, porque o `frontend` ainda não existe.
