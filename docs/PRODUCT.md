@@ -38,7 +38,9 @@ Guardar um caso de diagnóstico para retomar depois. O primeiro registro tem ide
 
 ### Análise por LLM
 
-Enviar ao modelo um contexto montado a partir da investigação e receber um texto que ajude o diagnóstico. O texto fica associado à investigação. O Forge não transforma esse texto em alteração de código nem em ação no sistema consultado.
+Enviar ao modelo um contexto montado a partir da investigação e receber um texto que ajude o diagnóstico. O texto fica associado à investigação. Quem opera confirma o contexto antes do envio, e esse texto não sai da máquina. A resposta tem estrutura fixa e inclui a sugestão de correção.
+
+O fluxo aprovado tem três momentos. O Forge investiga e devolve a sugestão. Se quem opera aprovar, o Cursor altera o código ou devolve o SQL para alterar o banco. Esse SQL volta como texto e não é executado. Se a alteração for de código, uma segunda aprovação vem antes de criar o commit e enviar a branch. A etapa da análise guarda a sugestão. Os dois momentos seguintes ficam para uma etapa posterior, ainda sem abertura.
 
 ## Primeiro caso de uso
 
@@ -59,7 +61,7 @@ O Forge não faz, nesta visão de produto:
 - escrever em sistemas conectados, com uma exceção futura: publicar uma tarefa no GitHub depois de aprovação explícita;
 - corrigir código automaticamente;
 - alterar produção;
-- executar a sugestão do LLM;
+- executar a sugestão do LLM na etapa da análise. A aplicação depois de aprovação fica para uma etapa posterior, ainda sem abertura;
 - enviar credenciais ao modelo, aos logs ou ao repositório;
 - hospedar o serviço para outras pessoas, até essa etapa existir no roadmap e ser decidida de novo.
 
@@ -84,6 +86,3 @@ Python, FastAPI, PostgreSQL e o fluxo da primeira API estão em [ARCHITECTURE.md
 1. Além de identificador, título e data de criação, quais dados uma investigação precisa ter no dia a dia?
 2. Do arquivo de log local, o que fica guardado na investigação, e como esse arquivo chega até a API?
 3. “Fonte autorizada” significa toda conexão cadastrada, ou cada investigação libera explicitamente o que pode ser consultado?
-4. A resposta do LLM pode ser texto livre, ou precisa de uma estrutura fixa, como hipóteses e próximos passos?
-5. Quem opera deve ver e confirmar o contexto antes de ele ser enviado ao modelo?
-6. O conteúdo enviado ao LLM pode sair da máquina, ou o diagnóstico precisa permanecer local?
