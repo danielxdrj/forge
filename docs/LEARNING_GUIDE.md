@@ -10,7 +10,7 @@ Este guia descreve o código da etapa que cria e consulta uma investigação. O 
 
 ## API
 
-As duas rotas estão em `backend/app/investigations.py`. A documentação interativa do FastAPI continua sendo a interface, porque o `frontend` ainda não existe.
+As duas rotas estão em `backend/app/investigations.py`. A documentação interativa do FastAPI continua sendo o uso da API. A pasta `frontend` mostra a tela escura e ainda não chama essas rotas.
 
 ## FastAPI
 
@@ -53,4 +53,4 @@ O Python não carrega o `.env` sozinho. O Compose lê esse arquivo para subir o 
 
 ## O que este guia não cobre ainda
 
-LLM, upload de log, conectores externos, cofre de segredos, `frontend` e publicação de tarefas no GitHub continuam nas etapas seguintes.
+LLM, upload de log, conectores externos, cofre de segredos, a ligação da tela com a API e a publicação de tarefas no GitHub continuam nas etapas seguintes.

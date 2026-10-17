@@ -47,7 +47,7 @@ flowchart LR
 
 Os casos de uso são o centro. Eles criam e retomam investigações, pedem leituras e solicitam análises. A hipótese é que dependam das portas. PostgreSQL, no serviço `postgres`, é o armazenamento aprovado para o início. GitHub e o fornecedor de LLM continuam fora desta etapa.
 
-A API fica no serviço `backend`. O serviço `frontend`, quando existir, chama essa API e não muda o que é uma investigação.
+A API fica no serviço `backend`. A tela do `frontend` existe e ainda não chama essa API. Quando a ligação for configurada, ela não muda o que é uma investigação.
 
 Os adaptadores ficam na outra borda. Um conector novo é um adaptador novo. Ele não recebe permissão de escrita porque a porta não tem essa operação.
 
@@ -79,10 +79,10 @@ Definido:
 
 - O projeto do Compose se chama `forge_system`.
 - O serviço `backend` executa a API FastAPI. Não há outro container de API.
-- O serviço `frontend` executa a interface. Esse código ainda não existe. Até lá, a documentação interativa do FastAPI é o uso da API.
+- O serviço `frontend` mostra a tela escura. Essa tela ainda não chama a API. A documentação interativa do FastAPI continua disponível no `backend`.
 - Na primeira execução, somente o `postgres` sobe pelo Compose. O processo do `backend` roda na máquina e alcança o banco por `localhost`.
 - O serviço `postgres` executa o PostgreSQL que guarda os dados do Forge.
-- O `frontend` fala com o `backend`. O `backend` fala com o `postgres`.
+- O `backend` fala com o `postgres`. A fala do `frontend` com o `backend` ainda não está configurada.
 - Na rede do Compose, o nome do serviço é o endereço. O nome `postgres` vale quando o `backend` também estiver nessa rede.
 - Os containers aparecem como `forge_system-backend-1`, `forge_system-frontend-1` e `forge_system-postgres-1`.
 - Os dados do PostgreSQL pertencem ao serviço `postgres` e ficam fora do Git.
