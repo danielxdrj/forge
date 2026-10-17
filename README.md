@@ -20,7 +20,7 @@ Um engenheiro encontra um problema e precisa reunir contexto de vários lugares:
 
 ## Estado atual
 
-A documentação da primeira implementação está registrada. Ainda não há código, dependências instaladas, `Dockerfile` nem arquivo do Compose.
+A etapa 01 está concluída: a API cria e consulta uma investigação. O banco e o usuário se chamam `forge`. A senha, `FORGE_HOST` e `FORGE_PORT` ficam no ambiente e ainda estão vazios.
 
 ## Decisões aprovadas para a primeira implementação
 
@@ -48,7 +48,7 @@ O `frontend` conversa com o `backend`. O `backend` conversa com o `postgres`.
 
 Na primeira execução, o Compose sobe somente o `postgres`. O `backend` roda na máquina, e por isso alcança o banco em `localhost`. O nome `postgres` passa a ser o endereço quando o `backend` também estiver na rede do Compose. Os detalhes dessa execução estão em [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
-O plano operacional está em [.specs/IMPLEMENTATION_PLAN.md](.specs/IMPLEMENTATION_PLAN.md). A etapa 01 está bloqueada até as pendências dessa especificação serem respondidas.
+O plano operacional está em [.specs/IMPLEMENTATION_PLAN.md](.specs/IMPLEMENTATION_PLAN.md).
 
 Integrações citadas como evolução futura, ainda sem desenho detalhado nem ordem definida: bancos de dados externos, FTP/SFTP, repositórios GitHub, Portainer e outras ferramentas. O PostgreSQL acima guarda os dados do Forge. Ele não é uma dessas integrações.
 
@@ -62,8 +62,8 @@ Integrações citadas como evolução futura, ainda sem desenho detalhado nem or
 | [docs/ROADMAP.md](docs/ROADMAP.md) | Índice das etapas, incluindo as futuras. |
 | [.specs/](.specs/IMPLEMENTATION_PLAN.md) | Especificações operacionais para executar cada etapa. |
 | [docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md) | Atalho para o plano em `.specs/`. |
-| [docs/LEARNING_GUIDE.md](docs/LEARNING_GUIDE.md) | Conceitos usados pelo Forge e o que ainda não foi implementado. |
+| [docs/LEARNING_GUIDE.md](docs/LEARNING_GUIDE.md) | Conceitos e o código da etapa 01. |
 
 ## O que ainda não está decidido
 
-O formato do identificador, o tamanho máximo do título e o endereço em que a API escuta continuam pendentes. Log, LLM, conectores, cofre, tarefas no GitHub e hospedagem remota permanecem nas etapas seguintes. A lista está no plano operacional.
+A senha do PostgreSQL e os valores de `FORGE_HOST` e `FORGE_PORT` ainda serão preenchidos no ambiente. Log, LLM, conectores, cofre, tarefas no GitHub e hospedagem remota permanecem nas etapas seguintes.

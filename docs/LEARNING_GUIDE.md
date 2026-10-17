@@ -1,59 +1,54 @@
 # Guia de aprendizagem
 
-Este guia explica conceitos que a primeira implementação do Forge vai usar. O repositório ainda não tem código. Onde aparecer um arquivo, uma rota ou uma tabela, leia como plano, não como componente existente.
-
-Quando o código existir, este guia deve passar a descrever o que estiver no repositório. O plano operacional está em [../.specs/IMPLEMENTATION_PLAN.md](../.specs/IMPLEMENTATION_PLAN.md). O fluxo aprovado está em [ARCHITECTURE.md](ARCHITECTURE.md).
+Este guia descreve o código da etapa que cria e consulta uma investigação. O plano das etapas seguintes está em [../.specs/IMPLEMENTATION_PLAN.md](../.specs/IMPLEMENTATION_PLAN.md).
 
 ## HTTP
 
-HTTP é o modo como um programa pede uma ação a outro. O pedido tem um método e um caminho. A resposta tem um estado e, neste projeto, um JSON.
-
-No Forge, criar uma investigação será um `POST` em `/investigations`. Consultar será um `GET` em `/investigations/{investigation_id}`. Essas rotas ainda não existem.
+`POST /investigations` cria o registro e responde `201`. `GET /investigations/{investigation_id}` devolve o mesmo registro, ou `404` quando o identificador não existe. Título ausente, vazio ou só com espaços responde `422`.
 
 ## API
 
-Uma API é o conjunto de pedidos que um programa aceita. Quem chama não precisa conhecer o SQL nem abrir o banco.
-
-A primeira API do Forge terá duas operações. A documentação interativa do FastAPI será a forma de chamá-las enquanto não houver `frontend`.
+As duas rotas estão em `backend/app/investigations.py`. A documentação interativa do FastAPI continua sendo a interface, porque o `frontend` ainda não existe.
 
 ## FastAPI
 
-FastAPI é a biblioteca Python escolhida para publicar a API. Uma rota é uma função associada a um método e a um caminho. A biblioteca também gera a página em que dá para experimentar os pedidos.
-
-O processo do `backend` vai rodar na máquina, com um servidor ASGI. Uvicorn é o servidor proposto para isso. Nenhum dos dois está instalado.
+`backend/app/main.py` cria a aplicação e, ao iniciar, executa `backend/app/schema.sql`. O servidor é o Uvicorn. Ele só sobe se `FORGE_HOST` e `FORGE_PORT` estiverem no ambiente. Não há endereço padrão.
 
 ## Validação
 
-Validação confere o pedido antes de ele virar dado gravado. Um título ausente ou vazio não deve chegar ao PostgreSQL.
-
-O FastAPI usa modelos Pydantic na borda HTTP. O tamanho máximo do título ainda não foi decidido, então a regra completa de validação também ainda não existe.
+`InvestigationCreate` limita o título a 200 caracteres e remove espaços nas pontas antes de medir. O título limpo entra no banco. Um título vazio não chega ao `INSERT`.
 
 ## PostgreSQL
 
-PostgreSQL é o banco que vai guardar os dados do próprio Forge. Ele roda como outro processo, no serviço `postgres`. A API e o banco se falam por uma conexão de rede, mesmo estando na mesma máquina.
+O serviço `postgres` do Compose guarda os dados do Forge. O banco e o usuário se chamam `forge`. A senha fica em `POSTGRES_PASSWORD` e em `DATABASE_URL`. O arquivo `.env` está fora do Git. O exemplo versionado é `.env.example`, com `<SENHA>`.
 
-Na primeira execução, só esse serviço sobe pelo Docker Compose. O `backend` fica de fora do Compose. Por isso a conexão inicial usa `localhost`. O nome `postgres` será o endereço interno no dia em que a API também entrar nessa rede.
-
-O arquivo do Compose ainda não foi criado.
+Na primeira execução, só o `postgres` sobe pelo Compose. O backend roda na máquina. A `DATABASE_URL` usa `127.0.0.1`, porque a porta publicada do banco é `127.0.0.1:5432`. Isso não é o endereço da API.
 
 ## SQL parametrizado
 
-SQL é a linguagem usada para gravar e buscar a linha da investigação. Parametrizar significa enviar o título e o identificador separados do texto da consulta.
+`create_investigation` e `get_investigation` enviam o título e o identificador como parâmetros `%s`. O texto do título não é concatenado ao comando.
 
-Isso impede que um título com símbolos de SQL mude o comando. A tabela e as consultas ainda não foram escritas.
+A coluna `id` é `bigint GENERATED ALWAYS AS IDENTITY`. `created_at` recebe o horário do banco.
 
 ## Testes automatizados
 
-Um teste automatizado executa um comportamento e confere o resultado. No Forge, ele vai chamar a API e olhar a resposta, em vez de apenas ler o código.
+`backend/tests/test_investigations.py` usa o cliente HTTP do FastAPI e um PostgreSQL de teste. Cada teste esvazia a tabela `investigations`.
 
-O teste que consulta o mesmo identificador por outra conexão é o que mostra que o registro está no PostgreSQL, não só na memória do processo. A ferramenta proposta é o pytest, com o cliente HTTP do FastAPI. Os testes ainda não existem.
+O teste que abre outra conexão mostra que o registro continua no banco depois que a conexão da criação fecha.
 
 ## Variáveis de ambiente
 
-Uma variável de ambiente entrega configuração ao processo no momento em que ele inicia. `DATABASE_URL` vai dizer onde está o PostgreSQL, incluindo a senha.
+| Variável | Uso |
+| --- | --- |
+| `POSTGRES_USER` | Usuário do banco. O valor aprovado é `forge`. |
+| `POSTGRES_PASSWORD` | Senha. Fica vazia até ser preenchida. |
+| `POSTGRES_DB` | Nome do banco. O valor aprovado é `forge`. |
+| `DATABASE_URL` | Endereço que a API usa para conectar. |
+| `FORGE_HOST` | Endereço em que a API escuta. Sem valor padrão. |
+| `FORGE_PORT` | Porta em que a API escuta. Sem valor padrão. |
 
-O valor fica fora do código, dos logs e do Git. Um arquivo de exemplo poderá mostrar o nome da variável com um valor fictício. Esse arquivo também ainda não existe. A senha real não deve ser copiada para a documentação.
+O Python não carrega o `.env` sozinho. O Compose lê esse arquivo para subir o `postgres`. Para rodar a API, as variáveis precisam estar no ambiente do processo.
 
 ## O que este guia não cobre ainda
 
-LLM, upload de log, conectores externos, cofre de segredos, `frontend` e publicação de tarefas no GitHub têm conceitos próprios. Eles entram aqui quando a etapa correspondente deixar de ser só uma direção e passar a ter código.
+LLM, upload de log, conectores externos, cofre de segredos, `frontend` e publicação de tarefas no GitHub continuam nas etapas seguintes.

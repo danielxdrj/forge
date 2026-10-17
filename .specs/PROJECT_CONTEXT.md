@@ -32,7 +32,7 @@ A branch-base do projeto é `main`. Trabalho novo sai dela, pelo protocolo em [E
 - Os campos desse primeiro registro são identificador, título e data de criação.
 - As rotas previstas são `POST /investigations` e `GET /investigations/{investigation_id}`.
 
-O formato do identificador, o tamanho máximo do título e o endereço de escuta ainda bloqueiam o código da etapa 01.
+O identificador é um número gerado pelo PostgreSQL. O título tem no máximo 200 caracteres. O banco e o usuário se chamam `forge`. A senha fica no ambiente, ainda sem valor. A API não tem endereço padrão: `FORGE_HOST` e `FORGE_PORT` são definidos no ambiente.
 
 ## Arquitetura prevista
 
@@ -83,23 +83,18 @@ Também estão fora do produto atual: SLA, multiempresa, aplicativo móvel, mark
 
 ## Decisões pendentes
 
-Bloqueiam a etapa 01:
-
-1. Formato do identificador.
-2. Tamanho máximo do título.
-3. Endereço em que a API escuta.
+A etapa 01 não tem mais decisão essencial aberta. A senha do PostgreSQL e o endereço da API ficam no ambiente, vazios até serem preenchidos.
 
 Bloqueiam etapas posteriores, listadas no plano:
 
-4. Nome do banco e do usuário do PostgreSQL.
-5. Como o log chega à API e o que dele fica gravado.
-6. Provedor de LLM, saída de dados da máquina e confirmação do contexto.
-7. Mecanismo do cofre.
-8. O que significa fonte autorizada.
-9. Primeira fonte externa e o que conta como leitura em cada sistema.
-10. Campos do GitHub Projects, conta responsável, sprint vigente e opções de tipo, prioridade, escopo e status.
-11. Campos adicionais de uma investigação no dia a dia.
-12. Forma da resposta do LLM.
+1. Como o log chega à API e o que dele fica gravado.
+2. Provedor de LLM, saída de dados da máquina e confirmação do contexto.
+3. Mecanismo do cofre.
+4. O que significa fonte autorizada.
+5. Primeira fonte externa e o que conta como leitura em cada sistema.
+6. Campos do GitHub Projects, conta responsável, sprint vigente e opções de tipo, prioridade, escopo e status.
+7. Campos adicionais de uma investigação no dia a dia.
+8. Forma da resposta do LLM.
 
 Critérios de sucesso do produto estão propostos em [docs/PRODUCT.md](../docs/PRODUCT.md) e ainda não foram aceitos.
 
@@ -113,7 +108,7 @@ Critérios de sucesso do produto estão propostos em [docs/PRODUCT.md](../docs/P
 | [docs/PRODUCT.md](../docs/PRODUCT.md) | Problema, usuários, capacidades e limites. |
 | [docs/ARCHITECTURE.md](../docs/ARCHITECTURE.md) | Forma do sistema, hipóteses e fronteiras. |
 | [docs/ROADMAP.md](../docs/ROADMAP.md) | Índice legível das etapas, com o que entra, o que fica de fora e o que está pendente. |
-| [docs/LEARNING_GUIDE.md](../docs/LEARNING_GUIDE.md) | Conceitos. Não descreve código que ainda não existe como se existisse. |
+| [docs/LEARNING_GUIDE.md](../docs/LEARNING_GUIDE.md) | Conceitos e o código que já existe. |
 | [docs/IMPLEMENTATION_PLAN.md](../docs/IMPLEMENTATION_PLAN.md) | Atalho para o plano operacional. O texto executável está aqui em `.specs/`. |
 
 Se uma decisão mudar, atualize este arquivo, o plano, a etapa afetada e o documento em `docs/` que explica essa decisão. Não mantenha duas versões divergentes.
