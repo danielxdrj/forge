@@ -18,11 +18,11 @@ Pronto quando: os cinco documentos existem, separam fato de hipótese e listam a
 
 Objetivo: abrir o primeiro fluxo local de uma investigação, no caminho do caso de uso do log, sem LLM e sem sistema externo.
 
-Já está decidido: Python, FastAPI, SQLite, API local com documentação automática, uso individual nesta máquina.
+Já está decidido: Python, FastAPI, PostgreSQL, os serviços `backend` e `postgres` do projeto `forge_system`, API local com documentação automática e uso individual nesta máquina. O serviço `frontend` entra quando houver interface.
 
-Não entra: conexão com sistemas externos, cofre de segredos e integração com LLM.
+Não entra: conexão com sistemas externos, cofre de segredos, integração com LLM e os arquivos de container.
 
-Bloqueia até responder: os campos mínimos da investigação e as pendências do log e do SQLite descritas na arquitetura. O recorte vertical do primeiro código ainda espera aprovação.
+Bloqueia até responder: os campos mínimos da investigação e as pendências do log descritas na arquitetura. O recorte vertical do primeiro código ainda espera aprovação.
 
 Pronto quando: o critério de conclusão será registrado junto com a aprovação desse recorte.
 

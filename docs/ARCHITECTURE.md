@@ -10,7 +10,8 @@ Este documento é uma proposta. O repositório ainda não tem módulos, processo
 - Segredos ficam fora do código, dos logs, dos prompts e do Git.
 - Incluir uma integração nova não deve exigir reescrever o núcleo.
 - A estrutura deve permanecer simples de testar e de manter.
-- A primeira implementação usa Python, FastAPI e SQLite.
+- A primeira implementação usa Python, FastAPI e PostgreSQL.
+- A execução local usa o Compose com o projeto `forge_system` e os serviços `backend`, `frontend` e `postgres`.
 - A interface dessa implementação é uma API local, com a documentação automática do FastAPI.
 - O uso é individual, nesta máquina.
 - O primeiro caso de uso parte de um arquivo de log local.
@@ -28,7 +29,7 @@ Uma **investigação** é o registro do caso. Uma **evidência** é um fato anex
 
 ## Forma proposta
 
-Hipótese: um monólito modular. Um único programa local, dividido por responsabilidade. Microserviços dariam isolamento, e também processo, rede e operação a mais, cedo demais para um protótipo de uma máquina.
+Hipótese: o `backend` é um monólito modular, um programa só, dividido por responsabilidade. Os containers separam a interface, a API e o banco. Um container por integração seria processo e rede a mais nesta fase.
 
 ```mermaid
 flowchart LR
@@ -43,9 +44,9 @@ flowchart LR
   secrets --> vault["Adaptador do cofre"]
 ```
 
-Os casos de uso são o centro. Eles criam e retomam investigações, pedem leituras e solicitam análises. A hipótese é que dependam das portas. SQLite é o adaptador de armazenamento aprovado para o início. GitHub e o fornecedor de LLM continuam fora desta etapa.
+Os casos de uso são o centro. Eles criam e retomam investigações, pedem leituras e solicitam análises. A hipótese é que dependam das portas. PostgreSQL, no serviço `postgres`, é o armazenamento aprovado para o início. GitHub e o fornecedor de LLM continuam fora desta etapa.
 
-A API fica na borda. Uma página local, mais adiante, não deve mudar o que é uma investigação.
+A API fica no serviço `backend`. O serviço `frontend`, quando existir, chama essa API e não muda o que é uma investigação.
 
 Os adaptadores ficam na outra borda. Um conector novo é um adaptador novo. Ele não recebe permissão de escrita porque a porta não tem essa operação.
 
@@ -71,21 +72,36 @@ Hipótese adicional: a evidência guardada é uma cópia do que foi lido, com da
 
 A porta comum é a hipótese recomendada porque atende ao princípio de adicionar integrações sem reescrever o sistema.
 
+## Execução local
+
+Definido:
+
+- O projeto do Compose se chama `forge_system`.
+- O serviço `backend` executa a API FastAPI. Não há outro container de API.
+- O serviço `frontend` executa a interface. Esse código ainda não existe. Até lá, a documentação automática do FastAPI é o uso da API, e sobem somente `backend` e `postgres`.
+- O serviço `postgres` executa o PostgreSQL que guarda os dados do Forge.
+- O `frontend` fala com o `backend`. O `backend` fala com o `postgres`.
+- Na rede do Compose, o nome do serviço é o endereço. O `backend` alcança o banco pelo nome `postgres`.
+- Os containers aparecem como `forge_system-backend-1`, `forge_system-frontend-1` e `forge_system-postgres-1`.
+- Os dados do PostgreSQL pertencem ao serviço `postgres` e ficam fora do Git.
+
+O `postgres` do Forge é diferente de um banco externo consultado numa investigação futura. Esse banco externo, se entrar, será um conector somente leitura.
+
+Não há `Dockerfile` nem arquivo do Compose no repositório. A senha do PostgreSQL segue a regra dos segredos: fora do código, dos logs, dos prompts e do Git.
+
 ## Decisões da primeira implementação
 
 Definido:
 
 - Python é a linguagem.
 - FastAPI expõe a API local e a documentação automática.
-- SQLite é a persistência local inicial.
+- PostgreSQL, no serviço `postgres`, é a persistência local.
 - O primeiro caso de uso usa evidência vinda de um arquivo de log local. Esse arquivo é a fonte dessa etapa. Ele ainda não é um conector de sistema externo.
 - Conexões externas e LLM não fazem parte desta implementação.
 
 A divisão em portas e adaptadores continua hipótese. LLM, conector e cofre não precisam existir no código enquanto essas capacidades estiverem de fora.
 
 Identificadores de código em inglês e documentos em português continuam hipótese de convenção.
-
-O lugar do arquivo SQLite está pendente. O repositório fica numa pasta sincronizada pelo OneDrive, e um banco SQLite nesse tipo de pasta pode ser corrompido pela sincronização.
 
 ## Cofre de segredos
 
@@ -116,9 +132,8 @@ Fora do desenho atual. Quando chegar, autenticação, exposição de rede e o lu
 
 1. Campos mínimos da investigação.
 2. Como o arquivo de log chega à API e o que dele fica persistido.
-3. Onde o arquivo SQLite é gravado.
-4. Em qual endereço a API local escuta.
-5. Provedor de LLM e se a chamada pode sair da máquina.
-6. Mecanismo do cofre.
-7. Confirmação humana do contexto antes do envio ao modelo. A arquitetura recomenda que sim; o produto ainda pergunta.
-8. Primeira fonte externa, quando os conectores entrarem. O log local do primeiro caso de uso não responde a essa escolha.
+3. Em qual endereço publicado a API local escuta.
+4. Provedor de LLM e se a chamada pode sair da máquina.
+5. Mecanismo do cofre.
+6. Confirmação humana do contexto antes do envio ao modelo. A arquitetura recomenda que sim; o produto ainda pergunta.
+7. Primeira fonte externa, quando os conectores entrarem. O log local do primeiro caso de uso não responde a essa escolha.

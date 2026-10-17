@@ -26,14 +26,30 @@ A fundação documental está registrada. As decisões abaixo valem para a prime
 
 - Linguagem: Python.
 - Backend: FastAPI.
-- Persistência local inicial: SQLite.
+- Persistência local: PostgreSQL, no serviço `postgres`.
 - Interface desta etapa: API local, com a documentação automática do FastAPI.
 - Uso: uma pessoa, nesta máquina.
 - Primeiro caso de uso: registrar uma investigação e analisar evidências fornecidas a partir de um arquivo de log local.
 - Nesta etapa não há conexão com sistemas externos.
 - A integração com LLM espera a definição de como será feita.
 
-Integrações citadas como evolução futura, ainda sem desenho detalhado nem ordem definida: bancos de dados, FTP/SFTP, repositórios GitHub, Portainer e outras ferramentas.
+## Execução local
+
+O conjunto se chama `forge_system`. Os serviços têm nomes diretos:
+
+| Serviço | Processo |
+| --- | --- |
+| `backend` | A API FastAPI. A API é o backend, e os dois não viram containers separados. |
+| `frontend` | A interface. Ainda não há tela. |
+| `postgres` | O PostgreSQL do próprio Forge. |
+
+O `frontend` conversa com o `backend`. O `backend` conversa com o `postgres`. O nome do serviço também é o endereço interno entre eles.
+
+O Docker mostra os containers como `forge_system-backend-1`, `forge_system-frontend-1` e `forge_system-postgres-1`. Enquanto o `frontend` não existir, sobem `backend` e `postgres`. A documentação automática do FastAPI é o uso da API nesse período.
+
+Ainda não há `Dockerfile` nem arquivo do Compose no repositório.
+
+Integrações citadas como evolução futura, ainda sem desenho detalhado nem ordem definida: bancos de dados externos, FTP/SFTP, repositórios GitHub, Portainer e outras ferramentas. O PostgreSQL acima guarda os dados do Forge. Ele não é uma dessas integrações.
 
 ## Mapa dos documentos
 

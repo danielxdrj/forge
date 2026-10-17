@@ -71,7 +71,7 @@ Os critérios abaixo são uma proposta para saber se o produto cumpre o objetivo
 
 ## Fora deste documento de propósito
 
-Python, FastAPI, SQLite e a API local estão registrados em [ARCHITECTURE.md](ARCHITECTURE.md). O provedor de LLM, os campos da investigação, o que persistir do log e a ordem das integrações reais continuam pendentes.
+Python, FastAPI, PostgreSQL, os serviços `backend`, `frontend` e `postgres`, e a API local estão registrados em [ARCHITECTURE.md](ARCHITECTURE.md). O provedor de LLM, os campos da investigação, o que persistir do log e a ordem das integrações reais continuam pendentes.
 
 ## Perguntas de produto ainda abertas
 
