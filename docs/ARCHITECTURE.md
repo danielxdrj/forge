@@ -10,6 +10,11 @@ Este documento é uma proposta. O repositório ainda não tem módulos, processo
 - Segredos ficam fora do código, dos logs, dos prompts e do Git.
 - Incluir uma integração nova não deve exigir reescrever o núcleo.
 - A estrutura deve permanecer simples de testar e de manter.
+- A primeira implementação usa Python, FastAPI e SQLite.
+- A interface dessa implementação é uma API local, com a documentação automática do FastAPI.
+- O uso é individual, nesta máquina.
+- O primeiro caso de uso parte de um arquivo de log local.
+- Essa implementação não conecta sistemas externos e não chama LLM.
 
 ## Conceitos
 
@@ -27,7 +32,7 @@ Hipótese: um monólito modular. Um único programa local, dividido por responsa
 
 ```mermaid
 flowchart LR
-  ui["Interface local"] --> app["Casos de uso"]
+  ui["API local FastAPI"] --> app["Casos de uso"]
   app --> inv["Porta: investigações"]
   app --> conn["Porta: conector de leitura"]
   app --> llm["Porta: LLM"]
@@ -38,9 +43,9 @@ flowchart LR
   secrets --> vault["Adaptador do cofre"]
 ```
 
-Os casos de uso são o centro. Eles criam e retomam investigações, pedem leituras e solicitam análises. Eles dependem das portas, não de GitHub, SQLite ou de um fornecedor de modelo.
+Os casos de uso são o centro. Eles criam e retomam investigações, pedem leituras e solicitam análises. A hipótese é que dependam das portas. SQLite é o adaptador de armazenamento aprovado para o início. GitHub e o fornecedor de LLM continuam fora desta etapa.
 
-A interface fica na borda. Trocar uma linha de comando por uma página local, mais adiante, não deve mudar o que é uma investigação.
+A API fica na borda. Uma página local, mais adiante, não deve mudar o que é uma investigação.
 
 Os adaptadores ficam na outra borda. Um conector novo é um adaptador novo. Ele não recebe permissão de escrita porque a porta não tem essa operação.
 
@@ -66,24 +71,21 @@ Hipótese adicional: a evidência guardada é uma cópia do que foi lido, com da
 
 A porta comum é a hipótese recomendada porque atende ao princípio de adicionar integrações sem reescrever o sistema.
 
-## Persistência, interface e linguagem
+## Decisões da primeira implementação
 
-Nada disso está escolhido.
+Definido:
 
-Persistência local, quando a etapa 1 começar, tem três caminhos habituais:
+- Python é a linguagem.
+- FastAPI expõe a API local e a documentação automática.
+- SQLite é a persistência local inicial.
+- O primeiro caso de uso usa evidência vinda de um arquivo de log local. Esse arquivo é a fonte dessa etapa. Ele ainda não é um conector de sistema externo.
+- Conexões externas e LLM não fazem parte desta implementação.
 
-- Arquivos em formato simples. Poucos conceitos, fracos para busca.
-- SQLite. Um arquivo local, com consulta, sem servidor separado.
-- Um servidor de banco já na primeira etapa. Capacidade a mais antes de existir dado real.
+A divisão em portas e adaptadores continua hipótese. LLM, conector e cofre não precisam existir no código enquanto essas capacidades estiverem de fora.
 
-Interface:
+Identificadores de código em inglês e documentos em português continuam hipótese de convenção.
 
-- Linha de comando. Menos camadas para aprender o domínio.
-- Página web só nesta máquina. Mais próxima de um uso contínuo, com HTTP e interface a manter.
-
-Linguagem: TypeScript, Python e Go são candidatos razoáveis. A escolha muda bibliotecas e o modo de testar, não o desenho das portas. Fica pendente de propósito, para a pessoa que vai manter o código participar da decisão.
-
-Identificadores de código em inglês e documentos em português são uma hipótese de convenção, não uma decisão fechada.
+O lugar do arquivo SQLite está pendente. O repositório fica numa pasta sincronizada pelo OneDrive, e um banco SQLite nesse tipo de pasta pode ser corrompido pela sincronização.
 
 ## Cofre de segredos
 
@@ -112,11 +114,11 @@ Fora do desenho atual. Quando chegar, autenticação, exposição de rede e o lu
 
 ## Pendências que a arquitetura não resolve
 
-1. Linguagem do primeiro protótipo.
-2. Interface da primeira etapa: linha de comando, web local, ou biblioteca sem interface ainda.
-3. Armazenamento local da etapa 1.
-4. Provedor de LLM e se a chamada pode sair da máquina.
-5. Mecanismo do cofre.
-6. Confirmação humana do contexto antes do envio ao modelo. A arquitetura recomenda que sim; o produto ainda pergunta.
-7. Contrato mínimo da evidência: quais campos são obrigatórios.
-8. Primeira fonte real, se for um diretório local, um arquivo de exemplo ou um sistema já usado no trabalho.
+1. Campos mínimos da investigação.
+2. Como o arquivo de log chega à API e o que dele fica persistido.
+3. Onde o arquivo SQLite é gravado.
+4. Em qual endereço a API local escuta.
+5. Provedor de LLM e se a chamada pode sair da máquina.
+6. Mecanismo do cofre.
+7. Confirmação humana do contexto antes do envio ao modelo. A arquitetura recomenda que sim; o produto ainda pergunta.
+8. Primeira fonte externa, quando os conectores entrarem. O log local do primeiro caso de uso não responde a essa escolha.

@@ -18,11 +18,7 @@ O Forge existe para manter esse trabalho na máquina local: conexões cadastrada
 
 ## Usuários
 
-Não há personas nem permissões definidas.
-
-Hipótese de trabalho, ainda não confirmada: o primeiro usuário é uma pessoa só, operando o Forge na própria máquina, investigando sistemas aos quais ela já tem acesso de leitura.
-
-Pendente: se existirão outros usuários, papéis diferentes ou uso compartilhado da mesma instalação.
+O uso aprovado é individual, nesta máquina. Não há papéis nem permissões. Mais de uma pessoa na mesma instalação fica fora do escopo atual.
 
 ## Funcionalidades previstas
 
@@ -38,11 +34,17 @@ Ler dados de uma conexão já cadastrada, por uma ação explícita de quem oper
 
 ### Registrar investigações
 
-Guardar um caso de diagnóstico para retomar depois. O que entra no registro mínimo ainda está em aberto. Uma proposta, não um requisito: título, descrição do problema, momento de abertura, evidências anexadas e análises recebidas.
+Guardar um caso de diagnóstico para retomar depois. Os campos mínimos continuam em aberto.
 
 ### Análise por LLM
 
 Enviar ao modelo um contexto montado a partir da investigação e receber um texto que ajude o diagnóstico. O texto fica associado à investigação. O Forge não transforma esse texto em alteração de código nem em ação no sistema consultado.
+
+## Primeiro caso de uso
+
+Registrar uma investigação e analisar evidências fornecidas a partir de um arquivo de log local.
+
+Esse caso orienta a primeira implementação. Nesta etapa ele ocorre sem conexão com sistemas externos. A análise por LLM permanece fora até o modo de fazê-la ser definido. Campos da investigação e o conteúdo guardado do log continuam em aberto.
 
 ## Limites
 
@@ -69,14 +71,13 @@ Os critérios abaixo são uma proposta para saber se o produto cumpre o objetivo
 
 ## Fora deste documento de propósito
 
-Linguagem, interface, armazenamento local, provedor de LLM, formato exato da investigação e a ordem das integrações reais estão em [ARCHITECTURE.md](ARCHITECTURE.md) e [ROADMAP.md](ROADMAP.md) como hipóteses ou pendências.
+Python, FastAPI, SQLite e a API local estão registrados em [ARCHITECTURE.md](ARCHITECTURE.md). O provedor de LLM, os campos da investigação, o que persistir do log e a ordem das integrações reais continuam pendentes.
 
 ## Perguntas de produto ainda abertas
 
-1. O primeiro uso é individual, nesta máquina, ou já precisa considerar mais de uma pessoa?
-2. Qual situação real deve servir de exemplo da primeira investigação? Sem um caso, é fácil desenhar campos que ninguém usa.
-3. Quais dados mínimos uma investigação precisa ter no dia a dia?
-4. “Fonte autorizada” significa toda conexão cadastrada, ou cada investigação libera explicitamente o que pode ser consultado?
-5. A resposta do LLM pode ser texto livre, ou precisa de uma estrutura fixa, como hipóteses e próximos passos?
-6. Quem opera deve ver e confirmar o contexto antes de ele ser enviado ao modelo?
-7. O conteúdo enviado ao LLM pode sair da máquina, ou o diagnóstico precisa permanecer local?
+1. Quais dados mínimos uma investigação precisa ter no dia a dia?
+2. Do arquivo de log local, o que fica guardado na investigação, e como esse arquivo chega até a API?
+3. “Fonte autorizada” significa toda conexão cadastrada, ou cada investigação libera explicitamente o que pode ser consultado?
+4. A resposta do LLM pode ser texto livre, ou precisa de uma estrutura fixa, como hipóteses e próximos passos?
+5. Quem opera deve ver e confirmar o contexto antes de ele ser enviado ao modelo?
+6. O conteúdo enviado ao LLM pode sair da máquina, ou o diagnóstico precisa permanecer local?

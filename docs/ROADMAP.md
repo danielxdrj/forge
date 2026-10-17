@@ -2,11 +2,11 @@
 
 Cada etapa produz algo pequeno e verificável. Uma etapa só começa quando a anterior está aceita e as pendências que a bloqueiam foram respondidas.
 
-A ordem abaixo é uma proposta. A alternativa seria ligar um conector real antes de qualquer chamada a LLM. A proposta faz o contrário no meio do caminho: primeiro o registro da investigação e uma análise sobre texto colado pelo operador. Assim a fronteira com o modelo existe antes de existir credencial de sistema externo.
+A ordem abaixo é uma proposta. A alternativa seria ligar um conector real antes de qualquer chamada a LLM. A proposta registra primeiro a investigação e a evidência do caso de uso aprovado, um arquivo de log local. A análise por LLM vem depois que o modo dessa integração estiver definido.
 
 ## Etapa 0 — Documentação inicial
 
-Estado: em curso, neste conjunto de arquivos.
+Estado: concluída. As decisões da primeira implementação já estão registradas. O código continua sem aprovação.
 
 Entra: README, regras de agentes, produto, arquitetura e roadmap.
 
@@ -16,23 +16,25 @@ Pronto quando: os cinco documentos existem, separam fato de hipótese e listam a
 
 ## Etapa 1 — Investigação local
 
-Objetivo: persistir e reabrir um caso de diagnóstico, sem rede, sem LLM e sem conexão externa.
+Objetivo: abrir o primeiro fluxo local de uma investigação, no caminho do caso de uso do log, sem LLM e sem sistema externo.
 
-Entra: o modelo mínimo de investigação que for decidido, um armazenamento local e uma forma simples de criar e reler.
+Já está decidido: Python, FastAPI, SQLite, API local com documentação automática, uso individual nesta máquina.
 
-Não entra: conectores, segredos, interface elaborada e análise automática.
+Não entra: conexão com sistemas externos, cofre de segredos e integração com LLM.
 
-Bloqueia até responder: linguagem, interface da primeira versão e quais campos mínimos a investigação tem.
+Bloqueia até responder: os campos mínimos da investigação e as pendências do log e do SQLite descritas na arquitetura. O recorte vertical do primeiro código ainda espera aprovação.
 
-Pronto quando: fechar o programa e abrir de novo ainda mostra a investigação criada, e um teste cobre esse comportamento.
+Pronto quando: o critério de conclusão será registrado junto com a aprovação desse recorte.
 
-## Etapa 2 — Evidência manual
+## Etapa 2 — Evidência de log local
 
-Objetivo: anexar à investigação um texto que o operador colou, com origem “manual” e o momento do anexo.
+Objetivo: anexar à investigação a evidência vinda de um arquivo de log local.
 
-Entra: evidência imutável depois de registrada e a ligação com a investigação.
+Entra: a ligação entre a investigação e essa evidência.
 
-Não entra: leitura de sistema externo.
+Não entra: leitura de sistema externo e análise por LLM.
+
+Bloqueia até responder: como o arquivo chega à API e o que dele fica persistido. Unir esta etapa à etapa 1 no primeiro código é uma proposta ainda não aprovada.
 
 Pronto quando: a investigação reaberta mostra a evidência que foi anexada, e um teste cobre isso.
 
@@ -46,7 +48,7 @@ Não entra: o modelo escolhendo fontes, executando ferramentas ou recebendo cred
 
 Bloqueia até responder: qual provedor, se o conteúdo pode sair da máquina, e se o operador confirma o contexto antes do envio.
 
-Pronto quando: uma investigação com evidência manual gera uma análise relida depois, e um teste com provedor falso mostra que um texto com cara de segredo não segue no prompt.
+Pronto quando: uma investigação com evidência de log local gera uma análise relida depois, e um teste com provedor falso mostra que um texto com cara de segredo não segue no prompt.
 
 ## Etapa 4 — Conexão e cofre
 
@@ -68,7 +70,7 @@ Entra: um único adaptador, sem métodos de escrita, e o uso explícito dessa le
 
 Não entra: as outras integrações.
 
-Bloqueia até responder: qual é a primeira fonte. Candidatas coerentes com o aprendizado: um diretório local, ou o primeiro sistema que já faça parte do trabalho e tenha acesso de leitura.
+Bloqueia até responder: qual é a primeira fonte externa. O arquivo de log local do primeiro caso de uso não é essa fonte.
 
 Pronto quando: uma consulta pedida pelo operador vira evidência na investigação, e o adaptador não oferece operação de alteração.
 
