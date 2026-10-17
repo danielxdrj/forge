@@ -34,7 +34,7 @@ Ler dados de uma conexão já cadastrada, por uma ação explícita de quem oper
 
 ### Registrar investigações
 
-Guardar um caso de diagnóstico para retomar depois. Os campos mínimos continuam em aberto.
+Guardar um caso de diagnóstico para retomar depois. O primeiro registro tem identificador, título e data de criação. Outros campos do dia a dia continuam em aberto.
 
 ### Análise por LLM
 
@@ -42,15 +42,21 @@ Enviar ao modelo um contexto montado a partir da investigação e receber um tex
 
 ## Primeiro caso de uso
 
-Registrar uma investigação e analisar evidências fornecidas a partir de um arquivo de log local.
+A primeira implementação cria uma investigação e permite consultá-la depois, nesta máquina. O registro tem identificador, título e data de criação.
 
-Esse caso orienta a primeira implementação. Nesta etapa ele ocorre sem conexão com sistemas externos. A análise por LLM permanece fora até o modo de fazê-la ser definido. Campos da investigação e o conteúdo guardado do log continuam em aberto.
+O caso mais amplo continua sendo investigar um problema com evidências, inclusive um log local, e mais tarde pedir uma análise ao LLM. Log, upload e análise não fazem parte da primeira implementação.
+
+## Tarefas no GitHub
+
+Em uma etapa futura, o Forge poderá receber uma solicitação, preparar uma descrição estruturada e publicá-la no GitHub somente depois de revisão e aprovação explícita. Essa publicação não altera o código do sistema de trabalho.
+
+Os campos do GitHub Projects, a conta responsável, a sprint vigente e as opções de tipo, prioridade, escopo e status ainda não estão confirmados. Nenhum identificador interno dessa API foi definido.
 
 ## Limites
 
 O Forge não faz, nesta visão de produto:
 
-- escrever, apagar ou modificar dados nos sistemas conectados;
+- escrever em sistemas conectados, com uma exceção futura: publicar uma tarefa no GitHub depois de aprovação explícita;
 - corrigir código automaticamente;
 - alterar produção;
 - executar a sugestão do LLM;
@@ -71,11 +77,11 @@ Os critérios abaixo são uma proposta para saber se o produto cumpre o objetivo
 
 ## Fora deste documento de propósito
 
-Python, FastAPI, PostgreSQL, os serviços `backend`, `frontend` e `postgres`, e a API local estão registrados em [ARCHITECTURE.md](ARCHITECTURE.md). O provedor de LLM, os campos da investigação, o que persistir do log e a ordem das integrações reais continuam pendentes.
+Python, FastAPI, PostgreSQL e o fluxo da primeira API estão em [ARCHITECTURE.md](ARCHITECTURE.md). O plano operacional de todas as etapas está em [../.specs/IMPLEMENTATION_PLAN.md](../.specs/IMPLEMENTATION_PLAN.md).
 
 ## Perguntas de produto ainda abertas
 
-1. Quais dados mínimos uma investigação precisa ter no dia a dia?
+1. Além de identificador, título e data de criação, quais dados uma investigação precisa ter no dia a dia?
 2. Do arquivo de log local, o que fica guardado na investigação, e como esse arquivo chega até a API?
 3. “Fonte autorizada” significa toda conexão cadastrada, ou cada investigação libera explicitamente o que pode ser consultado?
 4. A resposta do LLM pode ser texto livre, ou precisa de uma estrutura fixa, como hipóteses e próximos passos?
