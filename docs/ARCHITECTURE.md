@@ -11,11 +11,12 @@ Este documento é uma proposta. O repositório ainda não tem módulos, processo
 - Incluir uma integração nova não deve exigir reescrever o núcleo.
 - A estrutura deve permanecer simples de testar e de manter.
 - A primeira implementação usa Python, FastAPI e PostgreSQL.
-- A execução local usa o Compose com o projeto `forge_system` e os serviços `backend`, `frontend` e `postgres`.
-- A interface dessa implementação é uma API local, com a documentação automática do FastAPI.
+- A execução prevista usa o Compose com o projeto `forge_system` e os serviços `backend`, `frontend` e `postgres`.
+- Na primeira execução, o Compose sobe somente o `postgres`. O `backend` roda na máquina.
+- A interface dessa implementação é a documentação interativa do FastAPI.
 - O uso é individual, nesta máquina.
-- O primeiro caso de uso parte de um arquivo de log local.
-- Essa implementação não conecta sistemas externos e não chama LLM.
+- A primeira funcionalidade cria uma investigação e a consulta pelo identificador.
+- Essa implementação não conecta sistemas externos, não chama LLM, não recebe upload e não analisa log.
 
 ## Conceitos
 
@@ -25,7 +26,7 @@ Exemplo de porta, ainda sem código: “dado um identificador de conexão e um p
 
 Uma **investigação** é o registro do caso. Uma **evidência** é um fato anexado a esse caso, com origem e momento. Uma **análise** é o texto devolvido pelo LLM sobre um contexto escolhido. Uma **conexão** é o cadastro de um sistema consultável. O **segredo** é a credencial, guardada fora desse cadastro.
 
-**Redação** é o passo que mascarar segredos antes de logar ou de montar um prompt.
+**Redação** é o passo que mascara segredos antes de logar ou de montar um prompt.
 
 ## Forma proposta
 
@@ -78,10 +79,11 @@ Definido:
 
 - O projeto do Compose se chama `forge_system`.
 - O serviço `backend` executa a API FastAPI. Não há outro container de API.
-- O serviço `frontend` executa a interface. Esse código ainda não existe. Até lá, a documentação automática do FastAPI é o uso da API, e sobem somente `backend` e `postgres`.
+- O serviço `frontend` executa a interface. Esse código ainda não existe. Até lá, a documentação interativa do FastAPI é o uso da API.
+- Na primeira execução, somente o `postgres` sobe pelo Compose. O processo do `backend` roda na máquina e alcança o banco por `localhost`.
 - O serviço `postgres` executa o PostgreSQL que guarda os dados do Forge.
 - O `frontend` fala com o `backend`. O `backend` fala com o `postgres`.
-- Na rede do Compose, o nome do serviço é o endereço. O `backend` alcança o banco pelo nome `postgres`.
+- Na rede do Compose, o nome do serviço é o endereço. O nome `postgres` vale quando o `backend` também estiver nessa rede.
 - Os containers aparecem como `forge_system-backend-1`, `forge_system-frontend-1` e `forge_system-postgres-1`.
 - Os dados do PostgreSQL pertencem ao serviço `postgres` e ficam fora do Git.
 
@@ -96,12 +98,35 @@ Definido:
 - Python é a linguagem.
 - FastAPI expõe a API local e a documentação automática.
 - PostgreSQL, no serviço `postgres`, é a persistência local.
-- O primeiro caso de uso usa evidência vinda de um arquivo de log local. Esse arquivo é a fonte dessa etapa. Ele ainda não é um conector de sistema externo.
-- Conexões externas e LLM não fazem parte desta implementação.
+- A primeira funcionalidade persiste uma investigação com identificador, título e data de criação.
+- As rotas previstas são `POST /investigations` e `GET /investigations/{investigation_id}`.
+- Conexões externas, LLM, upload e análise de log não fazem parte desta implementação.
 
 A divisão em portas e adaptadores continua hipótese. LLM, conector e cofre não precisam existir no código enquanto essas capacidades estiverem de fora.
 
 Identificadores de código em inglês e documentos em português continuam hipótese de convenção.
+
+## Primeira etapa, ainda sem código
+
+O fluxo aprovado para a primeira implementação:
+
+```mermaid
+flowchart LR
+  docs["Documentação interativa"] --> route["Rota FastAPI"]
+  route --> check["Validação do título"]
+  check --> store["Persistência"]
+  store --> db["PostgreSQL"]
+```
+
+Nenhum desses componentes existe no repositório. As responsabilidades previstas são:
+
+- A documentação interativa envia o JSON e mostra a resposta.
+- A rota recebe a operação de criar ou consultar.
+- A validação recusa um título ausente ou vazio antes de chegar ao banco.
+- A persistência grava e relê a linha com SQL parametrizado.
+- O PostgreSQL guarda o registro depois que o processo da API fecha.
+
+O formato do identificador, o tamanho máximo do título e o endereço de escuta da API continuam pendentes. Arquivos, dependências e testes previstos estão em [.specs/steps/01-create-and-read-investigation.md](../.specs/steps/01-create-and-read-investigation.md).
 
 ## Cofre de segredos
 
@@ -119,7 +144,7 @@ Bancos de dados, FTP/SFTP, GitHub e Portainer entram, cada um, como adaptador da
 
 - Banco: quais comandos contam como leitura.
 - FTP/SFTP: listar e baixar, sem envio e sem remoção.
-- GitHub: ler repositório e metadados, sem push e sem abrir pull request.
+- GitHub: ler repositório e metadados, sem push e sem abrir pull request. A publicação de uma tarefa aprovada é uma etapa futura separada, descrita no roadmap, e não faz parte desta leitura.
 - Portainer: ler estado e logs, sem reiniciar, alterar stack ou mudar configuração.
 
 Não há ordem entre eles.
@@ -130,9 +155,9 @@ Fora do desenho atual. Quando chegar, autenticação, exposição de rede e o lu
 
 ## Pendências que a arquitetura não resolve
 
-1. Campos mínimos da investigação.
+1. Qual formato identifica uma investigação, e qual é o tamanho máximo do título.
 2. Como o arquivo de log chega à API e o que dele fica persistido.
-3. Em qual endereço publicado a API local escuta.
+3. Em qual endereço a API local escuta.
 4. Provedor de LLM e se a chamada pode sair da máquina.
 5. Mecanismo do cofre.
 6. Confirmação humana do contexto antes do envio ao modelo. A arquitetura recomenda que sim; o produto ainda pergunta.

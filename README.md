@@ -20,18 +20,19 @@ Um engenheiro encontra um problema e precisa reunir contexto de vários lugares:
 
 ## Estado atual
 
-A fundação documental está registrada. As decisões abaixo valem para a primeira implementação. Ainda não há código, dependências instaladas nem integrações.
+A documentação da primeira implementação está registrada. Ainda não há código, dependências instaladas, `Dockerfile` nem arquivo do Compose.
 
 ## Decisões aprovadas para a primeira implementação
 
 - Linguagem: Python.
-- Backend: FastAPI.
-- Persistência local: PostgreSQL, no serviço `postgres`.
-- Interface desta etapa: API local, com a documentação automática do FastAPI.
+- Backend: FastAPI, executado na máquina local.
+- Persistência: PostgreSQL, no serviço `postgres`.
+- Interface: a documentação interativa do FastAPI.
 - Uso: uma pessoa, nesta máquina.
-- Primeiro caso de uso: registrar uma investigação e analisar evidências fornecidas a partir de um arquivo de log local.
-- Nesta etapa não há conexão com sistemas externos.
-- A integração com LLM espera a definição de como será feita.
+- Funcionalidade: criar uma investigação e consultá-la depois.
+- Campos desse registro: identificador, título e data de criação.
+- Rotas: `POST /investigations` e `GET /investigations/{investigation_id}`.
+- Ficam fora: LLM, integrações externas, interface web, upload e análise de log.
 
 ## Execução local
 
@@ -43,11 +44,11 @@ O conjunto se chama `forge_system`. Os serviços têm nomes diretos:
 | `frontend` | A interface. Ainda não há tela. |
 | `postgres` | O PostgreSQL do próprio Forge. |
 
-O `frontend` conversa com o `backend`. O `backend` conversa com o `postgres`. O nome do serviço também é o endereço interno entre eles.
+O `frontend` conversa com o `backend`. O `backend` conversa com o `postgres`.
 
-O Docker mostra os containers como `forge_system-backend-1`, `forge_system-frontend-1` e `forge_system-postgres-1`. Enquanto o `frontend` não existir, sobem `backend` e `postgres`. A documentação automática do FastAPI é o uso da API nesse período.
+Na primeira execução, o Compose sobe somente o `postgres`. O `backend` roda na máquina, e por isso alcança o banco em `localhost`. O nome `postgres` passa a ser o endereço quando o `backend` também estiver na rede do Compose. Os detalhes dessa execução estão em [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
-Ainda não há `Dockerfile` nem arquivo do Compose no repositório.
+O plano operacional está em [.specs/IMPLEMENTATION_PLAN.md](.specs/IMPLEMENTATION_PLAN.md). A etapa 01 está bloqueada até as pendências dessa especificação serem respondidas.
 
 Integrações citadas como evolução futura, ainda sem desenho detalhado nem ordem definida: bancos de dados externos, FTP/SFTP, repositórios GitHub, Portainer e outras ferramentas. O PostgreSQL acima guarda os dados do Forge. Ele não é uma dessas integrações.
 
@@ -58,8 +59,11 @@ Integrações citadas como evolução futura, ainda sem desenho detalhado nem or
 | [AGENTS.md](AGENTS.md) | Regras para quem for implementar o Forge, inclusive agentes de programação. |
 | [docs/PRODUCT.md](docs/PRODUCT.md) | Problema, usuários, funcionalidades previstas, limites e critérios de sucesso. |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Proposta inicial de arquitetura e decisões que ainda são hipóteses. |
-| [docs/ROADMAP.md](docs/ROADMAP.md) | Etapas incrementais, do protótipo local até integrações futuras. |
+| [docs/ROADMAP.md](docs/ROADMAP.md) | Índice das etapas, incluindo as futuras. |
+| [.specs/](.specs/IMPLEMENTATION_PLAN.md) | Especificações operacionais para executar cada etapa. |
+| [docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md) | Atalho para o plano em `.specs/`. |
+| [docs/LEARNING_GUIDE.md](docs/LEARNING_GUIDE.md) | Conceitos usados pelo Forge e o que ainda não foi implementado. |
 
 ## O que ainda não está decidido
 
-Os documentos registram as decisões acima e continuam sem definir campos da investigação, o que guardar de um arquivo de log, o provedor de LLM e a ordem das integrações futuras. A implementação espera a aprovação do recorte vertical.
+O formato do identificador, o tamanho máximo do título e o endereço em que a API escuta continuam pendentes. Log, LLM, conectores, cofre, tarefas no GitHub e hospedagem remota permanecem nas etapas seguintes. A lista está no plano operacional.
