@@ -52,7 +52,7 @@ Já pedidos para o produto, cada um na sua etapa:
 
 - Registrar uma investigação e reabri-la.
 - Anexar evidência vinda de um arquivo de log local.
-- Pedir uma análise ao LLM e guardá-la como sugestão, sem executá-la.
+- Pedir uma análise ao LLM e guardá-la como sugestão. Uma etapa posterior, ainda sem abertura, pode aplicar essa sugestão depois de aprovação: o Cursor altera o código ou devolve o SQL para alterar o banco. O SQL volta como texto e não é executado. Se a alteração for de código, uma segunda aprovação vem antes de criar o commit e enviar a branch.
 - Cadastrar uma conexão sem gravar o segredo no Git.
 - Consultar uma fonte autorizada em modo somente leitura e guardar o resultado como evidência.
 - Acrescentar integrações sem redefinir o que é uma investigação.
@@ -72,7 +72,7 @@ A primeira implementação cobre só criar e consultar a investigação.
 
 - Não alterar sistemas conectados: SQL de escrita, upload, delete, push, pull request, comentário, restart ou edição remota.
 - Não corrigir código de outro sistema e não alterar produção.
-- Não executar a sugestão do LLM.
+- Não executar a sugestão do LLM enquanto a etapa posterior de aplicação não estiver ativa. Nessa etapa, ainda sem abertura, o Cursor pode alterar o código depois de aprovação, ou devolver o SQL sem executá-lo. O commit e o envio da branch pedem uma segunda aprovação.
 - A publicação no GitHub só vale na etapa 07, depois de aprovação explícita de quem opera.
 - Exemplos usam placeholders. Testes usam dados fictícios.
 - A senha do PostgreSQL fica no ambiente.
@@ -90,13 +90,12 @@ A etapa 01 não tem mais decisão essencial aberta. A senha do PostgreSQL e o en
 Bloqueiam etapas posteriores, listadas no plano:
 
 1. Como o log chega à API e o que dele fica gravado.
-2. Provedor de LLM, saída de dados da máquina e confirmação do contexto.
+2. Qual programa nesta máquina escreve a análise. Já está decidido que o texto fica na máquina, que quem opera confirma o contexto antes do envio, e que a resposta tem estrutura fixa com a sugestão de correção. A aplicação dessa sugestão fica para uma etapa posterior.
 3. Mecanismo do cofre.
 4. O que significa fonte autorizada.
 5. Primeira fonte externa e o que conta como leitura em cada sistema.
 6. Campos do GitHub Projects, conta responsável, sprint vigente e opções de tipo, prioridade, escopo e status.
 7. Campos adicionais de uma investigação no dia a dia.
-8. Forma da resposta do LLM.
 
 Critérios de sucesso do produto estão propostos em [docs/PRODUCT.md](../docs/PRODUCT.md) e ainda não foram aceitos.
 

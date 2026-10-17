@@ -157,7 +157,6 @@ Fora do desenho atual. Quando chegar, autenticação, exposição de rede e o lu
 ## Pendências que a arquitetura não resolve
 
 1. Como o arquivo de log chega à API e o que dele fica persistido.
-2. Provedor de LLM e se a chamada pode sair da máquina.
+2. Qual programa nesta máquina escreve a análise. O texto enviado ao modelo fica na máquina. Quem opera confirma o contexto antes do envio. A resposta tem estrutura fixa e inclui a sugestão de correção. A etapa da análise guarda esse texto. Uma etapa posterior, ainda sem abertura, pode, depois de aprovação, alterar o código pelo Cursor ou devolver o SQL do banco. O SQL não é executado. Uma segunda aprovação vem antes do commit e do envio da branch.
 3. Mecanismo do cofre.
-4. Confirmação humana do contexto antes do envio ao modelo. A arquitetura recomenda que sim; o produto ainda pergunta.
-5. Primeira fonte externa, quando os conectores entrarem. O log local do primeiro caso de uso não responde a essa escolha.
+4. Primeira fonte externa, quando os conectores entrarem. O log local do primeiro caso de uso não responde a essa escolha.

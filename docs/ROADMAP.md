@@ -60,7 +60,11 @@ Entra: uma porta de LLM, um adaptador para o provedor escolhido e a regra de que
 
 Não entra: o modelo escolhendo fontes, executando ferramentas ou recebendo credencial. A alternativa de um agente com ferramentas não foi adotada.
 
-Bloqueia até responder: qual provedor, se o conteúdo pode sair da máquina, se o operador confirma o contexto antes do envio, e se a resposta tem estrutura fixa.
+Já decidido: o texto enviado ao modelo fica na máquina; quem opera confirma o contexto antes do envio; a resposta tem estrutura fixa e inclui a sugestão de correção. Nesta etapa a sugestão fica guardada. Consultar Portainer, FTP ou banco continua nas etapas de leitura.
+
+Uma etapa posterior, ainda sem abertura, pode aplicar a sugestão depois de aprovação. O Cursor altera o código ou devolve o SQL para alterar o banco. O SQL volta como texto e não é executado. Se a alteração for de código, uma segunda aprovação vem antes de criar o commit e enviar a branch.
+
+Bloqueia até responder: qual programa nesta máquina escreve a análise.
 
 Pronto quando: uma investigação com evidência de log local gera uma análise relida depois, e um teste com provedor falso mostra que um texto com cara de segredo não segue no prompt.
 

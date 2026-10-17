@@ -24,7 +24,8 @@ O objetivo de aprendizagem do projeto faz parte do trabalho: explique o conceito
 - Antes do primeiro arquivo de configuração local, garanta que o `.gitignore` cubra `.env` e qualquer arquivo de segredo.
 - Exemplos usam placeholders óbvios, como `example.invalid` e `<SEGREDO>`.
 - Testes usam dados fictícios. Nunca use credencial real para “ver se funciona”.
-- Conteúdo enviado a um LLM passa antes por redação de segredos. A resposta do modelo é um texto de apoio guardado na investigação. Ela não é executada.
+- Conteúdo enviado a um LLM passa antes por redação de segredos. A resposta do modelo é um texto de apoio guardado na investigação. Ela não é executada na etapa da análise.
+- Uma etapa posterior, ainda sem abertura, pode aplicar a sugestão depois de aprovação explícita. O Cursor altera o código ou devolve o SQL para alterar o banco. O SQL volta como texto e não é executado. Se a alteração for de código, uma segunda aprovação vem antes de criar o commit e enviar a branch. Enquanto essa etapa não estiver ativa, nenhuma dessas escritas é permitida.
 
 Redação, aqui, significa remover ou mascarar segredos antes que o texto saia do processo: log, erro ou prompt.
 
