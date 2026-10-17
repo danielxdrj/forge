@@ -10,7 +10,7 @@ Este guia descreve o código da etapa que cria e consulta uma investigação. O 
 
 ## API
 
-As duas rotas estão em `backend/app/investigations.py`. A documentação interativa do FastAPI continua sendo o uso da API. A pasta `frontend` é uma aplicação React com Tailwind. Ela mostra a tela escura e ainda não chama essas rotas.
+As rotas de investigação e de evidência estão em `backend/app/investigations.py`. A documentação interativa do FastAPI continua sendo o uso da API.
 
 ## FastAPI
 
@@ -24,7 +24,7 @@ As duas rotas estão em `backend/app/investigations.py`. A documentação intera
 
 O serviço `postgres` do Compose guarda os dados do Forge. O banco e o usuário se chamam `forge`. A senha fica em `POSTGRES_PASSWORD` e em `DATABASE_URL`. O arquivo `.env` está fora do Git. O exemplo versionado é `.env.example`, com `<SENHA>`.
 
-Na primeira execução, só o `postgres` sobe pelo Compose. O backend roda na máquina. A `DATABASE_URL` usa `127.0.0.1`, porque a porta publicada do banco é `127.0.0.1:5432`. Isso não é o endereço da API.
+O Compose sobe `postgres` e `frontend`. O backend roda na máquina. A `DATABASE_URL` usa `127.0.0.1`, porque a porta publicada do banco é `127.0.0.1:5432`. Isso não é o endereço da API.
 
 ## SQL parametrizado
 
@@ -50,6 +50,14 @@ O teste que abre outra conexão mostra que o registro continua no banco depois q
 | `FORGE_PORT` | Porta em que a API escuta. Sem valor padrão. |
 
 O Python não carrega o `.env` sozinho. O Compose lê esse arquivo para subir o `postgres`. Para rodar a API, as variáveis precisam estar no ambiente do processo.
+
+## Tela
+
+A tela fica em `frontend`. JavaScript é a linguagem. React monta o que aparece, Tailwind aplica o tema escuro e o Vite junta isso num build estático.
+
+`frontend/src/App.jsx` é o componente da página. `frontend/src/index.css` declara as cores. `frontend/vite.config.js` liga o React e o Tailwind. O `Dockerfile` executa o build e o nginx publica o resultado.
+
+A página mostra três áreas vazias: investigações, resultado do banco e cadastro de conexão. Os tipos visíveis da conexão são Portainer, FTP e repositório. Não há chamada à API e não há registros de exemplo.
 
 ## O que este guia não cobre ainda
 

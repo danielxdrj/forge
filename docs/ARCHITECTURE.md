@@ -79,7 +79,7 @@ Definido:
 
 - O projeto do Compose se chama `forge_system`.
 - O serviço `backend` executa a API FastAPI. Não há outro container de API.
-- O serviço `frontend` mostra a tela escura. Ela é React com Tailwind, compilada para arquivos estáticos. Essa tela ainda não chama a API. A documentação interativa do FastAPI continua disponível no `backend`.
+- O serviço `frontend` mostra a tela escura. Ela é React com Tailwind, compilada pelo Vite para arquivos estáticos. As áreas visíveis são investigações, resultado do banco e cadastro de conexão para Portainer, FTP e repositório. Nenhuma grava ou consulta. A documentação interativa do FastAPI continua disponível no `backend`.
 - Na primeira execução, somente o `postgres` sobe pelo Compose. O processo do `backend` roda na máquina e alcança o banco por `localhost`.
 - O serviço `postgres` executa o PostgreSQL que guarda os dados do Forge.
 - O `backend` fala com o `postgres`. A fala do `frontend` com o `backend` ainda não está configurada.
@@ -95,7 +95,8 @@ O Compose do `postgres` está em `docker-compose.yml`. Não há `Dockerfile` do 
 
 Definido:
 
-- Python é a linguagem.
+- Python é a linguagem do backend.
+- JavaScript é a linguagem da tela. React desenha a interface, Tailwind define o tema escuro e o Vite gera os arquivos estáticos servidos pelo `frontend`.
 - FastAPI expõe a API local e a documentação automática.
 - PostgreSQL, no serviço `postgres`, é a persistência local.
 - A primeira funcionalidade persiste uma investigação com identificador, título e data de criação.

@@ -1,3 +1,8 @@
+const fieldClass =
+  "rounded-lg border border-forge-line bg-forge-bg px-3 py-2 disabled:cursor-not-allowed disabled:opacity-55";
+const buttonClass =
+  "w-fit rounded-lg border border-forge-copper bg-forge-copper-dim px-3 py-2 font-semibold text-[#1a1208] disabled:cursor-not-allowed disabled:opacity-55";
+
 export default function App() {
   return (
     <div className="min-h-screen bg-forge-bg text-forge-text">
@@ -11,7 +16,7 @@ export default function App() {
         </p>
       </header>
 
-      <main className="grid gap-5 p-5 lg:grid-cols-[320px_1fr]">
+      <main className="grid gap-5 p-5 xl:grid-cols-[320px_320px_1fr]">
         <section
           className="rounded-xl border border-forge-line bg-forge-panel p-5"
           aria-labelledby="list-title"
@@ -30,13 +35,9 @@ export default function App() {
               maxLength={200}
               placeholder="Título"
               disabled
-              className="rounded-lg border border-forge-line bg-forge-bg px-3 py-2 disabled:cursor-not-allowed disabled:opacity-55"
+              className={fieldClass}
             />
-            <button
-              type="button"
-              disabled
-              className="w-fit rounded-lg border border-forge-copper bg-forge-copper-dim px-3 py-2 font-semibold text-[#1a1208] disabled:cursor-not-allowed disabled:opacity-55"
-            >
+            <button type="button" disabled className={buttonClass}>
               Criar
             </button>
           </form>
@@ -45,35 +46,71 @@ export default function App() {
 
         <section
           className="rounded-xl border border-forge-line bg-forge-panel p-5"
-          aria-labelledby="detail-title"
+          aria-labelledby="connections-title"
         >
-          <h2 id="detail-title" className="mb-4 text-lg font-semibold">
-            Detalhe
+          <h2 id="connections-title" className="mb-4 text-lg font-semibold">
+            Conexões
           </h2>
-          <p className="mb-6 text-forge-muted">
-            Selecione uma investigação quando a tela estiver ligada à API.
-          </p>
-          <form className="grid gap-2">
-            <label className="text-sm text-forge-muted" htmlFor="log">
-              Log local
+          <form className="mb-5 grid gap-2">
+            <label className="text-sm text-forge-muted" htmlFor="connection-type">
+              Tipo
             </label>
-            <textarea
-              id="log"
-              name="log"
-              rows={8}
-              placeholder="O texto do log aparece aqui."
+            <select
+              id="connection-type"
+              name="connection-type"
               disabled
-              className="rounded-lg border border-forge-line bg-forge-bg px-3 py-2 disabled:cursor-not-allowed disabled:opacity-55"
-            />
-            <button
-              type="button"
-              disabled
-              className="w-fit rounded-lg border border-forge-copper bg-forge-copper-dim px-3 py-2 font-semibold text-[#1a1208] disabled:cursor-not-allowed disabled:opacity-55"
+              className={fieldClass}
             >
-              Anexar log
+              <option>Portainer</option>
+              <option>FTP</option>
+              <option>Repositório</option>
+            </select>
+            <button type="button" disabled className={buttonClass}>
+              Cadastrar
             </button>
           </form>
+          <p className="text-forge-muted">Nenhuma conexão para mostrar.</p>
         </section>
+
+        <div className="grid content-start gap-5">
+          <section
+            className="rounded-xl border border-forge-line bg-forge-panel p-5"
+            aria-labelledby="result-title"
+          >
+            <h2 id="result-title" className="mb-4 text-lg font-semibold">
+              Resultado do banco
+            </h2>
+            <p className="text-forge-muted">Nenhum resultado para mostrar.</p>
+          </section>
+
+          <section
+            className="rounded-xl border border-forge-line bg-forge-panel p-5"
+            aria-labelledby="detail-title"
+          >
+            <h2 id="detail-title" className="mb-4 text-lg font-semibold">
+              Detalhe
+            </h2>
+            <p className="mb-6 text-forge-muted">
+              Selecione uma investigação quando a tela estiver ligada à API.
+            </p>
+            <form className="grid gap-2">
+              <label className="text-sm text-forge-muted" htmlFor="log">
+                Log local
+              </label>
+              <textarea
+                id="log"
+                name="log"
+                rows={8}
+                placeholder="O texto do log aparece aqui."
+                disabled
+                className={fieldClass}
+              />
+              <button type="button" disabled className={buttonClass}>
+                Anexar log
+              </button>
+            </form>
+          </section>
+        </div>
       </main>
     </div>
   );

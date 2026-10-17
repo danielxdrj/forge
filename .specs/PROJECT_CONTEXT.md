@@ -20,14 +20,16 @@ A branch-base do projeto é `main`. Trabalho novo sai dela, pelo protocolo em [E
 
 ## Stack e decisões aprovadas
 
-- Linguagem: Python.
+- Linguagem do backend: Python.
+- Linguagem da tela: JavaScript. React desenha a interface, Tailwind define o tema e o Vite gera os arquivos estáticos.
 - Backend: FastAPI, executado na máquina na primeira implementação.
 - Persistência dos dados do próprio Forge: PostgreSQL, no serviço `postgres`.
 - Projeto do Compose: `forge_system`.
 - Serviços previstos: `backend`, `frontend` e `postgres`.
 - O Compose sobe `postgres` e `frontend`. O `backend` alcança o banco por `localhost`.
 - O nome `postgres` é o endereço quando o `backend` também estiver na rede do Compose.
-- A documentação interativa do FastAPI continua sendo o uso da API. A tela do `frontend` existe, em React e Tailwind, e ainda não chama a API.
+- A documentação interativa do FastAPI continua sendo o uso da API. A tela do `frontend` existe e ainda não chama a API.
+- A tela mostra, vazias, as áreas de investigações, resultado do banco e cadastro de conexão. Os tipos de conexão visíveis são Portainer, FTP e repositório. Nenhuma dessas áreas grava ou consulta.
 - A primeira funcionalidade cria uma investigação e a consulta pelo identificador.
 - Os campos desse primeiro registro são identificador, título e data de criação.
 - As rotas previstas são `POST /investigations` e `GET /investigations/{investigation_id}`.
@@ -77,7 +79,7 @@ A primeira implementação cobre só criar e consultar a investigação.
 
 ## Fora do escopo da primeira implementação
 
-LLM, conexões externas, cofre, `frontend`, imagem Docker do `backend`, upload, análise de log e publicação no GitHub.
+LLM, conexões externas, cofre, a ligação da tela com a API, imagem Docker do `backend`, upload, análise de log e publicação no GitHub.
 
 Também estão fora do produto atual: SLA, multiempresa, aplicativo móvel, marketplace de conectores e execução autônoma de ferramentas pelo modelo.
 

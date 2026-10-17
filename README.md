@@ -41,7 +41,7 @@ O conjunto se chama `forge_system`. Os serviços têm nomes diretos:
 | Serviço | Processo |
 | --- | --- |
 | `backend` | A API FastAPI. A API é o backend, e os dois não viram containers separados. |
-| `frontend` | A tela escura em React e Tailwind. Ela está visível e ainda não conversa com a API. |
+| `frontend` | A tela escura em JavaScript, React, Tailwind e Vite. Ela mostra áreas vazias e ainda não conversa com a API. |
 | `postgres` | O PostgreSQL do próprio Forge. |
 
 O `backend` conversa com o `postgres`. O `frontend` ainda não está configurado para chamar o `backend`.
