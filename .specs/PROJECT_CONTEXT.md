@@ -29,7 +29,7 @@ A branch-base do projeto é `main`. Trabalho novo sai dela, pelo protocolo em [E
 - O Compose sobe `postgres` e `frontend`. O `backend` alcança o banco por `localhost`.
 - O nome `postgres` é o endereço quando o `backend` também estiver na rede do Compose.
 - A documentação interativa do FastAPI continua sendo o uso da API. A tela do `frontend` existe e ainda não chama a API.
-- A tela mostra, vazias, as áreas de investigações, resultado do banco e cadastro de conexão. Os tipos de conexão visíveis são Portainer, FTP e repositório. Nenhuma dessas áreas grava ou consulta.
+- A tela mostra a navegação de investigação, automações, log local, conexões e configurações. As listas ficam vazias. Os tipos de conexão visíveis são banco de dados, FTP/SFTP, repositório Git e Portainer, sem cadastro gravado.
 - A primeira funcionalidade cria uma investigação e a consulta pelo identificador.
 - Os campos desse primeiro registro são identificador, título e data de criação.
 - As rotas previstas são `POST /investigations` e `GET /investigations/{investigation_id}`.
