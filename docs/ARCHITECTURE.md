@@ -79,7 +79,7 @@ Definido:
 
 - O projeto do Compose se chama `forge_system`.
 - O serviço `backend` executa a API FastAPI. Não há outro container de API.
-- O serviço `frontend` mostra a tela escura. Ela é React com Tailwind, compilada pelo Vite para arquivos estáticos. As áreas visíveis são investigações, resultado do banco e cadastro de conexão para Portainer, FTP e repositório. Nenhuma grava ou consulta. A documentação interativa do FastAPI continua disponível no `backend`.
+- O serviço `frontend` mostra a tela escura. Ela é React com Tailwind, compilada pelo Vite para arquivos estáticos. A navegação cobre investigação, automações, log local, conexões e configurações. As listas ficam vazias e a tela não chama a API. A documentação interativa do FastAPI continua disponível no `backend`.
 - Na primeira execução, somente o `postgres` sobe pelo Compose. O processo do `backend` roda na máquina e alcança o banco por `localhost`.
 - O serviço `postgres` executa o PostgreSQL que guarda os dados do Forge.
 - O `backend` fala com o `postgres`. A fala do `frontend` com o `backend` ainda não está configurada.

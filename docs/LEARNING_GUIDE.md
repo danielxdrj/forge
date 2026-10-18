@@ -55,9 +55,9 @@ O Python não carrega o `.env` sozinho. O Compose lê esse arquivo para subir o 
 
 A tela fica em `frontend`. JavaScript é a linguagem. React monta o que aparece, Tailwind aplica o tema escuro e o Vite junta isso num build estático.
 
-`frontend/src/App.jsx` é o componente da página. `frontend/src/index.css` declara as cores. `frontend/vite.config.js` liga o React e o Tailwind. O `Dockerfile` executa o build e o nginx publica o resultado.
+`frontend/src/App.jsx` escolhe a seção. `frontend/src/components/AppShell.jsx` monta a navegação, a barra e o Canvas. `frontend/src/index.css` declara as cores. `frontend/vite.config.js` liga o React e o Tailwind. O `Dockerfile` executa o build e o nginx publica o resultado.
 
-A página mostra três áreas vazias: investigações, resultado do banco e cadastro de conexão. Os tipos visíveis da conexão são Portainer, FTP e repositório. Não há chamada à API e não há registros de exemplo.
+As seções são investigação, automações, log local, conexões e configurações. As listas começam vazias. O formulário de conexão pede nome, tipo, destino e referência do segredo, e não grava o valor do segredo. Não há chamada à API e não há registros de exemplo.
 
 ## O que este guia não cobre ainda
 
