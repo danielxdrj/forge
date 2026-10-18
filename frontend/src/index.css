@@ -1,11 +1,43 @@
 @import "tailwindcss";
 
 @theme {
-  --color-forge-bg: #101114;
-  --color-forge-panel: #181b20;
-  --color-forge-line: #2a2f37;
-  --color-forge-text: #e8eaed;
-  --color-forge-muted: #9aa1ab;
-  --color-forge-copper: #d3924a;
-  --color-forge-copper-dim: #8a5d2e;
+  --color-forge-bg: #07111f;
+  --color-forge-panel: #0c182b;
+  --color-forge-raised: #12233a;
+  --color-forge-line: #24344c;
+  --color-forge-text: #e7eef8;
+  --color-forge-muted: #8ea3bc;
+  --color-forge-blue: #2f81f7;
+  --color-forge-blue-bright: #4b96ff;
+  --color-forge-amber: #e0a54a;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--color-forge-bg);
+  color: var(--color-forge-text);
+  font: 14px/1.5 "Segoe UI", system-ui, sans-serif;
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-forge-blue);
+  outline-offset: 2px;
+}
+
+button:disabled,
+input:disabled,
+select:disabled,
+textarea:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
 }

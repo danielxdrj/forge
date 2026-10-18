@@ -1,117 +1,33 @@
-const fieldClass =
-  "rounded-lg border border-forge-line bg-forge-bg px-3 py-2 disabled:cursor-not-allowed disabled:opacity-55";
-const buttonClass =
-  "w-fit rounded-lg border border-forge-copper bg-forge-copper-dim px-3 py-2 font-semibold text-[#1a1208] disabled:cursor-not-allowed disabled:opacity-55";
+import { useState } from "react";
+import AppShell from "./components/AppShell.jsx";
+import AutomationsPage from "./pages/AutomationsPage.jsx";
+import ConnectionsPage from "./pages/ConnectionsPage.jsx";
+import InvestigationPage from "./pages/InvestigationPage.jsx";
+import LocalLogPage from "./pages/LocalLogPage.jsx";
+import SettingsPage from "./pages/SettingsPage.jsx";
 
 export default function App() {
+  const [page, setPage] = useState("investigacao");
+  const [detailTab, setDetailTab] = useState("chat");
+  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [canvasOpen, setCanvasOpen] = useState(true);
+
   return (
-    <div className="min-h-screen bg-forge-bg text-forge-text">
-      <header className="flex flex-col gap-3 border-b border-forge-line px-8 py-7 sm:flex-row sm:items-end sm:justify-between">
-        <div>
-          <p className="text-2xl tracking-widest uppercase">Forge</p>
-          <p className="text-forge-muted">Copiloto local</p>
-        </div>
-        <p className="text-forge-muted">
-          Tela visível. A ligação com a API ainda não está configurada.
-        </p>
-      </header>
-
-      <main className="grid gap-5 p-5 xl:grid-cols-[320px_320px_1fr]">
-        <section
-          className="rounded-xl border border-forge-line bg-forge-panel p-5"
-          aria-labelledby="list-title"
-        >
-          <h1 id="list-title" className="mb-4 text-lg font-semibold">
-            Investigações
-          </h1>
-          <form className="mb-5 grid gap-2">
-            <label className="text-sm text-forge-muted" htmlFor="title">
-              Nova investigação
-            </label>
-            <input
-              id="title"
-              name="title"
-              type="text"
-              maxLength={200}
-              placeholder="Título"
-              disabled
-              className={fieldClass}
-            />
-            <button type="button" disabled className={buttonClass}>
-              Criar
-            </button>
-          </form>
-          <p className="text-forge-muted">Nenhuma investigação para mostrar.</p>
-        </section>
-
-        <section
-          className="rounded-xl border border-forge-line bg-forge-panel p-5"
-          aria-labelledby="connections-title"
-        >
-          <h2 id="connections-title" className="mb-4 text-lg font-semibold">
-            Conexões
-          </h2>
-          <form className="mb-5 grid gap-2">
-            <label className="text-sm text-forge-muted" htmlFor="connection-type">
-              Tipo
-            </label>
-            <select
-              id="connection-type"
-              name="connection-type"
-              disabled
-              className={fieldClass}
-            >
-              <option>Portainer</option>
-              <option>FTP</option>
-              <option>Repositório</option>
-            </select>
-            <button type="button" disabled className={buttonClass}>
-              Cadastrar
-            </button>
-          </form>
-          <p className="text-forge-muted">Nenhuma conexão para mostrar.</p>
-        </section>
-
-        <div className="grid content-start gap-5">
-          <section
-            className="rounded-xl border border-forge-line bg-forge-panel p-5"
-            aria-labelledby="result-title"
-          >
-            <h2 id="result-title" className="mb-4 text-lg font-semibold">
-              Resultado do banco
-            </h2>
-            <p className="text-forge-muted">Nenhum resultado para mostrar.</p>
-          </section>
-
-          <section
-            className="rounded-xl border border-forge-line bg-forge-panel p-5"
-            aria-labelledby="detail-title"
-          >
-            <h2 id="detail-title" className="mb-4 text-lg font-semibold">
-              Detalhe
-            </h2>
-            <p className="mb-6 text-forge-muted">
-              Selecione uma investigação quando a tela estiver ligada à API.
-            </p>
-            <form className="grid gap-2">
-              <label className="text-sm text-forge-muted" htmlFor="log">
-                Log local
-              </label>
-              <textarea
-                id="log"
-                name="log"
-                rows={8}
-                placeholder="O texto do log aparece aqui."
-                disabled
-                className={fieldClass}
-              />
-              <button type="button" disabled className={buttonClass}>
-                Anexar log
-              </button>
-            </form>
-          </section>
-        </div>
-      </main>
-    </div>
+    <AppShell
+      page={page}
+      sidebarOpen={sidebarOpen}
+      canvasOpen={canvasOpen}
+      onNavigate={setPage}
+      onToggleSidebar={() => setSidebarOpen((open) => !open)}
+      onToggleCanvas={() => setCanvasOpen((open) => !open)}
+    >
+      {page === "investigacao" ? (
+        <InvestigationPage detailTab={detailTab} onDetailTab={setDetailTab} />
+      ) : null}
+      {page === "automacoes" ? <AutomationsPage /> : null}
+      {page === "log" ? <LocalLogPage /> : null}
+      {page === "conexoes" ? <ConnectionsPage /> : null}
+      {page === "configuracoes" ? <SettingsPage /> : null}
+    </AppShell>
   );
 }
