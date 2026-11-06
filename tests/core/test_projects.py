@@ -171,7 +171,7 @@ def test_version_conflict(env):
     with pytest.raises(ProjectConflictError):
         svc.deactivate_project(p1.id, ACTOR, expected_version=1)
     assert svc.get_repository(r1.id).name == "novo" and svc.get_project(p1.id).title == "x"
-    assert audit(repo)[-1][2].startswith("error: version esperada")
+    assert audit(repo)[-1][2].startswith("error: version desatualizada")
 
 
 def test_resolve_target(env):
@@ -241,3 +241,77 @@ def test_postgres_writer_has_no_delete_or_truncate(pg_env, sql):
         return
     with pytest.raises(psycopg.errors.InsufficientPrivilege):
         writer._run([(sql, ())])
+
+
+SENTINEL = "ghp_" + "Z" * 36 + "SENTINELA-UNICA"
+
+
+def _assert_no_sentinel(repo, caplog):
+    assert SENTINEL not in repr([(a.actor, a.action, a.target, a.result) for a in repo.list_audit()])
+    assert SENTINEL not in repr(repo.fetch("SELECT * FROM task_changes"))
+    assert SENTINEL not in caplog.text
+
+
+def _refused(fn, *args, **kw):
+    with pytest.raises(Exception) as ei:
+        fn(*args, **kw)
+    assert SENTINEL not in str(ei.value) and ei.type.__name__ in ("ProjectRuleError", "ProjectConflictError", "TaskRuleError", "TaskConflictError", "KeyError")
+
+
+def test_sentinel_never_reaches_audit_or_logs_from_projects(env, caplog):
+    import logging
+
+    caplog.set_level(logging.DEBUG)
+    repo, svc = env
+    p = svc.create_project("P", ACTOR)
+    r = svc.add_repository(p.id, "n", "org", "r", ACTOR)
+    s = SENTINEL
+    _refused(svc.add_repository, p.id, "n", "org", "r2", ACTOR, provider=s)
+    _refused(svc.add_repository, p.id, "n", "org", "r2", ACTOR, settings={s: "x"})
+    _refused(svc.update_repository, r.id, ACTOR, 1, settings={s: "x"})
+    _refused(svc.add_repository, p.id, "n", s, "r2", ACTOR)
+    _refused(svc.update_repository, r.id, ACTOR, 1, owner=s)
+    _refused(svc.add_repository, p.id, "n", "org", s + "/x", ACTOR)
+    _refused(svc.update_repository, r.id, ACTOR, 1, repo_name=s + "/x")
+    _refused(svc.add_repository, p.id, "n", "org", "r2", ACTOR, default_branch=s + " x")
+    _refused(svc.update_repository, r.id, ACTOR, 1, default_branch=s + "~")
+    _refused(svc.add_repository, p.id, "n", "org", "r2", ACTOR, settings={"branch_prefix": s + " "})
+    _refused(svc.add_repository, p.id, "n", "org", "r2", ACTOR, settings={"issue_labels": [s]})
+    _refused(svc.add_repository, p.id, "n", "org", "r2", ACTOR, settings={"base_branch_override": s + ".."})
+    _refused(svc.add_repository, p.id, "x" * 101 + s, "org", "r2", ACTOR)
+    _refused(svc.create_project, s * 10, ACTOR)
+    _refused(svc.update_project, s, ACTOR, 1, title="x")
+    _refused(svc.update_repository, s, ACTOR, 1, name="x")
+    _refused(svc.add_repository, s, "n", "org", "r2", ACTOR)
+    _refused(svc.deactivate_project, s, ACTOR)
+    _refused(svc.reactivate_repository, s, ACTOR)
+    _refused(svc.resolve_target, s)
+    _refused(svc.update_repository, r.id, ACTOR, s)
+    _assert_no_sentinel(repo, caplog)
+    rows = [a.result for a in repo.list_audit() if a.result.startswith("error")]
+    assert any("invalid_provider" in x for x in rows) and any("unknown_settings_key" in x for x in rows)
+
+
+def test_sentinel_never_reaches_audit_from_task_service(env, caplog):
+    import logging
+
+    from forge_core.tasks import TaskService
+
+    caplog.set_level(logging.DEBUG)
+    repo, _ = env
+    ts = TaskService(repo)
+    t = ts.create_task("t", ACTOR)
+    s = SENTINEL
+    _refused(ts.create_task, "t", ACTOR, priority=s)
+    _refused(ts.create_task, "t", ACTOR, assignee_kind=s, assignee_id="x")
+    _refused(ts.create_task, "t", ACTOR, stage_id=s)
+    _refused(ts.create_task, "t", ACTOR, parent_id=s)
+    _refused(ts.create_task, "t", ACTOR, due_date=s)
+    _refused(ts.update_task, t.id, ACTOR, 1, **{s: "x"})
+    _refused(ts.update_task, s, ACTOR, 1, title="x")
+    _refused(ts.change_status, t.id, s, ACTOR)
+    _refused(ts.change_status, s, "done", ACTOR)
+    _refused(ts.create_stage, s, "e", ACTOR)
+    _refused(ts.add_dependency, t.id, s, ACTOR)
+    _refused(ts.add_dependency, s, t.id, ACTOR)
+    _assert_no_sentinel(repo, caplog)

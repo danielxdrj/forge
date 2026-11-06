@@ -43,7 +43,7 @@ def validate_name(name) -> str:
 
 def validate_provider(provider) -> str:
     if provider not in PROVIDERS:
-        raise ProjectRuleError(f"provider não suportado: {provider!r} (use {', '.join(PROVIDERS)})")
+        raise ProjectRuleError("invalid_provider: provider não suportado")
     return provider
 
 
@@ -66,7 +66,7 @@ def validate_branch(branch, label: str = "branch") -> str:
           and not branch.startswith(("/", "-")) and not branch.endswith(("/", "."))
           and not any(p.startswith(".") or p.endswith(".lock") for p in branch.split("/")))
     if not ok:
-        raise ProjectRuleError(f"{label} inválida (nome de branch do Git não permitido)")
+        raise ProjectRuleError(f"invalid_branch: {label} não permitida")
     return branch
 
 
@@ -110,7 +110,7 @@ def validate_settings(settings) -> dict:
         raise ProjectRuleError(f"settings acima de {SETTINGS_MAX_BYTES} bytes")
     unknown = sorted(str(k) for k in settings if k not in SETTINGS_KEYS)
     if unknown:
-        raise ProjectRuleError(f"chave(s) de settings desconhecida(s): {', '.join(unknown)}")
+        raise ProjectRuleError(f"unknown_settings_key: {len(unknown)} chave(s) de settings desconhecida(s)")
     out: dict = {}
     if "branch_prefix" in settings:
         out["branch_prefix"] = _validate_prefix(settings["branch_prefix"])

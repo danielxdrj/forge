@@ -32,7 +32,7 @@ def is_ready(status: str, dependencies: Iterable[State]) -> bool:
 
 def check_transition(old: str, new: str, dependencies: Iterable[State] = (), subtasks: Iterable[State] = ()) -> None:
     if new not in S.ALL:
-        raise TaskRuleError(f"status desconhecido: {new}")
+        raise TaskRuleError("status desconhecido")
     if new not in TRANSITIONS.get(old, ()):
         raise TaskRuleError(f"transição inválida: {old} -> {new}")
     if new == S.IN_PROGRESS:
@@ -65,12 +65,12 @@ def validate_fields(title: str, priority: str, assignee_kind: str | None, assign
     if not title or not title.strip() or len(title) > 200:
         raise TaskRuleError("título é obrigatório e tem até 200 caracteres")
     if priority not in Priority.ALL:
-        raise TaskRuleError(f"prioridade inválida: {priority}")
+        raise TaskRuleError("prioridade inválida")
     if (assignee_kind is None) != (assignee_id is None):
         raise TaskRuleError("responsável exige tipo e identificador juntos")
     if assignee_kind is not None:
         if assignee_kind not in AssigneeKind.ALL:
-            raise TaskRuleError(f"tipo de responsável inválido: {assignee_kind}")
+            raise TaskRuleError("tipo de responsável inválido")
         if not assignee_id.strip() or len(assignee_id) > 100:
             raise TaskRuleError("identificador do responsável é obrigatório e tem até 100 caracteres")
     parsed = []
