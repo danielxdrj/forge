@@ -8,3 +8,7 @@ class ConfigError(ForgeError):
 
 class AutomationDisabledError(ForgeError):
     """Automação bloqueada pela chave global FORGE_AUTOMATION_ENABLED."""
+
+
+class JobStateError(ForgeError):
+    """Operação inválida para o estado atual do job (ex.: completar job que não está running)."""

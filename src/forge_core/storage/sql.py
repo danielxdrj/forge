@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import sqlite3
 import uuid
+from contextlib import contextmanager
 from datetime import datetime, timezone
 
 from ..errors import ConfigError
@@ -13,6 +14,21 @@ from .repository import AuditEntry, Task, TaskEvent
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+class Tx:
+    """Transação explícita: execute() ajusta o placeholder do dialeto; audit() entra na mesma transação."""
+
+    def __init__(self, cur, q):
+        self._cur, self._q = cur, q
+
+    def execute(self, sql: str, params: tuple = ()):
+        self._cur.execute(self._q(sql), params)
+        return self._cur
+
+    def audit(self, actor: str, action: str, target: str, result: str) -> None:
+        sql, params = SqlRepository._audit_write(actor, action, target, result)
+        self.execute(sql, params)
 
 
 class SqlRepository:
@@ -43,6 +59,22 @@ class SqlRepository:
         except Exception:
             self._conn.rollback()
             raise
+
+    @contextmanager
+    def transaction(self):
+        """SQLite: BEGIN IMMEDIATE (serializa escritores). PostgreSQL: transação padrão do psycopg."""
+        cur = self._conn.cursor()
+        if self.dialect == "sqlite":
+            cur.execute("BEGIN IMMEDIATE")
+        try:
+            yield Tx(cur, self._q)
+            self._conn.commit()
+        except Exception:
+            self._conn.rollback()
+            raise
+
+    def fetch(self, sql: str, params: tuple = ()) -> list[tuple]:
+        return self._fetch(sql, params)
 
     def _fetch(self, sql: str, params: tuple = ()) -> list[tuple]:
         cur = self._conn.cursor()
