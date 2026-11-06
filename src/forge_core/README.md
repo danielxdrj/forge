@@ -12,13 +12,14 @@ src/forge_core/
   logging.py      log JSON com redação de segredos
   errors.py       ForgeError, ConfigError, AutomationDisabledError
   backup.py       backup/restauração do SQLite
+  queue/          fila de jobs persistida (SqlJobQueue)
   storage/        persistência (FRG-42)
     repository.py   interface Repository e entidades
     sql.py          SqlRepository (SQLite e PostgreSQL) e open_repository()
     migrate.py      runner de migrações
     migrations/     SQL numerado por dialeto (sqlite/, postgres/)
-  extension/      interfaces: Integration, Agent, TaskQueue (implementações: FRG-40 e outras)
-tests/core/  test_core, test_start_automation, test_redact, test_storage
+  extension/      interfaces: Integration, Agent, JobQueue (Job, JobStatus) (implementações: FRG-40 e outras)
+tests/core/  conftest (Postgres efêmero), test_queue, test_core, test_start_automation, test_redact, test_storage
 docker-compose.dev.yml  Postgres de dev/teste (127.0.0.1:5433)
 ```
 
@@ -71,6 +72,27 @@ Rodam automaticamente em `open_repository`. Para criar uma: adicione `NNNN_descr
 - **SQLite:** `backup_sqlite(db, destino)` e `restore_sqlite(backup, db)` (pare o Forge antes de restaurar). Testado em `test_storage.py`.
 - **PostgreSQL (manual, não automatizado):** `pg_dump -Fc -h 127.0.0.1 -p 5433 -U <USUARIO> <BANCO> > forge.dump` e `pg_restore --clean -d <BANCO> forge.dump` num banco vazio ou de teste. Guarde o dump em local institucional e restaure em ambiente de teste periodicamente.
 
+## Fila de jobs (FRG-40)
+`SqlJobQueue(repo, settings=None, max_attempts=5, backoff_base=30, backoff_cap=3600, lease_seconds=300)` usa o mesmo banco e as mesmas migrações (`0003_jobs`). Sem variável de ambiente nova.
+```python
+q = SqlJobQueue(repo, settings)
+q.enqueue("sincronizar", {"ref": "abc"}, actor="pessoa:ana", idempotency_key="evento-42")
+q.run_once(meu_handler, actor="agente:worker")   # claim + handler + complete/fail
+```
+- **Estados:** `queued` → `running` → `succeeded`; erro volta a `queued` com `run_at` no futuro (backoff) até esgotar `max_attempts`, quando vira `failed` (definitivo). `cancelled` por `cancel()`.
+- **Sem duplicidade:** Postgres `FOR UPDATE SKIP LOCKED`; SQLite `BEGIN IMMEDIATE`. Lease vencido (consumidor caiu) devolve o job à fila e conta como tentativa.
+- **Entrega pelo menos uma vez:** se o handler cair depois do efeito e antes do `complete`, o job roda de novo. Handlers devem ser idempotentes.
+- **Cancelamento:** `queued` cancela na hora; `running` recebe `cancel_requested` e, ao terminar com erro, vira `cancelled` sem retry (cooperativo; handler que conclui com sucesso fica `succeeded`).
+- **Automação desligada:** `claim` levanta `AutomationDisabledError`; `enqueue` segue permitido.
+- **Fencing:** `claim()` devolve um `Job` com `claim_token` aleatório (só ali; leituras não o expõem). `complete(job_id, actor, claim_token)`, `fail(job_id, error, actor, claim_token)` e `heartbeat(job_id, actor, claim_token)` só valem com o token do claim vigente e com o lease não vencido; senão levantam `JobStateError` e a recusa é auditada (o token nunca é gravado). `heartbeat` renova o lease e só audita recusas. Migração `0004`.
+- **Payload:** guardado como veio, nunca vai para auditoria ou logs. Não ponha segredos nele; use referências.
+- **Erros do handler:** `run_once` grava em `last_error` e na auditoria só o **tipo** da exceção (ex.: `ValueError`), porque a mensagem pode ecoar o payload. Para registrar uma mensagem, o handler levanta `JobFailure("texto seguro", retryable=True|False)`; ela passa por `redact()`. `fail()` chamado direto também redige o texto, mas quem chama é responsável por não incluir payload.
+- **Auditoria:** `job.enqueue`, `job.claim`, `job.complete`, `job.retry`, `job.fail`, `job.cancel`, `job.requeue`, incluindo recusas (`error: ...`).
+- **Papéis:** o escritor tem SELECT/INSERT/UPDATE em `jobs` e nenhum DELETE (reprovisione com `postgres_roles.sql` em bancos já provisionados).
+
+### Monitorar e reprocessar
+`q.list_jobs("failed")` mostra falhas definitivas (`last_error`, `attempts`); `q.list_jobs("queued")` e `("running")` mostram a fila e o que está preso. Reprocessar: `q.requeue(job_id, actor)` (zera tentativas, audita). SQL equivalente, só leitura: `SELECT id, kind, status, attempts, last_error FROM jobs WHERE status = 'failed'`.
+
 ### Postgres de dev/teste
 `docker compose -f docker-compose.dev.yml up -d`, `pip install -e ".[dev,postgres]"` e `FORGE_DATABASE_URL=<URL> pytest tests/core`. A URL precisa ser de um papel que possa CREATE DATABASE e CREATE ROLE: os testes criam um banco e um papel escritor efêmeros e os removem no fim. Sem a variável, os testes do Postgres são pulados.
 
@@ -80,4 +102,4 @@ Erro de `psycopg` ausente: `pip install -e ".[postgres]"`. `audit_log é append-
 ## Limitações e próximos passos
 Sem Forge API (framework em aberto), fila (FRG-40), orquestrador (FRG-24). Formato único de configuração: variáveis de ambiente; arquivos da empresa serão lidos de `FORGE_CONFIG_DIR` em etapa futura.
 
-Limitações: o Postgres não tem restauração automatizada nem teste de backup automático; sem retenção/arquivamento nem painel de auditoria; `redact()` é por regex e Bearer/Basic mascara até o fim da linha; a auditoria de `start()` ainda não é gravada (o Core não abre o banco na inicialização).
+Limitações: a fila é por polling (sem push), sem ordem garantida além de `run_at, id`, sem retenção ou limpeza de jobs concluídos e sem jitter por padrão (parâmetro `jitter`); o Postgres não tem restauração automatizada nem teste de backup automático; sem retenção/arquivamento nem painel de auditoria; `redact()` é por regex e Bearer/Basic mascara até o fim da linha; a auditoria de `start()` ainda não é gravada (o Core não abre o banco na inicialização).

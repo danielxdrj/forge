@@ -22,3 +22,10 @@ Manutenção: baixa. Segurança: sem broker a proteger. Custo: nenhum extra agor
 
 ## Ajuste aprovado
 A fila não fica para depois: a FRG-40 e a Fase 1 exigem fila já nesta fundação. Mantém-se a interface (porta) e implementa-se uma fila simples, em processo ou no banco, sem sistema de fila pesado. A chamada direta entre módulos do Core continua válida.
+
+## Decisão FRG-40 (06/11/2026)
+Fila de jobs **persistida no banco atual** (PostgreSQL com SQLite nos testes), atrás da porta `JobQueue` (substitui a antiga `TaskQueue`, que não tinha implementação nem uso). Alternativas descartadas: fila em processo (perde jobs no reinício, não serve a vários processos) e broker dedicado Redis/RabbitMQ (serviço novo a operar e proteger, sem necessidade comprovada). Se o volume pedir, o broker entra atrás da mesma porta.
+- Entrega pelo menos uma vez; handlers idempotentes. Retry com backoff exponencial (30 s dobrando, teto 1 h), 5 tentativas, lease de 5 min, todos por parâmetro. Falha definitiva fica em `failed` até `requeue()` manual.
+- Sem duplicidade: Postgres usa `FOR UPDATE SKIP LOCKED`; SQLite usa `BEGIN IMMEDIATE`. Idempotência de enfileiramento por `idempotency_key` única.
+- Com `FORGE_AUTOMATION_ENABLED=false`, o consumo (`claim`) é bloqueado e o `enqueue` continua permitido (ADR-006).
+- Fencing por `claim_token` (migração 0004): complete/fail/heartbeat só valem com o token do claim vigente e lease não vencido; recusas são auditadas. Erros de handler persistem só o tipo da exceção, salvo `JobFailure` explícito (redigido).
