@@ -1,6 +1,6 @@
 # ADR-003: Estratégia de execução dos agentes
 
-- **Status:** Proposto, aguardando aprovação do responsável. Base fraca: FRG-46 não foi feita.
+- **Status:** Aprovado com ajuste (06/11/2026)
 - **Data:** 2026-11-06
 - **Revisar quando:** FRG-46 for concluída, ou o LLM/fornecedor for escolhido
 
@@ -19,3 +19,6 @@ Runtime próprio fino: aplica o contrato, ferramentas autorizadas, limites, reda
 
 ## Consequências
 Manutenção: média, compensada por contrato estável. Segurança: controle central de permissões. Custo: limite por execução no próprio runtime.
+
+## Ajuste aprovado
+A direção é provisória e será revista depois da FRG-46. LLM/fornecedor e motor de execução continuam em aberto.

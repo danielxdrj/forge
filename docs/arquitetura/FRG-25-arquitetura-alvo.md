@@ -5,7 +5,7 @@ Fase 0, Análise. Estudo sem implementação. Nenhum código, dependência ou bu
 | Item | Valor |
 | --- | --- |
 | Data | 2026-11-06 (UTC) |
-| Status | **Proposta, aguardando aprovação do responsável.** Nada aqui está decidido. |
+| Status | Decisões aprovadas pelo responsável em 06/11/2026 (ADR-001 a 007; quatro com ajuste). Linguagem, interface e LLM continuam em aberto. |
 | Insumos lidos | [FRG-23](../analise/FRG-23-resumo-codigo-legado.md), [FRG-9](../analise/FRG-9-tecnologias-reaproveitaveis.md), [FRG-32](../analise/FRG-32-inspecao-repositorio.md) e o prompt da tarefa |
 | Não disponíveis | FRG-46 (não feita, opcional), FRG-47 e a página do projeto no Notion. O que dependia delas está em "Perguntas em aberto". |
 | Diagrama existente (visão ampla/SaaS) | Não foi acessado, alterado nem usado. SaaS e multi-inquilino estão fora do escopo. |
@@ -34,10 +34,10 @@ flowchart TB
   ORCH --> ST[(Persistent Storage)]
   ORCH --> AUD[Audit Logs]
   CFG[Configuração da empresa: fora do Core] --> API
-  Q[[Queue / Event Bus: futuro]] -.-> ORCH
+  Q[[Fila simples]] --> ORCH
 ```
 
-Linha pontilhada: opcional ou futuro. Tudo roda num único processo (ADR-001).
+Linha pontilhada: acesso externo. Tudo roda num único processo (ADR-001).
 
 ## 3. Fronteiras: Core × plugins × configuração da empresa
 
@@ -59,7 +59,7 @@ Linha pontilhada: opcional ou futuro. Tudo roda num único processo (ADR-001).
 | Audit Logs | Sim | Quem pediu, quem aprovou, o que o agente fez. Requisito de continuidade e segurança. |
 | Plugin Registry | Sim, simples | Lista de plugins e operações a partir de arquivos; sem carregamento dinâmico remoto. |
 | Integração com GitHub | Sim | Leitura de repositórios e, com aprovação, branch e PR. Pendente: GitHub App × token (ADR-007). |
-| Queue / Event Bus | **Futuro** | Só quando houver trabalho assíncrono que um processo único não suporte (ADR-002). |
+| Queue / Event Bus | Sim, simples | Exigida pela FRG-40 e pela Fase 1: fila em processo ou no banco, sem sistema pesado (ADR-002). |
 | Portainer, n8n | **Futuro** | Etapa de Entrega/Operações. n8n é opcional. |
 
 Grupos de agentes (A Gestão de tarefas, B Engenharia, C Entrega e releases, D Operações, E Automações) são **conjuntos de configurações de agente**, não componentes de código. **[Opinião]** Começar por A e B; C, D e E depois, sem reordenar as fases do planejamento.
@@ -90,7 +90,7 @@ solicitação → tarefa → investigação → implementação → validação 
 | Implementação | Agente (altera código em branch isolada) | Sim, antes de gravar fora do ambiente isolado |
 | Validação | CI e agente | Revisão da pessoa |
 | PR | Agente abre o PR | Sim, antes de criar branch/PR remoto |
-| Release | Automação existente (release-please, desativável) | Sim, merge do PR de release é humano |
+| Release | Manual, uma por PR (tag e GitHub Release), conforme [`docs/RELEASES.md`](../RELEASES.md). O release-please não está em uso: falha por falta de permissão do Actions | Sim, quem opera cria a release |
 | Deploy | Futuro (GitHub Actions/Portainer) | Sim, sempre |
 
 **[Opinião]** Operações críticas (escrita remota, release, deploy, SQL de escrita) sempre exigem aprovação explícita; a política detalhada continua pendente (pergunta 3).
@@ -119,21 +119,21 @@ Conforme FRG-9: reaproveitar convenções e CI sem dependência do legado (Conve
 2. Núcleo mínimo: contrato de agente, Agent Runtime, Orchestrator, Storage e Audit Logs, com um agente de leitura (grupo B) e logs.
 3. Plugin GitHub somente leitura; depois escrita (branch/PR) com aprovação.
 4. Agentes do grupo A e B completos; documentação de operação e de criação de agentes.
-5. C (releases), D (Portainer), E (n8n) e Queue/Event Bus, cada um quando a fase correspondente começar.
+5. C (releases), D (Portainer), E (n8n), cada um quando a fase correspondente começar.
 
 ## 11. Decisões
 
 | ADR | Decisão | Recomendação | Status |
 | --- | --- | --- | --- |
-| [001](adr/ADR-001-estilo-arquitetural.md) | Estilo arquitetural | Monólito modular | Proposto |
-| [002](adr/ADR-002-comunicacao-entre-componentes.md) | Comunicação | Chamada direta; fila no futuro | Proposto |
-| [003](adr/ADR-003-estrategia-execucao-agentes.md) | Execução dos agentes | Runtime próprio fino sobre agente de código/LLM por adaptador | Proposto (sem FRG-46) |
-| [004](adr/ADR-004-persistencia.md) | Persistência | PostgreSQL atrás de interface de repositório | Proposto |
-| [005](adr/ADR-005-core-x-configuracao.md) | Core × configuração | Repositório de configuração separado, versionado | Proposto |
-| [006](adr/ADR-006-aprovacao-e-desativacao.md) | Aprovação e desativação | Aprovação para escrita; chave `ativo` + manual | Proposto |
-| [007](adr/ADR-007-integracao-github.md) | Integração com GitHub | GitHub App da organização, escopo mínimo | Proposto |
+| [001](adr/ADR-001-estilo-arquitetural.md) | Estilo arquitetural | Monólito modular | Aprovado (06/11/2026) |
+| [002](adr/ADR-002-comunicacao-entre-componentes.md) | Comunicação | Chamada direta no Core; fila simples já na fundação | Aprovado com ajuste (06/11/2026) |
+| [003](adr/ADR-003-estrategia-execucao-agentes.md) | Execução dos agentes | Runtime próprio fino sobre agente de código/LLM por adaptador | Aprovado com ajuste (provisório até FRG-46) (06/11/2026) |
+| [004](adr/ADR-004-persistencia.md) | Persistência | PostgreSQL (alvo; SQLite só no protótipo) atrás de repositório | Aprovado com ajuste (06/11/2026) |
+| [005](adr/ADR-005-core-x-configuracao.md) | Core × configuração | Repositório de configuração separado, versionado | Aprovado (06/11/2026) |
+| [006](adr/ADR-006-aprovacao-e-desativacao.md) | Aprovação e desativação | Aprovação para escrita; chave `ativo` + manual | Aprovado (06/11/2026) |
+| [007](adr/ADR-007-integracao-github.md) | Integração com GitHub | GitHub App ou token fine-grained (FRG-21), após criar a organização | Aprovado com ajuste (06/11/2026) |
 
-**Continuam abertas (não assumidas):** linguagem e frameworks; interface (web, CLI, chat); LLM/fornecedor; integração com Portainer; política de aprovação detalhada; transferência de manutenção; destino do legado; versionamento; repositório institucional; licença; local de CI/deploy; uso de n8n.
+**Continuam abertas (não assumidas):** **linguagem e frameworks; interface (web, CLI, chat); LLM e motor de agentes;** integração com Portainer; política de aprovação detalhada; transferência de manutenção; destino do legado; versionamento; repositório institucional; licença; local de CI/deploy; uso de n8n.
 
 ## 12. Riscos
 

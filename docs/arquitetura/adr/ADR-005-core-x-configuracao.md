@@ -1,6 +1,6 @@
 # ADR-005: Separação entre Forge Core e configuração da empresa
 
-- **Status:** Proposto, aguardando aprovação do responsável
+- **Status:** Aprovado (06/11/2026)
 - **Data:** 2026-11-06
 - **Revisar quando:** a configuração crescer a ponto de exigir ciclo de revisão próprio
 

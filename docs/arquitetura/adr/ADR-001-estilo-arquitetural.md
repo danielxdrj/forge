@@ -1,6 +1,6 @@
 # ADR-001: Estilo arquitetural
 
-- **Status:** Proposto, aguardando aprovação do responsável
+- **Status:** Aprovado (06/11/2026)
 - **Data:** 2026-11-06
 - **Revisar quando:** houver necessidade de escalar ou implantar partes de forma independente
 
