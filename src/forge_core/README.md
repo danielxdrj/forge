@@ -13,6 +13,7 @@ src/forge_core/
   errors.py       ForgeError, ConfigError, AutomationDisabledError
   backup.py       backup/restauração do SQLite
   agents/         Orchestrator, Agent Runtime, registro e agente echo (FRG-24; veja agents/README.md)
+  projects/       projetos e repositórios gerenciáveis (FRG-5; veja projects/README.md)
   tasks/          gerenciamento de tarefas (FRG-15): model, rules (puras), service (TaskService)
   queue/          fila de jobs persistida (SqlJobQueue)
   storage/        persistência (FRG-42)
@@ -21,7 +22,7 @@ src/forge_core/
     migrate.py      runner de migrações
     migrations/     SQL numerado por dialeto (sqlite/, postgres/)
   extension/      interfaces: Integration, Agent, contrato de agente (reexporta agents/spec), JobQueue (Job, JobStatus) (implementações: FRG-40 e outras)
-tests/core/  conftest (Postgres efêmero), test_agents, test_orchestrator, test_task_rules, test_task_service, test_queue, test_core, test_start_automation, test_redact, test_storage
+tests/core/  conftest (Postgres efêmero), test_projects, test_agents, test_orchestrator, test_task_rules, test_task_service, test_queue, test_core, test_start_automation, test_redact, test_storage
 docker-compose.dev.yml  Postgres de dev/teste (127.0.0.1:5433)
 ```
 
@@ -74,6 +75,9 @@ Rodam automaticamente em `open_repository`. Para criar uma: adicione `NNNN_descr
 ### Backup e restauração
 - **SQLite:** `backup_sqlite(db, destino)` e `restore_sqlite(backup, db)` (pare o Forge antes de restaurar). Testado em `test_storage.py`.
 - **PostgreSQL (manual, não automatizado):** `pg_dump -Fc -h 127.0.0.1 -p 5433 -U <USUARIO> <BANCO> > forge.dump` e `pg_restore --clean -d <BANCO> forge.dump` num banco vazio ou de teste. Guarde o dump em local institucional e restaure em ambiente de teste periodicamente.
+
+## Projetos e repositórios (FRG-5, ADR-012)
+`ProjectService` cadastra, lista, edita e desativa projetos e repositórios (migração `0008`, nunca apaga, `settings` validadas) e expõe `resolve_target` para a FRG-21. Veja `projects/README.md`.
 
 ## Orquestrador e agentes (FRG-24, ADR-011)
 `Orchestrator.dispatch(task_id)` despacha uma tarefa pronta ao agente designado e grava o resultado em `agent_runs`, `task_changes` e `audit_log`. Contrato, ficha, diagrama, exemplo e como adicionar agente: `agents/README.md`. Fronteira: só agentes `read` executam (registro e runtime recusam o resto; aprovação não é autenticação e não libera nada); só o `echo` existe. Reserva atômica de aprovação em `approval_consumptions` (migração `0007`). Papéis: o escritor tem SELECT/INSERT em `agent_runs` e `approval_consumptions` (append-only, sem DELETE); reprovisione com `postgres_roles.sql`. Limitações: timeout não mata a thread (FRG-6).

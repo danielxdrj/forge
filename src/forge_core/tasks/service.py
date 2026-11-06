@@ -81,7 +81,8 @@ class TaskService:
             if not title.strip():
                 raise TaskRuleError("título do projeto é obrigatório")
             pid = str(uuid.uuid4())
-            tx.execute("INSERT INTO projects (id, title, created_at) VALUES (?, ?, ?)", (pid, title, now))
+            tx.execute("INSERT INTO projects (id, title, created_at, updated_at) VALUES (?, ?, ?, ?)",
+                       (pid, title, now, now))
             tx.audit(actor, "project.create", f"project:{pid}", "ok")
             return Project(pid, title, now)
         return self._run("project.create", actor, "project:new", fn)

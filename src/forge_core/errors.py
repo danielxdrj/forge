@@ -51,3 +51,11 @@ class DispatchRefusedError(ForgeError):
 
 class ApprovalError(ForgeError):
     """Aprovação recusada (aprovador não é pessoa, tarefa inexistente)."""
+
+
+class ProjectRuleError(ForgeError):
+    """Violação de regra de projeto/repositório: dado inválido, duplicidade, inativo, inexistente."""
+
+
+class ProjectConflictError(ForgeError):
+    """O projeto ou repositório mudou desde a leitura (version diferente): releia e tente de novo."""
