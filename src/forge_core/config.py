@@ -22,6 +22,7 @@ class Settings:
     log_level: str = "INFO"
     automation_enabled: bool = True
     database_url: str | None = field(default=None, repr=False)
+    database_migration_url: str | None = field(default=None, repr=False)
 
 
 def _bool(name: str, raw: str) -> bool:
@@ -56,9 +57,13 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
     if database_url and not database_url.startswith(("sqlite:///", "postgresql://", "postgres://")):
         problems.append("FORGE_DATABASE_URL inválida: use sqlite:/// ou postgresql://")
 
+    migration_url = env.get("FORGE_DATABASE_MIGRATION_URL", "").strip() or None
+    if migration_url and not migration_url.startswith(("sqlite:///", "postgresql://", "postgres://")):
+        problems.append("FORGE_DATABASE_MIGRATION_URL inválida: use sqlite:/// ou postgresql://")
+
     if problems:
         raise ConfigError("Configuração inválida:\n- " + "\n- ".join(problems))
-    return Settings(config_dir=config_dir, log_level=log_level, automation_enabled=automation, database_url=database_url)
+    return Settings(config_dir=config_dir, log_level=log_level, automation_enabled=automation, database_url=database_url, database_migration_url=migration_url)
 
 
 def is_automation_enabled(settings: Settings) -> bool:

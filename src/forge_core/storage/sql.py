@@ -21,11 +21,15 @@ class SqlRepository:
     Conteúdo livre (título, alvo, resultado) passa por redact() antes de ser gravado.
     """
 
-    def __init__(self, conn, dialect: str):
+    def __init__(self, conn, dialect: str, run_migrations: bool = True):
         self._conn = conn
         self._ph = "?" if dialect == "sqlite" else "%s"
         self.dialect = dialect
-        migrate(conn, dialect, self._ph)
+        if dialect == "sqlite":
+            # Sem isto o SQLite ignora FOREIGN KEY: apagar tarefa com histórico deixaria órfãos.
+            conn.execute("PRAGMA foreign_keys = ON")
+        if run_migrations:
+            migrate(conn, dialect, self._ph)
 
     def _q(self, sql: str) -> str:
         return sql.replace("?", self._ph)
@@ -105,14 +109,34 @@ class SqlRepository:
         self._conn.close()
 
 
-def open_repository(url: str) -> SqlRepository:
-    """`sqlite:///caminho.db`, `sqlite:///:memory:` ou `postgresql://...` (URL nunca é logada)."""
+def _connect(url: str):
     if url.startswith("sqlite:///"):
-        return SqlRepository(sqlite3.connect(url[len("sqlite:///"):]), "sqlite")
+        return sqlite3.connect(url[len("sqlite:///"):]), "sqlite"
     if url.startswith(("postgresql://", "postgres://")):
         try:
             import psycopg
         except ImportError as exc:
             raise ConfigError("PostgreSQL exige o pacote psycopg: pip install -e \".[postgres]\"") from exc
-        return SqlRepository(psycopg.connect(url), "postgres")
-    raise ConfigError("FORGE_DATABASE_URL deve começar com sqlite:/// ou postgresql://")
+        return psycopg.connect(url), "postgres"
+    raise ConfigError("URL do banco deve começar com sqlite:/// ou postgresql://")
+
+
+def migrate_database(migration_url: str) -> None:
+    """Aplica as migrações com o papel dono/migrador. A aplicação não usa esse papel."""
+    conn, dialect = _connect(migration_url)
+    try:
+        SqlRepository(conn, dialect, run_migrations=True)
+    finally:
+        conn.close()
+
+
+def open_repository(url: str, migration_url: str | None = None) -> SqlRepository:
+    """Abre o repositório com o papel da aplicação (URLs nunca são logadas).
+
+    Com `migration_url`, migra antes com o papel dono e a aplicação conecta só como escritora.
+    Sem ela, migra com a própria `url` (SQLite e desenvolvimento).
+    """
+    if migration_url:
+        migrate_database(migration_url)
+    conn, dialect = _connect(url)
+    return SqlRepository(conn, dialect, run_migrations=migration_url is None)

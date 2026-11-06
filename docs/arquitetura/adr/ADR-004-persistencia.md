@@ -28,3 +28,4 @@ PostgreSQL é o alvo; SQLite só entra no protótipo. A FRG-42 ainda compara alt
 - **Migrações:** runner próprio (`storage/migrate.py`), SQL numerado por dialeto e tabela `schema_migrations`. Sem Alembic nem SQLAlchemy.
 - **Auditoria:** `audit_log` é append-only (trigger bloqueia UPDATE/DELETE nos dois bancos). Em produção, o usuário da aplicação deve ter só INSERT/SELECT.
 - **Compose:** `docker-compose.dev.yml` sobe só o Postgres do Forge novo, em `127.0.0.1:5433`.
+- **Papéis e limite do append-only (revisão do PR #19):** migrações rodam com o papel dono/migrador (`FORGE_DATABASE_MIGRATION_URL`); a aplicação usa um papel escritor sem ser dono. Triggers bloqueiam UPDATE/DELETE/TRUNCATE (este na migração 0002). Isso protege contra a aplicação e o escritor, não contra o dono/superuser do banco, que pode dar `DROP TRIGGER`.
