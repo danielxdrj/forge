@@ -28,3 +28,4 @@ Fila de jobs **persistida no banco atual** (PostgreSQL com SQLite nos testes), a
 - Entrega pelo menos uma vez; handlers idempotentes. Retry com backoff exponencial (30 s dobrando, teto 1 h), 5 tentativas, lease de 5 min, todos por parâmetro. Falha definitiva fica em `failed` até `requeue()` manual.
 - Sem duplicidade: Postgres usa `FOR UPDATE SKIP LOCKED`; SQLite usa `BEGIN IMMEDIATE`. Idempotência de enfileiramento por `idempotency_key` única.
 - Com `FORGE_AUTOMATION_ENABLED=false`, o consumo (`claim`) é bloqueado e o `enqueue` continua permitido (ADR-006).
+- Fencing por `claim_token` (migração 0004): complete/fail/heartbeat só valem com o token do claim vigente e lease não vencido; recusas são auditadas. Erros de handler persistem só o tipo da exceção, salvo `JobFailure` explícito (redigido).

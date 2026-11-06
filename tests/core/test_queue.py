@@ -1,10 +1,14 @@
 from datetime import datetime, timedelta, timezone
 
+import io
+import logging
+
 import pytest
 
 from forge_core.config import load_settings
-from forge_core.errors import AutomationDisabledError, JobStateError
+from forge_core.errors import AutomationDisabledError, JobFailure, JobStateError
 from forge_core.queue import SqlJobQueue
+from forge_core.logging import configure_logging
 from forge_core.storage import open_repository
 
 from conftest import PG_URL
@@ -50,10 +54,10 @@ def test_transient_failure_retries_with_backoff_then_succeeds(env):
     q.enqueue("demo", {}, "pessoa:ana")
 
     def boom(job):
-        raise RuntimeError("falha transitória")
+        raise JobFailure("falha transitória")
 
     j = q.run_once(boom, "w")
-    assert j.status == "queued" and j.attempts == 1 and "falha transitória" in j.last_error
+    assert j.status == "queued" and j.attempts == 1 and j.last_error == "JobFailure: falha transitória"
     assert q.claim("w") is None  # ainda em backoff
     clock.advance(29)
     assert q.claim("w") is None
@@ -74,7 +78,7 @@ def test_permanent_failure_after_max_attempts(env):
     for _ in range(3):
         clock.advance(4000)
         j = q.run_once(lambda job: 1 / 0, "w")
-    assert j.status == "failed" and j.attempts == 3 and "ZeroDivisionError" in j.last_error
+    assert j.status == "failed" and j.attempts == 3 and j.last_error == "ZeroDivisionError"
     clock.advance(4000)
     assert q.claim("w") is None
     assert actions(repo).count("job.retry") == 2 and actions(repo)[-1] == "job.fail"
@@ -82,16 +86,26 @@ def test_permanent_failure_after_max_attempts(env):
 
 def test_non_retryable_fails_immediately(env):
     q, *_ = env
-    j = q.enqueue("demo", {}, "pessoa:ana")
-    q.claim("w")
-    assert q.fail(j.id, "dado inválido", "w", retryable=False).status == "failed"
+    q.enqueue("demo", {}, "pessoa:ana")
+    c = q.claim("w")
+    assert q.fail(c.id, "dado inválido", "w", c.claim_token, retryable=False).status == "failed"
+
+
+def test_job_failure_not_retryable_goes_straight_to_failed(env):
+    q, *_ = env
+    q.enqueue("demo", {}, "pessoa:ana")
+
+    def bad(job):
+        raise JobFailure("entrada inválida", retryable=False)
+
+    assert q.run_once(bad, "w").status == "failed"
 
 
 def test_requeue_failed_job(env):
     q, repo, _, _ = env
     j = q.enqueue("demo", {}, "pessoa:ana")
-    q.claim("w")
-    q.fail(j.id, "x", "w", retryable=False)
+    c = q.claim("w")
+    q.fail(j.id, "x", "w", c.claim_token, retryable=False)
     r = q.requeue(j.id, "pessoa:ana")
     assert r.status == "queued" and r.attempts == 0
     assert q.run_once(lambda job: None, "w").status == "succeeded"
@@ -130,30 +144,130 @@ def test_expired_lease_returns_job_and_counts_attempt(env):
     assert q.claim("w3") is None and q.list_jobs("failed")[0].last_error == "lease vencido"
 
 
-def test_late_complete_after_lease_loss_is_refused(env):
-    q, _, clock, _ = env
-    j = q.enqueue("demo", {}, "pessoa:ana")
-    q.claim("w")
-    clock.advance(301)
-    q.claim("w2")
-    q.complete(j.id, "w2")
-    with pytest.raises(JobStateError):
-        q.complete(j.id, "w")
-
-
 def test_cancel_queued_running_and_terminal(env):
     q, repo, _, _ = env
     a = q.enqueue("demo", {}, "pessoa:ana")
     assert q.cancel(a.id, "pessoa:ana").status == "cancelled"
     assert q.claim("w") is None
     b = q.enqueue("demo", {}, "pessoa:ana")
-    q.claim("w")
+    c = q.claim("w")
     assert q.cancel(b.id, "pessoa:ana").cancel_requested is True
-    assert q.fail(b.id, "interrompido", "w").status == "cancelled"  # cooperativo: sem retry
+    assert q.fail(b.id, "interrompido", "w", c.claim_token).status == "cancelled"  # cooperativo: sem retry
     with pytest.raises(JobStateError):
         q.cancel(b.id, "pessoa:ana")
     with pytest.raises(KeyError):
         q.cancel("nao-existe", "pessoa:ana")
+
+
+@pytest.fixture(params=["sqlite", "postgres"])
+def make_queue(request, tmp_path):
+    """Fábrica de (fila, repo, relógio) para SQLite e, se disponível, Postgres."""
+    clock = Clock()
+    if request.param == "sqlite":
+        repo = open_repository(f"sqlite:///{tmp_path / 'f.db'}")
+        return lambda: (SqlJobQueue(repo, clock=clock), repo, clock)
+    writer, _, new_writer = request.getfixturevalue("pg_env")
+    return lambda: (SqlJobQueue(new_writer(), clock=clock), writer, clock)
+
+
+def _last_refusal(repo, action):
+    entry = repo.list_audit()[-1]
+    assert entry.action == action and entry.result.startswith("error")
+
+
+def test_fencing_complete_after_lease_expired_without_new_claim(make_queue):
+    q, repo, clock = make_queue()
+    j = q.enqueue("demo", {}, "p")
+    c = q.claim("w1")
+    clock.advance(301)
+    with pytest.raises(JobStateError):
+        q.complete(j.id, "w1", c.claim_token)
+    assert q.get_job(j.id).status == "running"
+    _last_refusal(repo, "job.complete")
+
+
+def test_fencing_stale_complete_after_new_claim_keeps_job_with_w2(make_queue):
+    q, repo, clock = make_queue()
+    j = q.enqueue("demo", {}, "p")
+    c1 = q.claim("w1")
+    clock.advance(301)
+    c2 = q.claim("w2")
+    assert c2.id == j.id and c2.claim_token != c1.claim_token
+    with pytest.raises(JobStateError):
+        q.complete(j.id, "w1", c1.claim_token)
+    _last_refusal(repo, "job.complete")
+    cur = q.get_job(j.id)
+    assert cur.status == "running" and cur.attempts == 2
+    assert q.complete(j.id, "w2", c2.claim_token).status == "succeeded"
+
+
+def test_fencing_fail_same_rules(make_queue):
+    q, repo, clock = make_queue()
+    j = q.enqueue("demo", {}, "p")
+    c1 = q.claim("w1")
+    clock.advance(301)
+    with pytest.raises(JobStateError):  # (a) sem novo claim
+        q.fail(j.id, "x", "w1", c1.claim_token)
+    _last_refusal(repo, "job.fail")
+    c2 = q.claim("w2")
+    with pytest.raises(JobStateError):  # (b) claim de w2 vigente
+        q.fail(j.id, "x", "w1", c1.claim_token)
+    cur = q.get_job(j.id)
+    assert cur.status == "running" and cur.last_error == "lease vencido"
+    assert q.fail(j.id, "x", "w2", c2.claim_token, retryable=False).status == "failed"
+
+
+def test_fencing_wrong_token_refused_and_token_never_audited(make_queue):
+    q, repo, _ = make_queue()
+    j = q.enqueue("demo", {}, "p")
+    c = q.claim("w1")
+    with pytest.raises(JobStateError):
+        q.complete(j.id, "w1", "token-errado")
+    assert c.claim_token not in repr(repo.list_audit())
+    assert q.get_job(j.id).claim_token is None  # leituras não expõem o token
+
+
+def test_heartbeat_extends_lease_and_is_fenced(make_queue):
+    q, repo, clock = make_queue()
+    j = q.enqueue("demo", {}, "p")
+    c = q.claim("w1")
+    clock.advance(200)
+    q.heartbeat(j.id, "w1", c.claim_token)
+    clock.advance(200)  # 400 s desde o claim, mas o lease foi renovado
+    assert q.complete(j.id, "w1", c.claim_token).status == "succeeded"
+    j2 = q.enqueue("demo", {}, "p")
+    c2 = q.claim("w1")
+    clock.advance(301)
+    with pytest.raises(JobStateError):
+        q.heartbeat(j2.id, "w1", c2.claim_token)
+    _last_refusal(repo, "job.heartbeat")
+
+
+def test_handler_exception_never_persists_payload(env):
+    q, repo, _, _ = env
+    buf = io.StringIO()
+    configure_logging("DEBUG", buf)
+    q.enqueue("demo", {"dado": "PAYLOADSENTINEL"}, "pessoa:ana")
+
+    def handler(job):
+        raise ValueError(f"não consegui processar {job.payload}")
+
+    j = q.run_once(handler, "w")
+    assert j.last_error == "ValueError"
+    stored = repo.fetch("SELECT last_error FROM jobs")
+    dump = repr(stored) + repr(repo.list_audit()) + buf.getvalue()
+    assert "PAYLOADSENTINEL" not in dump
+
+
+def test_job_failure_message_is_redacted(env):
+    q, repo, _, _ = env
+    q.enqueue("demo", {}, "p")
+
+    def handler(job):
+        raise JobFailure("API recusou: Authorization: Bearer seg redo")
+
+    j = q.run_once(handler, "w")
+    assert "seg" not in j.last_error and "redo" not in j.last_error and j.last_error.startswith("JobFailure:")
 
 
 def test_status_query_and_kind_filter(env):
@@ -168,8 +282,8 @@ def test_status_query_and_kind_filter(env):
 def test_error_is_redacted_and_payload_not_audited(env):
     q, repo, _, _ = env
     j = q.enqueue("demo", {"ref": "valor-do-payload"}, "pessoa:ana")
-    q.claim("w")
-    out = q.fail(j.id, "falhou: Authorization: Bearer seg redo", "w", retryable=False)
+    c = q.claim("w")
+    out = q.fail(j.id, "falhou: Authorization: Bearer seg redo", "w", c.claim_token, retryable=False)
     dump = repr(out.last_error) + repr(repo.list_audit())
     assert "seg" not in dump and "redo" not in dump and "valor-do-payload" not in dump
 

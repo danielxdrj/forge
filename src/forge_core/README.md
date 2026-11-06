@@ -84,7 +84,9 @@ q.run_once(meu_handler, actor="agente:worker")   # claim + handler + complete/fa
 - **Entrega pelo menos uma vez:** se o handler cair depois do efeito e antes do `complete`, o job roda de novo. Handlers devem ser idempotentes.
 - **Cancelamento:** `queued` cancela na hora; `running` recebe `cancel_requested` e, ao terminar com erro, vira `cancelled` sem retry (cooperativo; handler que conclui com sucesso fica `succeeded`).
 - **Automação desligada:** `claim` levanta `AutomationDisabledError`; `enqueue` segue permitido.
-- **Payload:** guardado como veio, nunca vai para auditoria ou logs. Não ponha segredos nele; use referências. `last_error` passa por `redact()`.
+- **Fencing:** `claim()` devolve um `Job` com `claim_token` aleatório (só ali; leituras não o expõem). `complete(job_id, actor, claim_token)`, `fail(job_id, error, actor, claim_token)` e `heartbeat(job_id, actor, claim_token)` só valem com o token do claim vigente e com o lease não vencido; senão levantam `JobStateError` e a recusa é auditada (o token nunca é gravado). `heartbeat` renova o lease e só audita recusas. Migração `0004`.
+- **Payload:** guardado como veio, nunca vai para auditoria ou logs. Não ponha segredos nele; use referências.
+- **Erros do handler:** `run_once` grava em `last_error` e na auditoria só o **tipo** da exceção (ex.: `ValueError`), porque a mensagem pode ecoar o payload. Para registrar uma mensagem, o handler levanta `JobFailure("texto seguro", retryable=True|False)`; ela passa por `redact()`. `fail()` chamado direto também redige o texto, mas quem chama é responsável por não incluir payload.
 - **Auditoria:** `job.enqueue`, `job.claim`, `job.complete`, `job.retry`, `job.fail`, `job.cancel`, `job.requeue`, incluindo recusas (`error: ...`).
 - **Papéis:** o escritor tem SELECT/INSERT/UPDATE em `jobs` e nenhum DELETE (reprovisione com `postgres_roles.sql` em bancos já provisionados).
 

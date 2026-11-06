@@ -2,17 +2,23 @@
 
 Entrega "pelo menos uma vez": o handler precisa ser idempotente. Toda transição grava auditoria na
 mesma transação. O payload fica guardado como veio e NUNCA vai para auditoria ou logs: não coloque
-segredos nele, use referências. `last_error` passa por redact().
+segredos nele, use referências.
+
+Fencing: cada claim gera um `claim_token` aleatório. complete/fail/heartbeat só valem com o token do
+claim vigente e com o lease ainda válido; senão são recusados e a recusa é auditada.
+Erros: run_once grava só o tipo da exceção do handler; a mensagem só entra se for um `JobFailure`
+(explícito), e mesmo assim passa por redact().
 """
 from __future__ import annotations
 
 import json
+import secrets
 import uuid
 from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 
 from ..config import Settings, require_automation_enabled
-from ..errors import JobStateError
+from ..errors import JobFailure, JobStateError
 from ..extension.queue import Job, JobStatus
 from ..logging import redact
 from ..storage.sql import SqlRepository
@@ -28,6 +34,9 @@ def _job(row) -> Job:
     r[2] = json.loads(r[2])
     r[10] = bool(r[10])
     return Job(*r)
+
+
+_COLS_TOKEN = _COLS + ", claim_token"
 
 
 class SqlJobQueue:
@@ -87,15 +96,16 @@ class SqlJobQueue:
             require_automation_enabled(self._settings)
         now_dt = self._now()
         now, lease = self._ts(now_dt), self._ts(now_dt + timedelta(seconds=self.lease_seconds))
+        token = secrets.token_urlsafe(16)
         kind_sql = f"AND kind IN ({','.join('?' * len(kinds))})" if kinds else ""
         lock = "FOR UPDATE SKIP LOCKED" if self._repo.dialect == "postgres" else ""
         with self._repo.transaction() as tx:
             self._reap(tx, now, actor)
             rows = tx.execute(
-                "UPDATE jobs SET status = 'running', attempts = attempts + 1, lease_until = ?, updated_at = ? "
-                "WHERE id = (SELECT id FROM jobs WHERE status = 'queued' AND run_at <= ? "
-                f"{kind_sql} ORDER BY run_at, id LIMIT 1 {lock}) RETURNING {_COLS}",
-                (lease, now, now, *(kinds or [])),
+                "UPDATE jobs SET status = 'running', attempts = attempts + 1, lease_until = ?, claim_token = ?, "
+                "updated_at = ? WHERE id = (SELECT id FROM jobs WHERE status = 'queued' AND run_at <= ? "
+                f"{kind_sql} ORDER BY run_at, id LIMIT 1 {lock}) RETURNING {_COLS_TOKEN}",
+                (lease, token, now, now, *(kinds or [])),
             ).fetchall()
             if not rows:
                 return None
@@ -116,7 +126,8 @@ class SqlJobQueue:
             else:
                 status, action, result = JobStatus.QUEUED, "job.retry", "error: lease vencido"
             tx.execute(
-                "UPDATE jobs SET status = ?, run_at = ?, lease_until = NULL, last_error = ?, updated_at = ? "
+                "UPDATE jobs SET status = ?, run_at = ?, lease_until = NULL, claim_token = NULL, "
+                "last_error = ?, updated_at = ? "
                 "WHERE id = ? AND status = 'running'",
                 (status, now, "lease vencido", now, job_id))
             tx.audit(actor, action, f"job:{job_id}", result)
@@ -126,7 +137,7 @@ class SqlJobQueue:
         lock = " FOR UPDATE" if self._repo.dialect == "postgres" else ""
         err: Exception | None = None
         with self._repo.transaction() as tx:
-            rows = tx.execute(f"SELECT {_COLS} FROM jobs WHERE id = ?{lock}", (job_id,)).fetchall()
+            rows = tx.execute(f"SELECT {_COLS_TOKEN} FROM jobs WHERE id = ?{lock}", (job_id,)).fetchall()
             if not rows:
                 err = KeyError(job_id)
             else:
@@ -145,20 +156,45 @@ class SqlJobQueue:
         names = ", ".join(f"{k} = ?" for k in cols)
         tx.execute(f"UPDATE jobs SET {names} WHERE id = ?", (*cols.values(), job_id))
 
-    def complete(self, job_id: str, actor: str) -> Job:
+    def _check_claim(self, tx, job: Job, claim_token: str, now: str) -> None:
+        if job.status != JobStatus.RUNNING:
+            raise JobStateError(f"job {job.id} não está running ({job.status})")
+        if not job.claim_token or not secrets.compare_digest(job.claim_token, claim_token or ""):
+            raise JobStateError(f"job {job.id}: claim_token não é o do claim vigente")
+        if job.lease_until is None or job.lease_until <= now:
+            raise JobStateError(f"job {job.id}: lease vencido")
+
+    def _guarded_set(self, tx, job_id: str, token: str, now: str, **cols) -> None:
+        """UPDATE ... WHERE id = ? AND claim_token = ? AND lease_until > now (defesa extra ao lock da linha)."""
+        cols["updated_at"] = now
+        names = ", ".join(f"{k} = ?" for k in cols)
+        cur = tx.execute(
+            f"UPDATE jobs SET {names} WHERE id = ? AND claim_token = ? AND lease_until > ?",
+            (*cols.values(), job_id, token, now))
+        if cur.rowcount != 1:
+            raise JobStateError(f"job {job_id}: claim inválido ou lease vencido")
+
+    def complete(self, job_id: str, actor: str, claim_token: str) -> Job:
         def fn(tx, job: Job, now: str):
-            if job.status != JobStatus.RUNNING:
-                raise JobStateError(f"job {job_id} não está running ({job.status})")
-            self._set(tx, job_id, now, status=JobStatus.SUCCEEDED, lease_until=None)
+            self._check_claim(tx, job, claim_token, now)
+            self._guarded_set(tx, job_id, claim_token, now,
+                              status=JobStatus.SUCCEEDED, lease_until=None, claim_token=None)
             tx.audit(actor, "job.complete", f"job:{job_id}", f"ok: attempt {job.attempts}")
         return self._mutate(job_id, "job.complete", actor, fn)
 
-    def fail(self, job_id: str, error: str, actor: str, retryable: bool = True) -> Job:
+    def heartbeat(self, job_id: str, actor: str, claim_token: str) -> Job:
+        """Renova o lease do claim vigente. Só recusas são auditadas (heartbeat é frequente)."""
+        def fn(tx, job: Job, now: str):
+            self._check_claim(tx, job, claim_token, now)
+            lease = self._ts(self._now() + timedelta(seconds=self.lease_seconds))
+            self._guarded_set(tx, job_id, claim_token, now, lease_until=lease)
+        return self._mutate(job_id, "job.heartbeat", actor, fn)
+
+    def fail(self, job_id: str, error: str, actor: str, claim_token: str, retryable: bool = True) -> Job:
         err = redact(error)[:_MAX_ERROR]
 
         def fn(tx, job: Job, now: str):
-            if job.status != JobStatus.RUNNING:
-                raise JobStateError(f"job {job_id} não está running ({job.status})")
+            self._check_claim(tx, job, claim_token, now)
             if job.cancel_requested:
                 status, action, extra = JobStatus.CANCELLED, "job.cancel", {}
             elif not retryable or job.attempts >= job.max_attempts:
@@ -166,7 +202,8 @@ class SqlJobQueue:
             else:
                 run_at = self._ts(self._now() + timedelta(seconds=self.backoff(job.attempts)))
                 status, action, extra = JobStatus.QUEUED, "job.retry", {"run_at": run_at}
-            self._set(tx, job_id, now, status=status, lease_until=None, last_error=err, **extra)
+            self._guarded_set(tx, job_id, claim_token, now, status=status, lease_until=None,
+                              claim_token=None, last_error=err, **extra)
             tx.audit(actor, action, f"job:{job_id}", f"error: {err}")
         return self._mutate(job_id, "job.fail", actor, fn)
 
@@ -211,6 +248,8 @@ class SqlJobQueue:
             return None
         try:
             handler(job)
-        except Exception as exc:  # o handler é código de terceiros: qualquer erro vira retry
-            return self.fail(job.id, f"{type(exc).__name__}: {exc}", actor)
-        return self.complete(job.id, actor)
+        except JobFailure as exc:  # mensagem explícita e segura, ainda assim redigida em fail()
+            return self.fail(job.id, f"JobFailure: {exc}", actor, job.claim_token, retryable=exc.retryable)
+        except Exception as exc:  # código de terceiros: só o tipo, nunca a mensagem (pode ecoar o payload)
+            return self.fail(job.id, type(exc).__name__, actor, job.claim_token)
+        return self.complete(job.id, actor, job.claim_token)
