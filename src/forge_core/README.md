@@ -12,6 +12,7 @@ src/forge_core/
   logging.py      log JSON com redação de segredos
   errors.py       ForgeError, ConfigError, AutomationDisabledError
   backup.py       backup/restauração do SQLite
+  agents/         Orchestrator, Agent Runtime, registro e agente echo (FRG-24; veja agents/README.md)
   tasks/          gerenciamento de tarefas (FRG-15): model, rules (puras), service (TaskService)
   queue/          fila de jobs persistida (SqlJobQueue)
   storage/        persistência (FRG-42)
@@ -19,8 +20,8 @@ src/forge_core/
     sql.py          SqlRepository (SQLite e PostgreSQL) e open_repository()
     migrate.py      runner de migrações
     migrations/     SQL numerado por dialeto (sqlite/, postgres/)
-  extension/      interfaces: Integration, Agent, JobQueue (Job, JobStatus) (implementações: FRG-40 e outras)
-tests/core/  conftest (Postgres efêmero), test_task_rules, test_task_service, test_queue, test_core, test_start_automation, test_redact, test_storage
+  extension/      interfaces: Integration, Agent, contrato de agente (reexporta agents/spec), JobQueue (Job, JobStatus) (implementações: FRG-40 e outras)
+tests/core/  conftest (Postgres efêmero), test_agents, test_orchestrator, test_task_rules, test_task_service, test_queue, test_core, test_start_automation, test_redact, test_storage
 docker-compose.dev.yml  Postgres de dev/teste (127.0.0.1:5433)
 ```
 
@@ -32,6 +33,7 @@ docker-compose.dev.yml  Postgres de dev/teste (127.0.0.1:5433)
 | `FORGE_AUTOMATION_ENABLED` | não (true) | chave global de desligamento das automações |
 | `FORGE_DATABASE_URL` | não | `sqlite:///caminho.db` ou `postgresql://...`; sem ela o Core não persiste. A URL nunca é logada |
 | `FORGE_DATABASE_MIGRATION_URL` | não | URL do papel dono/migrador. Se definida, `open_repository` migra com ela e a aplicação conecta só com `FORGE_DATABASE_URL` (papel escritor). Nunca logada |
+| `FORGE_AGENTS_DISABLED` | não | agentes desativados, separados por vírgula (ex.: `echo`) |
 | `FORGE_PG_USER`/`FORGE_PG_PASSWORD`/`FORGE_PG_DB` | só para o compose de dev | credenciais do Postgres local; use valores fora do Git |
 
 Com `FORGE_AUTOMATION_ENABLED=false`, `start()` levanta `AutomationDisabledError` e `main()` sai com código 2. Ausente = ligado.
@@ -72,6 +74,9 @@ Rodam automaticamente em `open_repository`. Para criar uma: adicione `NNNN_descr
 ### Backup e restauração
 - **SQLite:** `backup_sqlite(db, destino)` e `restore_sqlite(backup, db)` (pare o Forge antes de restaurar). Testado em `test_storage.py`.
 - **PostgreSQL (manual, não automatizado):** `pg_dump -Fc -h 127.0.0.1 -p 5433 -U <USUARIO> <BANCO> > forge.dump` e `pg_restore --clean -d <BANCO> forge.dump` num banco vazio ou de teste. Guarde o dump em local institucional e restaure em ambiente de teste periodicamente.
+
+## Orquestrador e agentes (FRG-24, ADR-011)
+`Orchestrator.dispatch(task_id)` despacha uma tarefa pronta ao agente designado e grava o resultado em `agent_runs`, `task_changes` e `audit_log`. Contrato, ficha, diagrama, exemplo e como adicionar agente: `agents/README.md`. Regra: nenhum agente `write`/`critical` pode ser registrado até existir autenticação de aprovadores; só o `echo` (read) existe. Papéis: o escritor tem SELECT/INSERT em `agent_runs` (append-only, sem DELETE); reprovisione com `postgres_roles.sql`. Limitações: timeout não mata a thread (FRG-6).
 
 ## Tarefas (FRG-15, ADR-010)
 `TaskService(repo)` gerencia projetos, etapas, tarefas e subtarefas sobre o mesmo banco (migração `0005`). Sem variável de ambiente nova.
