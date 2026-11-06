@@ -51,3 +51,21 @@ def pg_env():
     admin.execute(f"DROP DATABASE {db} WITH (FORCE)")
     admin.execute(f"DROP ROLE {role}")
     admin.close()
+
+
+@pytest.fixture
+def pg_blank():
+    """Conexão (dono) a um banco efêmero SEM migrações, para testar migração com dados existentes."""
+    if not PG_URL:
+        pytest.skip("FORGE_DATABASE_URL não definida")
+    import psycopg
+    from psycopg.conninfo import make_conninfo
+
+    db = f"forge_b_{uuid.uuid4().hex[:8]}"
+    admin = psycopg.connect(PG_URL, autocommit=True)
+    admin.execute(f"CREATE DATABASE {db}")
+    conn = psycopg.connect(make_conninfo(PG_URL, dbname=db))
+    yield conn
+    conn.close()
+    admin.execute(f"DROP DATABASE {db} WITH (FORCE)")
+    admin.close()

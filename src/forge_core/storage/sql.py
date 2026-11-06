@@ -90,29 +90,41 @@ class SqlRepository:
             (_now(), redact(actor), redact(action), redact(target), redact(result)),
         )
 
+    # API antiga (FRG-42), mantida por compatibilidade: sem regras de transição. Prefira TaskService.
+    _LEGACY_STATUS = {"created": "pending", "running": "in_progress"}
+    _STATUSES = ("planned", "pending", "in_progress", "blocked", "in_validation", "done", "cancelled")
+
     def create_task(self, title: str, actor: str) -> Task:
         task_id, now, title = str(uuid.uuid4()), _now(), redact(title)
         self._run(
             [
                 ("INSERT INTO tasks (id, title, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
-                 (task_id, title, "created", now, now)),
+                 (task_id, title, "pending", now, now)),
                 ("INSERT INTO task_history (task_id, status, actor, at) VALUES (?, ?, ?, ?)",
-                 (task_id, "created", redact(actor), now)),
+                 (task_id, "pending", redact(actor), now)),
+                ("INSERT INTO task_changes (task_id, field, old_value, new_value, actor, at) VALUES (?, ?, ?, ?, ?, ?)",
+                 (task_id, "status", None, "pending", redact(actor), now)),
                 self._audit_write(actor, "task.create", f"task:{task_id}", "ok"),
             ]
         )
-        return Task(task_id, title, "created", now, now)
+        return Task(task_id, title, "pending", now, now)
 
     def set_task_status(self, task_id: str, status: str, actor: str) -> Task:
-        if self.get_task(task_id) is None:
+        current = self.get_task(task_id)
+        if current is None:
             self.record_audit(actor, "task.status", f"task:{task_id}", "error: tarefa inexistente")
             raise KeyError(task_id)
+        status = self._LEGACY_STATUS.get(status, status)
+        if status not in self._STATUSES:
+            raise ValueError(f"status desconhecido: {status}")
         now = _now()
         self._run(
             [
-                ("UPDATE tasks SET status = ?, updated_at = ? WHERE id = ?", (status, now, task_id)),
+                ("UPDATE tasks SET status = ?, updated_at = ?, version = version + 1 WHERE id = ?", (status, now, task_id)),
                 ("INSERT INTO task_history (task_id, status, actor, at) VALUES (?, ?, ?, ?)",
                  (task_id, status, redact(actor), now)),
+                ("INSERT INTO task_changes (task_id, field, old_value, new_value, actor, at) VALUES (?, ?, ?, ?, ?, ?)",
+                 (task_id, "status", current.status, status, redact(actor), now)),
                 self._audit_write(actor, "task.status", f"task:{task_id}", f"ok: {status}"),
             ]
         )

@@ -24,3 +24,11 @@ class JobFailure(ForgeError):
     def __init__(self, message: str, retryable: bool = True):
         super().__init__(message)
         self.retryable = retryable
+
+
+class TaskRuleError(ForgeError):
+    """Violação de regra de tarefa: transição inválida, dependência pendente, ciclo, campo inválido."""
+
+
+class TaskConflictError(ForgeError):
+    """A tarefa mudou desde a leitura (version diferente): releia e tente de novo."""

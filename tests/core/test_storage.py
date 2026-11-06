@@ -26,11 +26,11 @@ def test_task_history_and_audit(tmp_path):
     repo = open_repository(sqlite_url(tmp_path))
     t = repo.create_task("investigar", "agente:triagem")
     repo.set_task_status(t.id, "running", "pessoa:ana")
-    assert [e.status for e in repo.task_history(t.id)] == ["created", "running"]
+    assert [e.status for e in repo.task_history(t.id)] == ["pending", "in_progress"]
     audit = repo.list_audit()
     assert [(a.actor, a.action, a.target, a.result) for a in audit] == [
         ("agente:triagem", "task.create", f"task:{t.id}", "ok"),
-        ("pessoa:ana", "task.status", f"task:{t.id}", "ok: running"),
+        ("pessoa:ana", "task.status", f"task:{t.id}", "ok: in_progress"),
     ]
 
 
@@ -119,7 +119,7 @@ def test_postgres_task_flow_with_writer_role(pg_env):
     writer, _, _ = pg_env
     t = writer.create_task("pg", "pessoa:ana")
     writer.set_task_status(t.id, "done", "pessoa:ana")
-    assert [e.status for e in writer.task_history(t.id)] == ["created", "done"]
+    assert [e.status for e in writer.task_history(t.id)] == ["pending", "done"]
     assert len(writer.list_audit()) == 3
 
 
