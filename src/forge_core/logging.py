@@ -6,8 +6,9 @@ import logging
 import re
 import sys
 
-_AUTH = re.compile(r"(?i)(authorization['\"]?\s*[:=]\s*['\"]?)[^\r\n'\"}]+")
-_SCHEME = re.compile(r"(?i)\b(bearer|basic)\s+[A-Za-z0-9._~+/=-]+")
+_AUTH = re.compile(r"(?i)(authorization['\"]?\s*[:=]\s*)(?:\"[^\"]*\"|'[^']*'|[^\r\n]+)")
+# Bearer/Basic: o valor pode ter espaços ou aspas; mascara até o fim da linha (conservador).
+_SCHEME = re.compile(r"(?i)\b(bearer|basic)\s+[^\r\n]+")
 _SECRET = re.compile(r"(?i)(token|secret|password|senha|key)(\"?\s*[:=]\s*\"?)([^\s\",]+)")
 _RESERVED = set(logging.makeLogRecord({}).__dict__) | {"message", "asctime"}
 

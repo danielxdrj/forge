@@ -1,0 +1,191 @@
+import os
+import sqlite3
+
+import pytest
+
+from forge_core.backup import backup_sqlite, restore_sqlite
+from forge_core.config import load_settings
+from forge_core.errors import ConfigError
+from forge_core.storage import open_repository
+from forge_core.storage.migrate import pending_migrations
+
+
+def sqlite_url(tmp_path, name="forge.db"):
+    return f"sqlite:///{tmp_path / name}"
+
+
+def test_migrations_apply_once(tmp_path):
+    url = sqlite_url(tmp_path)
+    open_repository(url).close()
+    repo = open_repository(url)
+    rows = repo._fetch("SELECT version FROM schema_migrations")
+    assert [r[0] for r in rows] == [p.stem for p in pending_migrations("sqlite")]
+
+
+def test_task_history_and_audit(tmp_path):
+    repo = open_repository(sqlite_url(tmp_path))
+    t = repo.create_task("investigar", "agente:triagem")
+    repo.set_task_status(t.id, "running", "pessoa:ana")
+    assert [e.status for e in repo.task_history(t.id)] == ["created", "running"]
+    audit = repo.list_audit()
+    assert [(a.actor, a.action, a.target, a.result) for a in audit] == [
+        ("agente:triagem", "task.create", f"task:{t.id}", "ok"),
+        ("pessoa:ana", "task.status", f"task:{t.id}", "ok: running"),
+    ]
+
+
+def test_unknown_task_is_audited_and_raises(tmp_path):
+    repo = open_repository(sqlite_url(tmp_path))
+    with pytest.raises(KeyError):
+        repo.set_task_status("nao-existe", "x", "pessoa:ana")
+    assert repo.list_audit()[-1].result.startswith("error")
+
+
+def test_data_survives_restart(tmp_path):
+    url = sqlite_url(tmp_path)
+    r1 = open_repository(url)
+    t = r1.create_task("persistir", "pessoa:ana")
+    r1.close()
+    r2 = open_repository(url)
+    assert r2.get_task(t.id).title == "persistir"
+    assert len(r2.list_audit()) == 1
+
+
+def test_audit_is_append_only(tmp_path):
+    repo = open_repository(sqlite_url(tmp_path))
+    repo.record_audit("pessoa:ana", "x", "y", "ok")
+    with pytest.raises(sqlite3.DatabaseError):
+        repo._conn.execute("UPDATE audit_log SET result = 'z'")
+    with pytest.raises(sqlite3.DatabaseError):
+        repo._conn.execute("DELETE FROM audit_log")
+
+
+def test_secrets_are_masked_in_storage(tmp_path):
+    repo = open_repository(sqlite_url(tmp_path))
+    t = repo.create_task("usar token=abc123 e Bearer seg redo", "pessoa:ana")
+    repo.record_audit("pessoa:ana", "call", "api", "Authorization: Bearer seg redo")
+    dump = repr(repo.get_task(t.id)) + repr(repo.list_audit())
+    for s in ("abc123", "seg", "redo"):
+        assert s not in dump
+
+
+def test_backup_and_restore_roundtrip(tmp_path):
+    url = sqlite_url(tmp_path)
+    repo = open_repository(url)
+    t = repo.create_task("importante", "pessoa:ana")
+    repo.close()
+    backup_sqlite(tmp_path / "forge.db", tmp_path / "bkp.db")
+    (tmp_path / "forge.db").unlink()
+    restore_sqlite(tmp_path / "bkp.db", tmp_path / "forge.db")
+    restored = open_repository(url)
+    assert restored.get_task(t.id).title == "importante"
+    assert len(restored.list_audit()) == 1
+
+
+def test_database_url_validation_and_not_in_repr():
+    with pytest.raises(ConfigError, match="FORGE_DATABASE_URL"):
+        load_settings({"FORGE_CONFIG_DIR": "x", "FORGE_DATABASE_URL": "mysql://x"})
+    s = load_settings({"FORGE_CONFIG_DIR": "x", "FORGE_DATABASE_URL": "postgresql://u:senha-ficticia@example.invalid/db"})
+    assert "senha-ficticia" not in repr(s)
+
+
+def test_sqlite_foreign_keys_on_blocks_orphan_history(tmp_path):
+    repo = open_repository(sqlite_url(tmp_path))
+    assert repo._conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1
+    t = repo.create_task("com histórico", "pessoa:ana")
+    with pytest.raises(sqlite3.IntegrityError):
+        repo._conn.execute("DELETE FROM tasks WHERE id = ?", (t.id,))
+    assert repo.get_task(t.id) is not None and len(repo.task_history(t.id)) == 1
+
+
+def test_sqlite_foreign_keys_on_for_every_connection(tmp_path):
+    open_repository(sqlite_url(tmp_path)).close()
+    second = open_repository(sqlite_url(tmp_path))
+    assert second._conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1
+
+
+def test_migration_url_migrates_and_app_connects_separately(tmp_path):
+    url = sqlite_url(tmp_path)
+    repo = open_repository(url, migration_url=url)
+    assert repo.list_tasks() == []
+
+
+PG_URL = os.environ.get("FORGE_DATABASE_URL")
+pg = pytest.mark.skipif(not PG_URL, reason="FORGE_DATABASE_URL não definida")
+
+
+@pytest.fixture
+def pg_env():
+    """Banco e papel escritor efêmeros. FORGE_DATABASE_URL precisa poder CREATE DATABASE/ROLE (dono/migrador)."""
+    import uuid
+    from pathlib import Path
+
+    import psycopg
+    from psycopg.conninfo import make_conninfo
+
+    from forge_core.storage import SqlRepository, migrate_database
+    import forge_core.storage.sql as sql_mod
+
+    suffix = uuid.uuid4().hex[:8]
+    db, role, pwd = f"forge_t_{suffix}", f"forge_app_{suffix}", "senha-ficticia-" + suffix
+    admin = psycopg.connect(PG_URL, autocommit=True)
+    admin.execute(f"CREATE DATABASE {db}")
+    owner_conninfo = make_conninfo(PG_URL, dbname=db)
+    owner = psycopg.connect(owner_conninfo)
+    SqlRepository(owner, "postgres")
+    prov = (Path(sql_mod.__file__).parent / "provisioning" / "postgres_roles.sql").read_text()
+    prov = prov.replace("<PAPEL_APP>", role).replace("<SEGREDO_APP>", pwd).replace("<BANCO>", db)
+    prov = "\n".join(l for l in prov.splitlines() if not l.startswith("--"))
+    owner.execute(prov)
+    owner.commit()
+    writer = SqlRepository(
+        psycopg.connect(make_conninfo(PG_URL, dbname=db, user=role, password=pwd)), "postgres", run_migrations=False
+    )
+    owner_repo = SqlRepository(owner, "postgres", run_migrations=False)
+    writer.record_audit("pessoa:ana", "seed", "t", "ok")
+    yield writer, owner_repo
+    writer.close()
+    owner.close()
+    admin.execute(f"DROP DATABASE {db} WITH (FORCE)")
+    admin.execute(f"DROP ROLE {role}")
+    admin.close()
+
+
+@pg
+def test_postgres_task_flow_with_writer_role(pg_env):
+    writer, _ = pg_env
+    t = writer.create_task("pg", "pessoa:ana")
+    writer.set_task_status(t.id, "done", "pessoa:ana")
+    assert [e.status for e in writer.task_history(t.id)] == ["created", "done"]
+    assert len(writer.list_audit()) == 3
+
+
+@pg
+@pytest.mark.parametrize("sql", ["UPDATE audit_log SET result = 'x'", "DELETE FROM audit_log", "TRUNCATE audit_log"])
+def test_postgres_writer_cannot_change_audit(pg_env, sql):
+    import psycopg
+
+    writer, _ = pg_env
+    with pytest.raises(psycopg.errors.InsufficientPrivilege):
+        writer._run([(sql, ())])
+    assert len(writer.list_audit()) == 1
+
+
+@pg
+def test_postgres_writer_is_not_owner_and_cannot_drop_trigger(pg_env):
+    import psycopg
+
+    writer, _ = pg_env
+    with pytest.raises(psycopg.errors.InsufficientPrivilege):
+        writer._run([("DROP TRIGGER audit_log_no_truncate ON audit_log", ())])
+
+
+@pg
+@pytest.mark.parametrize("sql", ["TRUNCATE audit_log", "UPDATE audit_log SET result = 'x'", "DELETE FROM audit_log"])
+def test_postgres_owner_blocked_by_trigger(pg_env, sql):
+    import psycopg
+
+    writer, owner = pg_env
+    with pytest.raises(psycopg.errors.RaiseException):
+        owner._run([(sql, ())])
+    assert len(writer.list_audit()) == 1

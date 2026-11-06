@@ -1,0 +1,18 @@
+# Postgres de desenvolvimento/teste do Forge novo. Não reaproveita o compose do legado.
+# Uso: cp .env.example .env (preencha <SEGREDO> fora do Git) e docker compose -f docker-compose.dev.yml up -d
+name: forge_dev
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: ${FORGE_PG_USER:?defina FORGE_PG_USER}
+      POSTGRES_PASSWORD: ${FORGE_PG_PASSWORD:?defina FORGE_PG_PASSWORD}
+      POSTGRES_DB: ${FORGE_PG_DB:?defina FORGE_PG_DB}
+    ports:
+      - "127.0.0.1:5433:5432"
+    volumes:
+      - forge_dev_pgdata:/var/lib/postgresql/data
+
+volumes:
+  forge_dev_pgdata:

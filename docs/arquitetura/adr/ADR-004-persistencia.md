@@ -22,3 +22,10 @@ Manutenção: média (backup, migração). Segurança: segredo do banco fora do 
 
 ## Ajuste aprovado
 PostgreSQL é o alvo; SQLite só entra no protótipo. A FRG-42 ainda compara alternativas. O acesso aos dados passa por uma camada de repositório. O banco do legado não define a escolha.
+
+## Decisão FRG-42 (06/11/2026)
+- **Armazenamento:** PostgreSQL (driver `psycopg`, extra opcional `[postgres]`) atrás da interface `Repository`. SQLite da stdlib é o adaptador de testes e protótipo. Os testes do Postgres só rodam com `FORGE_DATABASE_URL` definida.
+- **Migrações:** runner próprio (`storage/migrate.py`), SQL numerado por dialeto e tabela `schema_migrations`. Sem Alembic nem SQLAlchemy.
+- **Auditoria:** `audit_log` é append-only (trigger bloqueia UPDATE/DELETE nos dois bancos). Em produção, o usuário da aplicação deve ter só INSERT/SELECT.
+- **Compose:** `docker-compose.dev.yml` sobe só o Postgres do Forge novo, em `127.0.0.1:5433`.
+- **Papéis e limite do append-only (revisão do PR #19):** migrações rodam com o papel dono/migrador (`FORGE_DATABASE_MIGRATION_URL`); a aplicação usa um papel escritor sem ser dono. Triggers bloqueiam UPDATE/DELETE/TRUNCATE (este na migração 0002). Isso protege contra a aplicação e o escritor, não contra o dono/superuser do banco, que pode dar `DROP TRIGGER`.
