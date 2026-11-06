@@ -6,11 +6,15 @@ import logging
 import re
 import sys
 
-_SECRET = re.compile(r"(?i)(token|secret|password|senha|key|authorization)(\"?\s*[:=]\s*\"?)([^\s\",]+)")
+_AUTH = re.compile(r"(?i)(authorization['\"]?\s*[:=]\s*['\"]?)[^\r\n'\"}]+")
+_SCHEME = re.compile(r"(?i)\b(bearer|basic)\s+[A-Za-z0-9._~+/=-]+")
+_SECRET = re.compile(r"(?i)(token|secret|password|senha|key)(\"?\s*[:=]\s*\"?)([^\s\",]+)")
 _RESERVED = set(logging.makeLogRecord({}).__dict__) | {"message", "asctime"}
 
 
 def redact(text: str) -> str:
+    text = _AUTH.sub(r"\1***", text)
+    text = _SCHEME.sub(r"\1 ***", text)
     return _SECRET.sub(r"\1\2***", text)
 
 

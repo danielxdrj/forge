@@ -9,7 +9,7 @@ import os
 from collections.abc import Mapping
 from dataclasses import dataclass
 
-from .errors import ConfigError
+from .errors import AutomationDisabledError, ConfigError
 
 _LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
 _TRUE = {"1", "true", "yes", "on"}
@@ -54,3 +54,13 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
     if problems:
         raise ConfigError("Configuração inválida:\n- " + "\n- ".join(problems))
     return Settings(config_dir=config_dir, log_level=log_level, automation_enabled=automation)
+
+
+def is_automation_enabled(settings: Settings) -> bool:
+    return settings.automation_enabled
+
+
+def require_automation_enabled(settings: Settings) -> None:
+    """Chave global de desligamento: chame antes de qualquer automação."""
+    if not settings.automation_enabled:
+        raise AutomationDisabledError("Automações desativadas (FORGE_AUTOMATION_ENABLED=false)")

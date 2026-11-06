@@ -4,3 +4,7 @@ class ForgeError(Exception):
 
 class ConfigError(ForgeError):
     """Configuração ausente ou inválida na inicialização."""
+
+
+class AutomationDisabledError(ForgeError):
+    """Automação bloqueada pela chave global FORGE_AUTOMATION_ENABLED."""
