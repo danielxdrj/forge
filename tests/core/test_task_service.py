@@ -1,3 +1,4 @@
+import threading
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -285,3 +286,67 @@ def test_migration_0005_remaps_existing_data_sqlite(tmp_path):
 
 def test_migration_0005_remaps_existing_data_postgres(pg_blank):
     _check_migrated(*_seed_and_migrate(pg_blank, "postgres"))
+
+
+# --- Corrida em add_dependency: validar ciclo e inserir precisa ser atômico ---
+
+def _race_add_dependency(make_service, setup_edges, racing):
+    """Duas conexões independentes, com barreira logo após a leitura das arestas.
+
+    Com a serialização (advisory lock no Postgres, BEGIN IMMEDIATE no SQLite) a segunda chamada só lê as
+    arestas depois que a primeira confirmou; a barreira então expira (timeout) e a execução segue.
+    Sem serialização as duas chegam à barreira juntas e as duas validam sobre o mesmo grafo antigo.
+    """
+    setup, _, _ = make_service()
+    ids = {name: setup.create_task(name, "p").id for name in "ABC"}
+    for a, b in setup_edges:
+        setup.add_dependency(ids[a], ids[b], "p")
+    barrier = threading.Barrier(2)
+
+    def hook():
+        try:
+            barrier.wait(timeout=1)
+        except threading.BrokenBarrierError:
+            pass
+
+    results = {}
+
+    def run(i, a, b):
+        svc, _, _ = make_service()
+        svc._after_edges_read = hook
+        try:
+            svc.add_dependency(ids[a], ids[b], "p")
+            results[i] = "ok"
+        except Exception as exc:
+            results[i] = exc
+
+    threads = [threading.Thread(target=run, args=(i, a, b)) for i, (a, b) in enumerate(racing)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=30)
+    assert not any(t.is_alive() for t in threads)
+
+    outcomes = list(results.values())
+    assert outcomes.count("ok") == 1, outcomes
+    failure = next(o for o in outcomes if o != "ok")
+    assert isinstance(failure, TaskRuleError) and "ciclo" in str(failure)
+
+    edges = {}
+    for a in ids.values():
+        for d in setup.dependencies(a):
+            edges.setdefault(d.task_id, set()).add(d.depends_on_id)
+    for task, deps in edges.items():
+        for dep in deps:
+            from forge_core.tasks.rules import would_cycle
+
+            without = {k: v - {dep} if k == task else v for k, v in edges.items()}
+            assert not would_cycle(task, dep, without), f"ciclo no banco: {task} -> {dep}"
+
+
+def test_concurrent_two_node_cycle_exactly_one_wins(make_service):
+    _race_add_dependency(make_service, [], [("A", "B"), ("B", "A")])
+
+
+def test_concurrent_three_node_cycle_exactly_one_wins(make_service):
+    _race_add_dependency(make_service, [("A", "B")], [("B", "C"), ("C", "A")])

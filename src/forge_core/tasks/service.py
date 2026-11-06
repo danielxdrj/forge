@@ -21,6 +21,8 @@ _COLS = ("id, title, objective, context, scope, acceptance_criteria, priority, s
          "created_at, updated_at")
 _EDITABLE = ("title", "objective", "context", "scope", "acceptance_criteria", "priority",
              "assignee_kind", "assignee_id", "start_date", "due_date")
+# Chave do advisory lock que serializa mudanças no grafo de dependências (somente PostgreSQL).
+_DEPENDENCY_GRAPH_LOCK = 1_650_015_001
 _REFUSALS = (TaskRuleError, TaskConflictError, KeyError)
 
 
@@ -38,6 +40,7 @@ class TaskService:
     def __init__(self, repo: SqlRepository, clock: Callable[[], datetime] | None = None):
         self._repo = repo
         self._clock = clock or (lambda: datetime.now(timezone.utc))
+        self._after_edges_read: Callable[[], None] | None = None  # gancho de teste (corridas determinísticas)
 
     def _now(self) -> str:
         return self._clock().isoformat()
@@ -203,6 +206,10 @@ class TaskService:
 
     def add_dependency(self, task_id: str, depends_on_id: str, actor: str, required: bool = True) -> Dependency:
         def fn(tx, now):
+            if self._repo.dialect == "postgres":
+                # Valida ciclo e insere atomicamente: sem isto, A->B e B->A concorrentes passam as duas.
+                # SQLite já serializa por BEGIN IMMEDIATE. O lock cai sozinho no fim da transação.
+                tx.execute("SELECT pg_advisory_xact_lock(?)", (_DEPENDENCY_GRAPH_LOCK,))
             task = self._load(tx, task_id, "")
             self._load(tx, depends_on_id, "")
             if task.status in S.TERMINAL:
@@ -210,6 +217,8 @@ class TaskService:
             edges: dict[str, set[str]] = {}
             for a, b in tx.execute("SELECT task_id, depends_on_id FROM task_dependencies").fetchall():
                 edges.setdefault(a, set()).add(b)
+            if self._after_edges_read is not None:
+                self._after_edges_read()
             existing = tx.execute(
                 "SELECT required FROM task_dependencies WHERE task_id = ? AND depends_on_id = ?",
                 (task_id, depends_on_id)).fetchall()

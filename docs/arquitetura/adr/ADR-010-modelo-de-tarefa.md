@@ -13,6 +13,7 @@ A FRG-15 precisa de gerenciamento de tarefas com a hierarquia Projeto → Etapa 
 - **Responsável (D2):** duas colunas, `assignee_kind` (`person`/`agent`) e `assignee_id`, sempre juntas. O Core valida só formato e tipo; quem existe de fato é assunto da configuração da empresa (ADR-005). Na auditoria o ator continua `pessoa:x` / `agente:x`.
 - **Hierarquia (D3, enxuta):** `projects` e `stages` mínimas (id, título, `project_id`); subtarefa é uma tarefa com `parent_task_id` (profundidade máxima 1, herda a etapa). O modelo completo de projeto fica para a FRG-5.
 - **Concorrência:** campo `version` (otimista); edição exige `expected_version`.
+- **Ciclos:** a inclusão de dependência é atômica com a validação de ciclo, por `pg_advisory_xact_lock` global no PostgreSQL e `BEGIN IMMEDIATE` no SQLite (correção da revisão do PR #21; corrida A→B e B→A reproduzida no Postgres 16).
 - **Histórico:** `task_changes` (valor antigo e novo de cada campo) e `task_history` (linha do tempo de status), ambos append-only por trigger (UPDATE, DELETE e TRUNCATE), como `audit_log`.
 - **Compatibilidade:** a API antiga do `Repository` (`create_task`, `set_task_status`) continua, sem regras de transição, traduzindo `created`→`pending` e `running`→`in_progress`. A migração `0005` remapeia `tasks` e `task_history` uma única vez, antes dos triggers.
 
