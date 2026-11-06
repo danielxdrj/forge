@@ -1,6 +1,6 @@
 [project]
 name = "forge-core"
-version = "0.10.0"
+version = "0.10.1"
 description = "Forge Core: núcleo do Forge (monólito modular, sem integrações)."
 requires-python = ">=3.11"
 dependencies = []

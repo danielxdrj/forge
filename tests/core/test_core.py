@@ -40,3 +40,38 @@ def test_log_is_json_and_redacts():
     data = json.loads(buf.getvalue())
     assert "abc123" not in buf.getvalue() and "p4ss" not in buf.getvalue()
     assert data["level"] == "INFO"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Authorization: Bearer xyz",
+        "{'Authorization': 'Bearer xyz'}",
+        "chamada falhou com Bearer xyz no cabecalho",
+        "authorization=Basic xyz",
+        "Authorization: token xyz",
+    ],
+)
+def test_redact_authorization_value(text):
+    from forge_core.logging import redact
+
+    assert "xyz" not in redact(text)
+
+
+def test_log_extra_authorization_dict_is_redacted():
+    buf = io.StringIO()
+    configure_logging("INFO", buf)
+    logging.getLogger("forge_core.t").info("req", extra={"headers": {"Authorization": "Bearer xyz"}})
+    assert "xyz" not in buf.getvalue()
+
+
+def test_automation_flag_helpers():
+    from forge_core.config import is_automation_enabled, require_automation_enabled
+    from forge_core.errors import AutomationDisabledError
+
+    on = load_settings({"FORGE_CONFIG_DIR": "x"})
+    off = load_settings({"FORGE_CONFIG_DIR": "x", "FORGE_AUTOMATION_ENABLED": "false"})
+    assert is_automation_enabled(on) and not is_automation_enabled(off)
+    require_automation_enabled(on)
+    with pytest.raises(AutomationDisabledError):
+        require_automation_enabled(off)
