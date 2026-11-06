@@ -8,7 +8,7 @@ Este documento descreve a automação de releases do Forge: como ela decide a ve
 | --- | --- | --- |
 | Workflow de release | `.github/workflows/release.yml` | A cada push na `main`, roda o [release-please](https://github.com/googleapis/release-please-action) com o `GITHUB_TOKEN`. |
 | Configuração | `release-please-config.json` | Tipos de commit, seções do CHANGELOG, formato da tag (`vX.Y.Z`). |
-| Versão atual | `.release-please-manifest.json` | Última versão lançada (`0.9.0` na criação). Atualizado pelo próprio PR de release. |
+| Versão atual | `.release-please-manifest.json` | Última versão lançada (`0.9.1`). Atualizado pelo próprio PR de release. |
 | Check do título do PR | `.github/workflows/pr-title.yml` | Falha se o título do PR não seguir Conventional Commits. |
 | Saídas | `CHANGELOG.md`, `version.txt`, tag `vX.Y.Z`, GitHub Release | Criados quando o PR de release é mergeado. |
 
@@ -29,7 +29,7 @@ O formato é `<tipo>(<escopo opcional>)<!>: <descrição>`. Exemplos: `feat: lis
 
 | Tipo | Efeito na versão | Aparece no CHANGELOG |
 | --- | --- | --- |
-| `feat` | minor (`0.9.0` → `0.10.0`) | Features |
+| `feat` | minor (`0.9.1` → `0.10.0`) | Features |
 | `fix` | patch | Bug Fixes |
 | `perf` | patch | Performance Improvements |
 | `revert` | patch | Reverts |
@@ -39,9 +39,9 @@ O formato é `<tipo>(<escopo opcional>)<!>: <descrição>`. Exemplos: `feat: lis
 Decisões documentadas:
 
 - **Tipos sem release.** `docs`, `refactor`, `test`, `build`, `ci`, `chore` e `style` não mudam o comportamento para quem usa o Forge. Eles não geram release sozinhos e não entram nas notas. Ficam no histórico git e seguem junto com a próxima release de `feat`, `fix` ou `perf`. A alternativa (tratá-los como patch) foi descartada para não publicar uma release a cada ajuste de documentação. Para mudar isso, altere `"hidden": true` para `false` no tipo em `release-please-config.json`; o tipo passa a gerar patch.
-- **Versões 0.x.** O Forge está em `0.9.0`. Está configurado `bump-minor-pre-major: false`, então um breaking change gera **major** também antes da 1.0 (`0.9.0` → `1.0.0`), como pedido. Se a equipe preferir que breaking change em 0.x gere minor, mude para `true` em `release-please-config.json`.
+- **Versões 0.x.** O Forge está em `0.9.1`. Está configurado `bump-minor-pre-major: false`, então um breaking change gera **major** também antes da 1.0 (`0.9.1` → `1.0.0`), como pedido. Se a equipe preferir que breaking change em 0.x gere minor, mude para `true` em `release-please-config.json`.
 - **Squash merge e `BREAKING CHANGE`.** Com squash merge, o corpo do commit nem sempre vem da descrição do PR. A forma confiável de marcar breaking change é o `!` no título do PR (`feat!: ...`).
-- **Tag.** Formato `vX.Y.Z`, o mesmo das tags `v0.1.0` a `v0.9.0` já existentes.
+- **Tag.** Formato `vX.Y.Z`, o mesmo das tags `v0.1.0` a `v0.9.1` já existentes.
 
 ## Check do título do PR
 
@@ -61,8 +61,8 @@ Estas configurações não ficam no código e não foram alteradas pela automaç
 
 - **Workflows não são disparados por eventos do `GITHUB_TOKEN`.** O PR de release criado pelo release-please não executa checks (por exemplo `PR title`). Se a `main` exigir checks obrigatórios, esse PR ficará bloqueado e será preciso um administrador mergeá-lo. A tag e a Release criadas também não disparam outros workflows. Quando existir um deploy, ele deve rodar em `push` na `main` ou ser chamado por `workflow_dispatch`/`workflow_call`, e não por `on: push: tags` ou `on: release`. Usar um token pessoal ou um GitHub App contornaria isso, mas está fora do requisito de usar só o `GITHUB_TOKEN`.
 - **Sem testes no pipeline.** Este repositório ainda não tem workflow de CI que rode testes. A release não verifica que os testes passam.
-- **Histórico anterior.** As releases `v0.1.0` a `v0.9.0` foram criadas à mão e não existe `CHANGELOG.md` anterior. O primeiro CHANGELOG automático lista só o que vier depois da tag `v0.9.0`.
-- **Numeração herdada de código legado.** **[Informado pelo responsável]** O código que existia até a tag `v0.9.0` é de outro projeto, não do Forge atual. O manifesto parte de `0.9.0` porque é a última tag do repositório. Se o Forge atual deve recomeçar a numeração (por exemplo em `0.1.0`) ou usar um repositório novo, ajuste `.release-please-manifest.json` e a tag base antes de a automação ser ativada, ou use a chave `RELEASE_AUTOMATION_ENABLED=false` até a decisão. A decisão está em aberto (relatório da FRG-32, PR #10).
+- **Histórico anterior.** As releases `v0.1.0` a `v0.9.1` foram criadas à mão (a `v0.9.1` marca o commit do relatório da FRG-32, `b0d14f4`) e não existe `CHANGELOG.md` anterior. O primeiro CHANGELOG automático lista só o que vier depois da tag `v0.9.1`.
+- **Numeração herdada de código legado.** **[Informado pelo responsável]** O código que existia até a tag `v0.9.0` é de outro projeto, não do Forge atual. O manifesto parte de `0.9.1` porque é a última tag do repositório. Se o Forge atual deve recomeçar a numeração (por exemplo em `0.1.0`) ou usar um repositório novo, ajuste `.release-please-manifest.json` e a tag base antes de a automação ser ativada, ou use a chave `RELEASE_AUTOMATION_ENABLED=false` até a decisão. A decisão está em aberto (relatório da FRG-32, PR #10).
 - **Arquivo `version.txt`.** O Forge ainda não tem um manifesto de versão único (`pyproject.toml`, `package.json` com versão). O tipo de release `simple` mantém a versão num `version.txt` na raiz. Quando houver um lugar oficial para a versão, troque o `release-type` e documente aqui.
 
 ## Como desativar
