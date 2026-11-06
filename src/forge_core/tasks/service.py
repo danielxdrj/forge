@@ -7,11 +7,13 @@ auditoria registra só nomes de campos e status. Não coloque segredos em tarefa
 """
 from __future__ import annotations
 
+import re
 import uuid
 from collections.abc import Callable
 from datetime import datetime, timezone
 
 from ..errors import TaskConflictError, TaskRuleError
+from ..logging import redact
 from ..storage.sql import SqlRepository
 from . import rules
 from .model import Dependency, Project, Stage, Task, TaskChange, TaskStatus as S
@@ -24,6 +26,16 @@ _EDITABLE = ("title", "objective", "context", "scope", "acceptance_criteria", "p
 # Chave do advisory lock que serializa mudanças no grafo de dependências (somente PostgreSQL).
 _DEPENDENCY_GRAPH_LOCK = 1_650_015_001
 _REFUSALS = (TaskRuleError, TaskConflictError, KeyError)
+
+
+_SAFE_TARGET = re.compile(r"^(\w+):([0-9a-fA-F-]{36}|new)$")
+
+
+def _safe_target(target: str) -> str:
+    """Id vindo do chamador só vai para a auditoria se tiver cara de UUID; senão vira `<tipo>:unknown`."""
+    if _SAFE_TARGET.match(target):
+        return target
+    return target.split(":", 1)[0] + ":unknown"
 
 
 def _task(row) -> Task:
@@ -59,7 +71,7 @@ class TaskService:
                 err = exc
         if err is not None:
             msg = err.args[0] if isinstance(err, KeyError) and err.args else str(err)
-            self._repo.record_audit(actor, action, target, f"error: {msg}")
+            self._repo.record_audit(actor, action, _safe_target(target), f"error: {redact(str(msg))}")
             raise err
         return result
 
@@ -73,7 +85,7 @@ class TaskService:
     def _load(tx, task_id: str, lock: str) -> Task:
         rows = tx.execute(f"SELECT {_COLS} FROM tasks WHERE id = ?{lock}", (task_id,)).fetchall()
         if not rows:
-            raise KeyError(f"tarefa inexistente: {task_id}")
+            raise KeyError("tarefa inexistente")
         return _task(rows[0])
 
     def create_project(self, title: str, actor: str) -> Project:
@@ -81,7 +93,8 @@ class TaskService:
             if not title.strip():
                 raise TaskRuleError("título do projeto é obrigatório")
             pid = str(uuid.uuid4())
-            tx.execute("INSERT INTO projects (id, title, created_at) VALUES (?, ?, ?)", (pid, title, now))
+            tx.execute("INSERT INTO projects (id, title, created_at, updated_at) VALUES (?, ?, ?, ?)",
+                       (pid, title, now, now))
             tx.audit(actor, "project.create", f"project:{pid}", "ok")
             return Project(pid, title, now)
         return self._run("project.create", actor, "project:new", fn)
@@ -91,7 +104,7 @@ class TaskService:
             if not title.strip():
                 raise TaskRuleError("título da etapa é obrigatório")
             if not tx.execute("SELECT 1 FROM projects WHERE id = ?", (project_id,)).fetchall():
-                raise KeyError(f"projeto inexistente: {project_id}")
+                raise KeyError("projeto inexistente")
             sid = str(uuid.uuid4())
             tx.execute("INSERT INTO stages (id, project_id, title, created_at) VALUES (?, ?, ?, ?)",
                        (sid, project_id, title, now))
@@ -128,7 +141,7 @@ class TaskService:
                     raise TaskRuleError("subtarefa herda a etapa da tarefa pai")
                 stage = parent.stage_id
             if stage and not tx.execute("SELECT 1 FROM stages WHERE id = ?", (stage,)).fetchall():
-                raise KeyError(f"etapa inexistente: {stage}")
+                raise KeyError("etapa inexistente")
             tx.execute(
                 f"INSERT INTO tasks ({_COLS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, 1, ?, ?)",
                 (task_id, title, objective, context, scope, acceptance_criteria, priority, status,
@@ -145,10 +158,10 @@ class TaskService:
         def fn(tx, now):
             unknown = set(fields) - set(_EDITABLE)
             if unknown:
-                raise TaskRuleError(f"campos não editáveis: {', '.join(sorted(unknown))}")
+                raise TaskRuleError(f"campos não editáveis ({len(unknown)})")
             task = self._load(tx, task_id, self._lock())
             if task.version != expected_version:
-                raise TaskConflictError(f"version esperada {expected_version}, atual {task.version}")
+                raise TaskConflictError("version desatualizada: releia a tarefa")
             if task.status in S.TERMINAL:
                 raise TaskRuleError(f"tarefa {task.status} não pode ser editada")
             merged = {f: fields.get(f, getattr(task, f)) for f in _EDITABLE}
@@ -173,7 +186,7 @@ class TaskService:
         def fn(tx, now):
             task = self._load(tx, task_id, self._lock())
             if expected_version is not None and task.version != expected_version:
-                raise TaskConflictError(f"version esperada {expected_version}, atual {task.version}")
+                raise TaskConflictError("version desatualizada: releia a tarefa")
             deps = self._dependency_states(tx, task_id)
             subs = [(i, st, bool(rq)) for i, st, rq in tx.execute(
                 "SELECT id, status, required FROM tasks WHERE parent_task_id = ?", (task_id,)).fetchall()]

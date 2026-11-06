@@ -7,7 +7,8 @@
 CREATE ROLE <PAPEL_APP> LOGIN PASSWORD '<SEGREDO_APP>' NOSUPERUSER NOCREATEDB NOCREATEROLE;
 GRANT CONNECT ON DATABASE <BANCO> TO <PAPEL_APP>;
 GRANT USAGE ON SCHEMA public TO <PAPEL_APP>;
-GRANT SELECT, INSERT ON audit_log, task_history, task_changes, projects, stages, agent_runs, approval_consumptions TO <PAPEL_APP>;
-GRANT SELECT, INSERT, UPDATE ON tasks, jobs, task_dependencies TO <PAPEL_APP>;
+GRANT SELECT, INSERT ON audit_log, task_history, task_changes, stages, agent_runs, approval_consumptions TO <PAPEL_APP>;
+GRANT SELECT, INSERT, UPDATE ON tasks, jobs, task_dependencies, projects, repositories TO <PAPEL_APP>;
 GRANT SELECT ON schema_migrations TO <PAPEL_APP>;
+-- Sem DELETE em nenhuma tabela: projeto e repositório são desativados (active=0), nunca apagados.
 -- Sem UPDATE/DELETE/TRUNCATE em audit_log e sem ser dono de nenhuma tabela.
