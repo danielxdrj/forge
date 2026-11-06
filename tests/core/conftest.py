@@ -69,3 +69,22 @@ def pg_blank():
     conn.close()
     admin.execute(f"DROP DATABASE {db} WITH (FORCE)")
     admin.close()
+
+
+@pytest.fixture(params=["sqlite", "postgres"])
+def make_repo(request, tmp_path):
+    """Fábrica de repositórios (nova conexão a cada chamada) em SQLite e, se disponível, Postgres (escritor)."""
+    if request.param == "sqlite":
+        from forge_core.storage import open_repository
+
+        return lambda: open_repository(f"sqlite:///{tmp_path / 'o.db'}")
+    _, _, new_writer = request.getfixturevalue("pg_env")
+    return new_writer
+
+
+@pytest.fixture(autouse=True)
+def _forge_env(monkeypatch):
+    """Config mínima no ambiente: o Orchestrator/Runtime sem settings leem o ambiente (como o start())."""
+    monkeypatch.setenv("FORGE_CONFIG_DIR", "cfg.example.invalid")
+    monkeypatch.delenv("FORGE_AUTOMATION_ENABLED", raising=False)
+    monkeypatch.delenv("FORGE_AGENTS_DISABLED", raising=False)

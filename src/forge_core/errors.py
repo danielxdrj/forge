@@ -32,3 +32,22 @@ class TaskRuleError(ForgeError):
 
 class TaskConflictError(ForgeError):
     """A tarefa mudou desde a leitura (version diferente): releia e tente de novo."""
+
+
+class AgentError(ForgeError):
+    """Ficha de agente inválida ou registro recusado."""
+
+
+class AgentFailure(ForgeError):
+    """Falha de agente com mensagem explícita e segura (vai para o registro após redact()).
+
+    Qualquer outra exceção do agente é registrada só pelo tipo. Nunca ponha contexto da tarefa na mensagem.
+    """
+
+
+class DispatchRefusedError(ForgeError):
+    """O orquestrador recusou despachar (tarefa não pronta, sem agente, sem aprovação...). É auditado."""
+
+
+class ApprovalError(ForgeError):
+    """Aprovação recusada (aprovador não é pessoa, tarefa inexistente)."""
