@@ -1,0 +1,36 @@
+name: PR title
+
+# Valida que o título do PR segue Conventional Commits. Com squash merge, o
+# título vira a mensagem do commit na main, e é ela que define a versão da release.
+# Detalhes: docs/RELEASES.md
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Validar título do PR
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          types='feat|fix|perf|revert|docs|refactor|test|build|ci|chore|style'
+          pattern="^(${types})(\([^()[:space:]]+\))?!?: [^[:space:]].*$"
+          if [[ "$PR_TITLE" =~ $pattern ]]; then
+            echo "Título válido: $PR_TITLE"
+            exit 0
+          fi
+          {
+            echo "::error title=Título do PR fora do padrão::O título deve seguir <tipo>(<escopo opcional>)<!opcional>: <descrição>"
+            echo "Título recebido: $PR_TITLE"
+            echo "Tipos aceitos: ${types//|/, }"
+            echo "Exemplos: 'feat: adicionar listagem de investigações', 'fix(api): rejeitar log vazio', 'feat!: remover rota antiga'"
+            echo "Veja docs/RELEASES.md"
+          }
+          exit 1
