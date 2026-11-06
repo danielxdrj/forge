@@ -76,7 +76,7 @@ Rodam automaticamente em `open_repository`. Para criar uma: adicione `NNNN_descr
 - **PostgreSQL (manual, não automatizado):** `pg_dump -Fc -h 127.0.0.1 -p 5433 -U <USUARIO> <BANCO> > forge.dump` e `pg_restore --clean -d <BANCO> forge.dump` num banco vazio ou de teste. Guarde o dump em local institucional e restaure em ambiente de teste periodicamente.
 
 ## Orquestrador e agentes (FRG-24, ADR-011)
-`Orchestrator.dispatch(task_id)` despacha uma tarefa pronta ao agente designado e grava o resultado em `agent_runs`, `task_changes` e `audit_log`. Contrato, ficha, diagrama, exemplo e como adicionar agente: `agents/README.md`. Regra: nenhum agente `write`/`critical` pode ser registrado até existir autenticação de aprovadores; só o `echo` (read) existe. Papéis: o escritor tem SELECT/INSERT em `agent_runs` (append-only, sem DELETE); reprovisione com `postgres_roles.sql`. Limitações: timeout não mata a thread (FRG-6).
+`Orchestrator.dispatch(task_id)` despacha uma tarefa pronta ao agente designado e grava o resultado em `agent_runs`, `task_changes` e `audit_log`. Contrato, ficha, diagrama, exemplo e como adicionar agente: `agents/README.md`. Fronteira: só agentes `read` executam (registro e runtime recusam o resto; aprovação não é autenticação e não libera nada); só o `echo` existe. Reserva atômica de aprovação em `approval_consumptions` (migração `0007`). Papéis: o escritor tem SELECT/INSERT em `agent_runs` e `approval_consumptions` (append-only, sem DELETE); reprovisione com `postgres_roles.sql`. Limitações: timeout não mata a thread (FRG-6).
 
 ## Tarefas (FRG-15, ADR-010)
 `TaskService(repo)` gerencia projetos, etapas, tarefas e subtarefas sobre o mesmo banco (migração `0005`). Sem variável de ambiente nova.

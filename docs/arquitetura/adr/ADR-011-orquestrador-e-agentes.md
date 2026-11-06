@@ -10,18 +10,24 @@ A FRG-24 entrega o Orchestrator e um Agent Runtime mínimo, validados por um age
 ## Decisões
 - **D1, execução:** núcleo síncrono (`Orchestrator.dispatch`) com adaptador para a fila: `Orchestrator.enqueue` e `job_handler()` ligam a `JobQueue` (FRG-40) e reaproveitam retry, lease e cancelamento. Descartados: só síncrono (sem persistência) e só via fila (mais peças).
 - **D2, definições de agente:** no código (`AgentSpec`, a "ficha"), registradas em `AgentRegistry`. `FORGE_AGENTS_DISABLED` (lista, opcional) desativa agentes sem mexer no código. Ler definições de arquivo fica como tarefa futura (ADR-005).
-- **D3, aprovação humana (política B):** só agentes cujas permissões são exclusivamente `read` despacham direto. Qualquer outra permissão (`write`, `critical`, desconhecida ou vazia) exige `approval.granted` de um ator `pessoa:*`, registrado em `audit_log`, de uso único (`approval.consumed`) e específico do agente e da tarefa. Sem aprovação a recusa é auditada e a tarefa não muda.
-- **Fluxo:** automação ligada → tarefa `pending` com dependências obrigatórias concluídas → agente designado (`assignee_kind=agent`), registrado e ativo → aprovação, se exigida → `pending→in_progress` (desempata despachos concorrentes) → execução → `agent_runs` + `task_changes` + auditoria → `in_validation` (sucesso) ou `blocked` (falha, erro, timeout, cancelamento). `done` segue humano.
+- **D3, aprovação humana (política B):** só agentes cujas permissões são exclusivamente `read` despacham. Qualquer outra permissão (`write`, `critical`, desconhecida ou vazia) exige aprovação, e a aprovação registrada **não libera a execução** enquanto não houver autenticação de aprovadores (ver a fronteira de segurança abaixo). O registro de aprovação (`approval.granted`, ator `pessoa:*`) e a reserva atômica existem como contrato.
+- **Fluxo:** automação ligada → tarefa `pending` com dependências obrigatórias concluídas → agente designado (`assignee_kind=agent`), registrado e ativo → aprovação, se exigida → `pending→in_progress` (a versão da tarefa desempata despachos concorrentes) → execução → `agent_runs` + `task_changes` + auditoria → `in_validation` (sucesso) ou `blocked` (falha, erro, timeout, cancelamento). `done` segue humano.
 - **Divisão em subtarefas:** o orquestrador só propõe (`propose_split`); criar exige `apply_split` por uma pessoa.
 - **Resultado:** `agent_runs` (append-only, trigger e sem DELETE para o escritor). O resumo do resultado não vai para o `audit_log`, que leva só status, agente e id da execução. Logs, resumo e `usage` passam por `redact()`. Exceção do agente grava só o tipo, salvo `AgentFailure` explícita (redigida).
 
-## Regra obrigatória (autenticação de aprovadores)
-A aprovação registra o ator informado e **não autentica quem aprova**. Portanto, **nenhum agente real com permissão `write` ou `critical` pode ser registrado até existir a tarefa de autenticação de aprovadores.** Nesta entrega o único agente registrado é o `echo`, só `read`. A regra é imposta no código: `AgentRegistry.register` recusa agente que exija aprovação; `allow_privileged=True` existe só para testes e deve sair quando a autenticação existir.
+## Fronteira de segurança e limitações reais
+**Estado atual: apenas agentes `read` executam.** Isto é imposto no código, em três camadas, sem nenhum flag ou construtor que mude o resultado:
+1. `AgentRegistry.register` recusa sempre qualquer spec que não seja só `read` ("privileged agents disabled until approver authentication").
+2. `AgentRuntime.execute` recusa spec não-`read` mesmo se chamado direto (defesa em profundidade).
+3. `Orchestrator.dispatch` usa `approval.decide`, que nunca devolve "executar" para quem exige aprovação: sem aprovação pede aprovação (recusa auditada); com `approval.granted` a recusa auditada passa a ser "privileged agents disabled until approver authentication".
 
-## Limites aceitos
-- O timeout e o cancelamento são cooperativos e **não matam a thread** do agente; isolamento é a FRG-6.
-- Quem tem acesso ao banco como escritor pode inserir linhas no `audit_log`; a aprovação só conta se o ator começar com `pessoa:`, mas isso não é autenticação.
-- Aprovação, despacho e atualização de status não formam uma única transação.
+- **O registro de aprovação não é autenticação.** `approval.granted` grava o ator informado; uma identidade `pessoa:qualquer` não autenticada é aceita como texto e **não libera nada**. A exigência do prefixo `pessoa:` filtra agentes honestos, não impede falsificação por quem escreve no banco.
+- **Para liberar agentes privilegiados no futuro serão necessárias:** autenticação de aprovadores **e uma nova ADR** que revise esta fronteira. Não basta remover a recusa no código.
+- **Reserva atômica da aprovação (contrato futuro):** cada concessão é uma linha do `audit_log` (seu id é o `grant_id`). `ApprovalLedger.reserve` insere o `grant_id` em `approval_consumptions` (chave primária, append-only) numa transação; reservas concorrentes da mesma concessão têm um único vencedor. O consumo vale mesmo que a execução falhe: retry, replay ou novo job exigem **nova aprovação**. Hoje o despacho nunca chega a reservar, porque o privilegiado está desligado; a reserva é testada isoladamente (SQLite e Postgres, com conexões independentes).
+- **Gate global em qualquer caminho:** sem `settings`, `dispatch`, `job_handler` e `AgentRuntime` leem o ambiente como o `start()` (`FORGE_AUTOMATION_ENABLED`, `FORGE_AGENTS_DISABLED`); config inválida falha fechada.
+- **Timeout e thread:** o agente roda numa thread. Em timeout ou cancelamento o runtime sinaliza `cancel_event`, **sela o contexto** (`log()` vira no-op), descarta qualquer resultado tardio e nada mais é gravado em `agent_runs`, `task_changes` ou `audit_log`. Mas a thread **não é morta**: efeitos externos que ela própria fizer (I/O, rede, arquivos) não podem ser interrompidos sem isolamento (FRG-6). Esse limite é separado da fronteira de autorização: o `echo` só lê e nenhum privilegiado executa.
+- **Outros limites:** aprovação, despacho e atualização de status não formam uma única transação; quem escreve no banco como escritor pode inserir linhas no `audit_log`.
+- **Atribuição das decisões:** estas limitações foram aceitas pelo gestor de projetos, a quem o usuário delegou as decisões técnicas.
 
 ## Consequências
-Segurança: menor privilégio por padrão (read) e permissão desconhecida exige aprovação. Manutenção: agente novo = registrar uma ficha e uma classe, sem mexer no Orchestrator. Custo: nenhum serviço novo.
+Segurança: menor privilégio por padrão (read); privilegiado desligado até haver autenticação. Manutenção: agente novo = registrar uma ficha e uma classe, sem mexer no Orchestrator. Custo: nenhum serviço novo.

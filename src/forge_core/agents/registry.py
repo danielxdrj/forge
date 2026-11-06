@@ -1,28 +1,28 @@
 from __future__ import annotations
 
 from ..errors import AgentError
+from .approval import PRIVILEGED_DISABLED_MESSAGE
 from .spec import Agent
 
 
 class AgentRegistry:
     """Registro de agentes. Agente novo = `register(agent)`; o Orchestrator não muda.
 
-    Regra de segurança (ADR-011): enquanto não existir autenticação de aprovadores, só agentes
-    exclusivamente `read` podem ser registrados. `allow_privileged=True` existe SÓ para testes.
+    Fronteira de segurança (ADR-011): enquanto não existir autenticação de aprovadores, SÓ agentes
+    exclusivamente `read` podem ser registrados. Não há flag nem construtor que mude isso.
     """
 
-    def __init__(self, allow_privileged: bool = False):
+    def __init__(self):
         self._agents: dict[str, Agent] = {}
-        self._allow_privileged = allow_privileged
 
     def register(self, agent: Agent) -> None:
         spec = agent.spec
         if spec.name in self._agents:
             raise AgentError(f"agente já registrado: {spec.name}")
-        if spec.requires_approval and not self._allow_privileged:
+        if spec.requires_approval:
             raise AgentError(
-                f"agente {spec.name}: permissões {list(spec.permissions)} exigem aprovação autenticada, "
-                "que ainda não existe; só agentes read podem ser registrados"
+                f"agente {spec.name}: permissões {list(spec.permissions)} recusadas; "
+                f"{PRIVILEGED_DISABLED_MESSAGE}"
             )
         self._agents[spec.name] = agent
 

@@ -61,10 +61,19 @@ class AgentContext:
     actor: str
     cancel_event: threading.Event = field(default_factory=threading.Event)
     _logs: list[str] = field(default_factory=list)
+    _sealed: bool = False
 
     def log(self, message: str) -> None:
-        """Registro de atividades do agente. Passa por redact() antes de ficar guardado."""
-        self._logs.append(redact(str(message)))
+        """Registro de atividades do agente. Passa por redact(). Depois de selado (timeout/cancelamento) é no-op."""
+        if not self._sealed:
+            self._logs.append(redact(str(message)))
+
+    def seal(self) -> None:
+        self._sealed = True
+
+    @property
+    def sealed(self) -> bool:
+        return self._sealed
 
     @property
     def logs(self) -> list[str]:

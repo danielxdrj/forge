@@ -2,9 +2,10 @@ import threading
 
 import pytest
 
-from forge_core.agents import AgentOutcome, AgentRegistry, AgentSpec, EchoAgent, Orchestrator, default_registry
+from forge_core.agents import AgentOutcome, AgentRegistry, AgentRuntime, AgentSpec, EchoAgent, Orchestrator, default_registry
+from forge_core.agents.approval import ALLOW, DISABLED, NEEDS_APPROVAL, decide
 from forge_core.config import load_settings
-from forge_core.errors import (AgentFailure, ApprovalError, AutomationDisabledError, DispatchRefusedError)
+from forge_core.errors import (AgentError, AgentFailure, ApprovalError, AutomationDisabledError, DispatchRefusedError)
 from forge_core.queue import SqlJobQueue
 from forge_core.tasks import TaskService, TaskStatus as S
 
@@ -96,14 +97,24 @@ def test_new_agent_registered_without_changing_orchestrator(env):
     assert mk().dispatch(t.id).outcome.summary == "TAREFA"
 
 
-@pytest.mark.parametrize("perms", [("write",), ("critical",), ("deploy",)])
-def test_privileged_without_approval_is_refused_and_audited(make_repo, perms):
+def privileged_env(make_repo, name="priv", perms=("write",)):
+    """Registra o agente privilegiado FALSO pelo dicionário interno: o registro público o recusa sempre."""
     repo = make_repo()
     svc = TaskService(repo)
-    fake = Fake(spec("priv", perms))
-    reg = AgentRegistry(allow_privileged=True)  # só testes; o registro padrão recusa
-    reg.register(fake)
-    orch = Orchestrator(repo, reg)
+    fake = Fake(spec(name, perms))
+    reg = AgentRegistry()
+    with pytest.raises(AgentError):
+        reg.register(fake)
+    reg._agents[name] = fake  # só teste: prova a defesa em profundidade do Orchestrator
+    return repo, svc, fake, Orchestrator(repo, reg)
+
+
+PRIV = "privileged agents disabled until approver authentication"
+
+
+@pytest.mark.parametrize("perms", [("write",), ("critical",), ("deploy",)])
+def test_privileged_without_approval_is_refused_and_audited(make_repo, perms):
+    repo, svc, fake, orch = privileged_env(make_repo, perms=perms)
     t = agent_task(svc, "priv")
     before = svc.get_task(t.id)
     with pytest.raises(DispatchRefusedError, match="aprovação pendente"):
@@ -113,44 +124,42 @@ def test_privileged_without_approval_is_refused_and_audited(make_repo, perms):
     assert (last.action, last.target) == ("agent.dispatch", f"task:{t.id}") and last.result.startswith("error: aprovação")
 
 
-def test_privileged_with_approval_dispatches_once(make_repo):
-    repo = make_repo()
-    svc = TaskService(repo)
-    fake = Fake(spec("priv", ("write", "critical")))
-    reg = AgentRegistry(allow_privileged=True)
-    reg.register(fake)
-    orch = Orchestrator(repo, reg)
+@pytest.mark.parametrize("approver", ["pessoa:chefe", "pessoa:forjada"])
+@pytest.mark.parametrize("perms", [("write",), ("critical",), ("read", "write"), ("deploy",)])
+def test_privileged_with_approval_granted_still_does_not_execute(make_repo, perms, approver):
+    repo, svc, fake, orch = privileged_env(make_repo, perms=perms)
     t = agent_task(svc, "priv")
-    orch.grant_approval(t.id, "pessoa:chefe")
-    res = orch.dispatch(t.id)
-    assert res.run_status == "success" and fake.calls == 1
-    acts = [a for a, _ in actions(repo)]
-    assert "approval.granted" in acts and "approval.consumed" in acts
-    # aprovação é de uso único: volta a pending e tenta de novo -> recusado
-    svc.change_status(t.id, S.IN_PROGRESS, "p")  # in_validation -> in_progress
-    svc.change_status(t.id, S.BLOCKED, "p")
-    svc.change_status(t.id, S.PENDING, "p")
-    with pytest.raises(DispatchRefusedError, match="aprovação pendente"):
+    before = svc.get_task(t.id)
+    orch.grant_approval(t.id, approver)  # identidade sem autenticação: registra, mas não libera nada
+    assert ("approval.granted", "ok: agent=priv") in actions(repo)
+    with pytest.raises(DispatchRefusedError, match=PRIV):
         orch.dispatch(t.id)
+    assert fake.calls == 0 and svc.get_task(t.id) == before and runs(repo) == []
+    last = repo.list_audit()[-1]
+    assert last.action == "agent.dispatch" and last.result == f"error: {PRIV}"
+    assert "approval.consumed" not in [a for a, _ in actions(repo)]  # nada foi reservado
+
+
+def test_policy_function_never_allows_privileged():
+    for perms in (("write",), ("critical",), ("deploy",), ()):
+        assert decide(spec(perms=perms), approved=False) == NEEDS_APPROVAL
+        assert decide(spec(perms=perms), approved=True) == DISABLED
+    assert decide(spec(), approved=False) == ALLOW
 
 
 def test_approval_must_come_from_a_person_and_for_that_agent(make_repo):
-    repo = make_repo()
-    svc = TaskService(repo)
-    reg = AgentRegistry(allow_privileged=True)
-    reg.register(Fake(spec("priv", ("write",))))
-    orch = Orchestrator(repo, reg)
+    repo, svc, fake, orch = privileged_env(make_repo, perms=("write",))
     t = agent_task(svc, "priv")
     with pytest.raises(ApprovalError):
         orch.grant_approval(t.id, "agente:priv")
     assert repo.list_audit()[-1].result.startswith("error")
-    orch.grant_approval(t.id, "pessoa:chefe", agent="outro-agente")  # aprovação para outro agente não vale
-    with pytest.raises(DispatchRefusedError):
+    orch.grant_approval(t.id, "pessoa:chefe", agent="outro-agente")  # aprovação de outro agente não conta
+    with pytest.raises(DispatchRefusedError, match="aprovação pendente"):
         orch.dispatch(t.id)
-    # linha forjada com ator que não é pessoa também não vale
-    repo.record_audit("agente:priv", "approval.granted", f"task:{t.id}", "ok: agent=priv")
-    with pytest.raises(DispatchRefusedError):
+    repo.record_audit("agente:priv", "approval.granted", f"task:{t.id}", "ok: agent=priv")  # linha forjada
+    with pytest.raises(DispatchRefusedError, match="aprovação pendente"):
         orch.dispatch(t.id)
+    assert fake.calls == 0
 
 
 def test_disabled_agent_and_flag(env):
@@ -269,3 +278,66 @@ def test_agent_runs_append_only_and_privileges_postgres(pg_env, sql):
         owner._run([(sql, ())])
     with pytest.raises(psycopg.errors.InsufficientPrivilege):
         writer._run([(sql, ())])
+
+
+def test_settings_none_reads_environment_for_dispatch_runtime_and_job_handler(env, monkeypatch):
+    repo, svc, reg, mk = env
+    orch = mk()  # settings=None
+    t = agent_task(svc)
+    monkeypatch.setenv("FORGE_AUTOMATION_ENABLED", "false")
+    with pytest.raises(AutomationDisabledError):
+        orch.dispatch(t.id)
+    with pytest.raises(AutomationDisabledError):
+        AgentRuntime().check_allowed(EchoAgent())
+    q = SqlJobQueue(repo)
+    orch.enqueue(q, t.id, "pessoa:ana")
+    job = q.run_once(orch.job_handler(), "agente:worker")
+    assert job.status != "succeeded" and job.last_error == "AutomationDisabledError"
+    assert svc.get_task(t.id).status == "pending" and runs(repo) == []
+    monkeypatch.setenv("FORGE_AUTOMATION_ENABLED", "true")
+    monkeypatch.setenv("FORGE_AGENTS_DISABLED", "echo")
+    with pytest.raises(DispatchRefusedError, match="desativado"):
+        orch.dispatch(t.id)
+    monkeypatch.delenv("FORGE_AGENTS_DISABLED")
+    assert orch.dispatch(t.id).run_status == "success"
+
+
+def test_invalid_environment_fails_closed(env, monkeypatch):
+    from forge_core.errors import ConfigError
+
+    repo, svc, reg, mk = env
+    t = agent_task(svc)
+    monkeypatch.setenv("FORGE_AUTOMATION_ENABLED", "talvez")
+    with pytest.raises(ConfigError):
+        mk().dispatch(t.id)
+    assert svc.get_task(t.id).status == "pending"
+
+
+def test_late_effects_after_timeout_write_nothing(env):
+    repo, svc, reg, mk = env
+    release, done = threading.Event(), threading.Event()
+
+    def late(ctx):
+        ctx.cancel_event.wait(5)
+        release.wait(5)
+        ctx.log("EFEITO-TARDIO")
+        done.set()
+        return AgentOutcome(summary="EFEITO-TARDIO", artifacts=["EFEITO-TARDIO"], usage={"n": 1})
+
+    reg.register(Fake(spec("tardio", timeout_seconds=0.2), late))
+    t = agent_task(svc, "tardio")
+    res = mk().dispatch(t.id)
+    assert res.run_status == "timeout" and res.task_status == S.BLOCKED
+
+    def snapshot():
+        return (repo.fetch("SELECT COUNT(*) FROM agent_runs")[0][0], repo.fetch("SELECT COUNT(*) FROM task_changes")[0][0],
+                repo.fetch("SELECT COUNT(*) FROM audit_log")[0][0])
+
+    before = snapshot()
+    release.set()
+    assert done.wait(2)
+    import time
+
+    time.sleep(0.2)
+    assert snapshot() == before
+    assert "EFEITO-TARDIO" not in repr(runs(repo)) + repr(repo.list_audit())

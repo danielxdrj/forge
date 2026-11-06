@@ -1,8 +1,9 @@
 """Orchestrator (ADR-011): verifica se a tarefa está pronta, escolhe o agente, despacha e registra.
 
-Fluxo de dispatch: automação ligada -> tarefa pronta -> agente designado, registrado e ativo ->
-aprovação (se a ficha exigir) -> pending→in_progress -> executa -> grava agent_runs -> in_validation
-(sucesso) ou blocked (falha, erro, timeout, cancelamento). `done` continua sendo humano.
+Fluxo de dispatch: automação ligada (settings, ou o ambiente se não houver settings) -> tarefa pronta ->
+agente designado, registrado e ativo -> política de aprovação -> pending→in_progress -> executa ->
+grava agent_runs -> in_validation (sucesso) ou blocked (falha, erro, timeout, cancelamento). `done`
+continua sendo humano. Agente privilegiado NUNCA executa: não há autenticação de aprovadores (ADR-011).
 Toda recusa e todo despacho vão para o audit_log; o resumo do resultado NÃO vai para a auditoria.
 """
 from __future__ import annotations
@@ -15,12 +16,14 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
-from ..config import Settings, require_automation_enabled
-from ..errors import (ApprovalError, DispatchRefusedError, JobFailure, TaskConflictError, TaskRuleError)
+from ..config import Settings, load_settings, require_automation_enabled
+from ..errors import (AgentError, ApprovalError, DispatchRefusedError, JobFailure, TaskConflictError,
+                      TaskRuleError)
 from ..logging import redact
 from ..storage.sql import SqlRepository
 from ..tasks import TaskService
 from ..tasks.model import AssigneeKind, Task, TaskStatus as S
+from .approval import DISABLED, NEEDS_APPROVAL, PRIVILEGED_DISABLED_MESSAGE, ApprovalLedger, decide
 from .registry import AgentRegistry
 from .runtime import AgentRuntime, RunResult
 from .spec import AgentContext, AgentOutcome
@@ -57,46 +60,41 @@ class Orchestrator:
         self._repo, self._registry, self._settings = repo, registry, settings
         self._clock = clock or (lambda: datetime.now(timezone.utc))
         self._tasks = tasks or TaskService(repo, self._clock)
-        self._runtime = runtime or AgentRuntime()
+        self._runtime = runtime or AgentRuntime(settings=settings)
+        self.approvals = ApprovalLedger(repo, self._clock)
+
+    def _effective_settings(self) -> Settings:
+        """Sem settings explícitas, lê o ambiente como o start() (falha fechada se a config for inválida)."""
+        return self._settings if self._settings is not None else load_settings()
 
     def _refuse(self, actor: str, task_id: str, action: str, message: str) -> None:
         self._repo.record_audit(actor, action, f"task:{task_id}", f"error: {message}")
         raise DispatchRefusedError(message)
 
-    def _agent_active(self, name: str) -> bool:
+    def _agent_active(self, name: str, settings: Settings) -> bool:
         agent = self._registry.get(name)
-        disabled = self._settings.agents_disabled if self._settings else ()
-        return agent is not None and agent.spec.active and name not in disabled
+        return agent is not None and agent.spec.active and name not in settings.agents_disabled
 
-    # --- aprovação (registra o ator informado; sem autenticação real: ADR-011) ---
+    # --- aprovação (registra o ator informado; NÃO autentica: ADR-011) ---
 
     def grant_approval(self, task_id: str, approver: str, agent: str | None = None) -> None:
-        """Registra `approval.granted` (uso único). Só atores `pessoa:*`; agente não aprova."""
+        """Registra `approval.granted` (uso único por concessão). Só atores `pessoa:*`; agente não aprova.
+
+        Não libera execução de agente privilegiado: isso segue desligado até existir autenticação.
+        """
         if not approver.startswith("pessoa:"):
-            self._repo.record_audit(approver, "approval.granted", f"task:{task_id}", "error: aprovador não é pessoa")
-            raise ApprovalError("aprovação exige um ator pessoa:*")
+            self.approvals.grant(task_id, approver, agent or "")  # registra a recusa e levanta ApprovalError
         task = self._tasks.get_task(task_id)
         if task is None:
             raise ApprovalError(f"tarefa inexistente: {task_id}")
-        name = agent or task.assignee_id
-        self._repo.record_audit(approver, "approval.granted", f"task:{task_id}", f"ok: agent={name}")
-
-    def _has_approval(self, task_id: str, name: str) -> bool:
-        target, result = f"task:{task_id}", f"ok: agent={name}"
-        granted = self._repo.fetch(
-            "SELECT COUNT(*) FROM audit_log WHERE action = 'approval.granted' AND target = ? AND result = ? "
-            "AND substr(actor, 1, 7) = 'pessoa:'", (target, result))[0][0]
-        used = self._repo.fetch(
-            "SELECT COUNT(*) FROM audit_log WHERE action = 'approval.consumed' AND target = ? AND result = ?",
-            (target, result))[0][0]
-        return granted > used
+        self.approvals.grant(task_id, approver, agent or task.assignee_id or "")
 
     # --- despacho ---
 
     def dispatch(self, task_id: str, requested_by: str = ORCHESTRATOR_ACTOR,
                  cancel_event: threading.Event | None = None) -> DispatchResult:
-        if self._settings is not None:
-            require_automation_enabled(self._settings)
+        settings = self._effective_settings()
+        require_automation_enabled(settings)
         task = self._tasks.get_task(task_id)
         if task is None:
             self._refuse(requested_by, task_id, "agent.dispatch", "tarefa inexistente")
@@ -110,18 +108,22 @@ class Orchestrator:
         agent = self._registry.get(name)
         if agent is None:
             self._refuse(requested_by, task_id, "agent.dispatch", f"agente não registrado: {name}")
-        if not self._agent_active(name):
+        if not self._agent_active(name, settings):
             self._refuse(requested_by, task_id, "agent.dispatch", f"agente desativado: {name}")
-        needs_approval = agent.spec.requires_approval
-        if needs_approval and not self._has_approval(task_id, name):
+        decision = decide(agent.spec, approved=self.approvals.available(task_id, name) > 0)
+        if decision == NEEDS_APPROVAL:
             self._refuse(requested_by, task_id, "agent.dispatch", f"aprovação pendente para o agente {name}")
+        if decision == DISABLED:
+            self._refuse(requested_by, task_id, "agent.dispatch", PRIVILEGED_DISABLED_MESSAGE)
+        try:  # mesmo gate que o runtime aplica ao executar (defesa em profundidade)
+            self._runtime.check_allowed(agent)
+        except AgentError as exc:
+            self._refuse(requested_by, task_id, "agent.dispatch", str(exc))
 
         try:  # a mudança de status é o desempate entre despachos concorrentes
             self._tasks.change_status(task_id, S.IN_PROGRESS, ORCHESTRATOR_ACTOR, expected_version=task.version)
         except (TaskRuleError, TaskConflictError) as exc:
             self._refuse(requested_by, task_id, "agent.dispatch", f"não foi possível iniciar: {exc}")
-        if needs_approval:
-            self._repo.record_audit(ORCHESTRATOR_ACTOR, "approval.consumed", f"task:{task_id}", f"ok: agent={name}")
         self._repo.record_audit(requested_by, "agent.dispatch", f"task:{task_id}", f"ok: agent={name}")
 
         ctx = AgentContext(task=self._tasks.get_task(task_id), actor=f"agente:{name}",
