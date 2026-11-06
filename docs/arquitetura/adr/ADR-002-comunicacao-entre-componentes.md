@@ -1,6 +1,6 @@
 # ADR-002: Comunicação entre componentes
 
-- **Status:** Proposto, aguardando aprovação do responsável
+- **Status:** Aprovado com ajuste (06/11/2026)
 - **Data:** 2026-11-06
 - **Revisar quando:** surgir tarefa longa/assíncrona que não caiba no processo ou integração por evento externo
 
@@ -19,3 +19,6 @@ Chamada direta, com o estado da tarefa persistido (permite retomar). Queue / Eve
 
 ## Consequências
 Manutenção: baixa. Segurança: sem broker a proteger. Custo: nenhum extra agora.
+
+## Ajuste aprovado
+A fila não fica para depois: a FRG-40 e a Fase 1 exigem fila já nesta fundação. Mantém-se a interface (porta) e implementa-se uma fila simples, em processo ou no banco, sem sistema de fila pesado. A chamada direta entre módulos do Core continua válida.

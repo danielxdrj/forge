@@ -1,6 +1,6 @@
 # ADR-004: Tecnologia de persistência
 
-- **Status:** Proposto, aguardando aprovação do responsável
+- **Status:** Aprovado com ajuste (06/11/2026)
 - **Data:** 2026-11-06
 - **Revisar quando:** a stack for definida ou o volume/concorrência mudar
 
@@ -19,3 +19,6 @@ PostgreSQL, atrás de uma interface de repositório e com migrações versionada
 
 ## Consequências
 Manutenção: média (backup, migração). Segurança: segredo do banco fora do Git, usuário com menor privilégio; auditoria sem permissão de update/delete. Custo: baixo.
+
+## Ajuste aprovado
+PostgreSQL é o alvo; SQLite só entra no protótipo. A FRG-42 ainda compara alternativas. O acesso aos dados passa por uma camada de repositório. O banco do legado não define a escolha.

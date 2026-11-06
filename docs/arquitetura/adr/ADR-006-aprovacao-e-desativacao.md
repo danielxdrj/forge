@@ -1,6 +1,6 @@
 # ADR-006: Aprovação humana e desativação
 
-- **Status:** Proposto, aguardando aprovação do responsável
+- **Status:** Aprovado (06/11/2026)
 - **Data:** 2026-11-06
 - **Revisar quando:** a política de aprovação detalhada for definida
 

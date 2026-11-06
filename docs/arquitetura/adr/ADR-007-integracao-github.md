@@ -1,6 +1,6 @@
 # ADR-007: Integração com GitHub
 
-- **Status:** Proposto, aguardando aprovação do responsável
+- **Status:** Aprovado com ajuste (06/11/2026)
 - **Data:** 2026-11-06
 - **Revisar quando:** mudar o repositório/organização ou o modelo de credenciais
 
@@ -19,3 +19,6 @@ GitHub App da organização, começando só com leitura; escrita (branch/PR) lib
 
 ## Consequências
 Manutenção: baixa após configurar. Segurança: menor privilégio e rotação automática. Custo: nenhum.
+
+## Ajuste aprovado
+Depende de criar a organização no GitHub, pois hoje o repositório está em conta pessoal. Até a migração, usar solução temporária sem token pessoal de longa duração (por exemplo, credencial de curta duração emitida sob demanda por quem opera, com escopo mínimo, ou apenas o `GITHUB_TOKEN` dos workflows). A FRG-21 formaliza a escolha entre GitHub App e token fine-grained.
