@@ -8,11 +8,11 @@ Este documento descreve a automação de releases do Forge: como ela decide a ve
 | --- | --- | --- |
 | Workflow de release | `.github/workflows/release.yml` | A cada push na `main`, roda o [release-please](https://github.com/googleapis/release-please-action) com o `GITHUB_TOKEN`. |
 | Configuração | `release-please-config.json` | Tipos de commit, seções do CHANGELOG, formato da tag (`vX.Y.Z`). |
-| Versão atual | `.release-please-manifest.json` | Última versão lançada (`0.9.5`). Atualizado pelo próprio PR de release. |
+| Versão atual | `.release-please-manifest.json` | Última versão lançada (`0.9.6`). Atualizado pelo próprio PR de release. |
+
+| Saídas | `CHANGELOG.md`, `version.txt`, tag `vX.Y.Z`, GitHub Release | Criados quando o PR de release é mergeado. |
 
 > **Enquanto a automação não estiver ativa:** cada PR ganha uma release manual (tag e GitHub Release, como no procedimento manual abaixo), e o `.release-please-manifest.json` precisa ser atualizado junto com ela. O próprio PR que leva a release manual atualiza o manifesto para a versão que vai receber, da mesma forma que um PR de release do release-please já sai com a versão que publica.
-| Check do título do PR | `.github/workflows/pr-title.yml` | Falha se o título do PR não seguir Conventional Commits. |
-| Saídas | `CHANGELOG.md`, `version.txt`, tag `vX.Y.Z`, GitHub Release | Criados quando o PR de release é mergeado. |
 
 Só o `GITHUB_TOKEN` é usado. Não há segredo pessoal, token de acesso pessoal nem GitHub App.
 
