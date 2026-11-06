@@ -12,6 +12,7 @@ src/forge_core/
   logging.py      log JSON com redação de segredos
   errors.py       ForgeError, ConfigError, AutomationDisabledError
   backup.py       backup/restauração do SQLite
+  tasks/          gerenciamento de tarefas (FRG-15): model, rules (puras), service (TaskService)
   queue/          fila de jobs persistida (SqlJobQueue)
   storage/        persistência (FRG-42)
     repository.py   interface Repository e entidades
@@ -19,7 +20,7 @@ src/forge_core/
     migrate.py      runner de migrações
     migrations/     SQL numerado por dialeto (sqlite/, postgres/)
   extension/      interfaces: Integration, Agent, JobQueue (Job, JobStatus) (implementações: FRG-40 e outras)
-tests/core/  conftest (Postgres efêmero), test_queue, test_core, test_start_automation, test_redact, test_storage
+tests/core/  conftest (Postgres efêmero), test_task_rules, test_task_service, test_queue, test_core, test_start_automation, test_redact, test_storage
 docker-compose.dev.yml  Postgres de dev/teste (127.0.0.1:5433)
 ```
 
@@ -71,6 +72,33 @@ Rodam automaticamente em `open_repository`. Para criar uma: adicione `NNNN_descr
 ### Backup e restauração
 - **SQLite:** `backup_sqlite(db, destino)` e `restore_sqlite(backup, db)` (pare o Forge antes de restaurar). Testado em `test_storage.py`.
 - **PostgreSQL (manual, não automatizado):** `pg_dump -Fc -h 127.0.0.1 -p 5433 -U <USUARIO> <BANCO> > forge.dump` e `pg_restore --clean -d <BANCO> forge.dump` num banco vazio ou de teste. Guarde o dump em local institucional e restaure em ambiente de teste periodicamente.
+
+## Tarefas (FRG-15, ADR-010)
+`TaskService(repo)` gerencia projetos, etapas, tarefas e subtarefas sobre o mesmo banco (migração `0005`). Sem variável de ambiente nova.
+```python
+svc = TaskService(repo)
+proj = svc.create_project("Forge", actor="pessoa:ana"); etapa = svc.create_stage(proj.id, "Fase 1", "pessoa:ana")
+a = svc.create_task("Modelo", "pessoa:ana", stage_id=etapa.id, assignee_kind="agent", assignee_id="dev")
+b = svc.create_task("Testes", "pessoa:ana", stage_id=etapa.id)
+svc.add_dependency(b.id, a.id, "pessoa:ana")           # b depende de a (obrigatória)
+svc.is_ready(b.id)                                       # False: a ainda não está done
+svc.change_status(b.id, "in_progress", "pessoa:ana")     # TaskRuleError: dependências obrigatórias pendentes
+svc.update_task(a.id, "pessoa:ana", expected_version=1, priority="high")
+```
+- **Status:** `planned`, `pending`, `in_progress`, `blocked`, `in_validation`, `done`, `cancelled` (`cancelled` é extra, ADR-010).
+  `planned→pending|cancelled`; `pending→in_progress|blocked|cancelled`; `in_progress→blocked|in_validation|cancelled`; `blocked→pending|in_progress|cancelled`; `in_validation→done|in_progress|cancelled`; `done` e `cancelled` são finais.
+- **Pronta para execução:** `pending` com todas as dependências obrigatórias `done` (`is_ready`). Entrar em `in_progress` exige isso. Dependência opcional não bloqueia.
+- **Conclusão:** só `in_validation→done`, e só com as subtarefas obrigatórias `done`. Exemplo: pai com subtarefa obrigatória `in_progress` → `TaskRuleError`; a opcional pendente não impede.
+- **Subtarefa:** `create_task(..., parent_id=pai, required=True|False)`; profundidade 1; herda a etapa. Cancelar o pai não cancela as subtarefas.
+- **Responsável:** `assignee_kind` (`person`/`agent`) e `assignee_id`, juntos. O Core não verifica se existem.
+- **Datas:** `start_date` na primeira entrada em `in_progress` e `completed_at` em `done` são preenchidas pelo serviço; `due_date` é informada. Atualização por eventos externos é a FRG-17.
+- **Concorrência:** `update_task` exige `expected_version`; versão diferente levanta `TaskConflictError` (releia e tente de novo).
+- **Ciclos e concorrência:** `add_dependency` valida o ciclo e insere de forma atômica. No PostgreSQL toma `pg_advisory_xact_lock` global do grafo de dependências no início da transação (solta no commit/rollback); no SQLite, `BEGIN IMMEDIATE` já serializa. Escolhido por ser simples e o volume de mudanças no grafo ser baixo; custo: inclusões de dependência esperam umas pelas outras. Alternativas descartadas: SERIALIZABLE com retry (mais complexo) e linha guardiã por projeto (tarefas sem projeto ficariam sem guardião).
+- **Histórico:** `svc.changes(id)` (campo, valor antigo e novo, ator, data) e `repo.task_history(id)` (status). Ambos append-only (trigger). Toda mudança e toda recusa vão para `audit_log` (`task.create|update|status|dependency`, `project.create`, `stage.create`), só com nomes de campos e status: o texto da tarefa não entra na auditoria. Não coloque segredos em tarefas.
+- **API antiga:** `repo.create_task/set_task_status` seguem funcionando (sem regras de transição; `created`→`pending`, `running`→`in_progress`). Prefira `TaskService`.
+- **Papéis:** o escritor tem SELECT/INSERT em `task_changes`, `projects`, `stages` e SELECT/INSERT/UPDATE em `task_dependencies`; nenhum DELETE (reprovisione com `postgres_roles.sql`).
+- **Troubleshooting:** `TaskRuleError: transição inválida` → veja a tabela acima; `dependências obrigatórias pendentes` → conclua a dependência (uma dependência cancelada não conta como concluída; ajuste-a para opcional ou crie nova tarefa); `TaskConflictError` → releia a tarefa.
+- **Limitações:** dependências não podem ser removidas (sem DELETE), apenas alteradas entre obrigatória/opcional; sem edição de projeto/etapa; `done`/`cancelled` não reabrem; sem integração com `jobs` (FRG-24), GitHub (FRG-29) nem eventos (FRG-17).
 
 ## Fila de jobs (FRG-40)
 `SqlJobQueue(repo, settings=None, max_attempts=5, backoff_base=30, backoff_cap=3600, lease_seconds=300)` usa o mesmo banco e as mesmas migrações (`0003_jobs`). Sem variável de ambiente nova.
