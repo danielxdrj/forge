@@ -13,7 +13,11 @@ _SECRET = re.compile(r"(?i)(token|secret|password|senha|key)(\"?\s*[:=]\s*\"?)([
 _RESERVED = set(logging.makeLogRecord({}).__dict__) | {"message", "asctime"}
 
 
+TOKEN_SHAPE = re.compile(r"(?i)\b(gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{16,}|AKIA[0-9A-Z]{12,})")
+
+
 def redact(text: str) -> str:
+    text = TOKEN_SHAPE.sub("***", text)
     text = _AUTH.sub(r"\1***", text)
     text = _SCHEME.sub(r"\1 ***", text)
     return _SECRET.sub(r"\1\2***", text)

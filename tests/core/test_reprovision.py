@@ -122,3 +122,31 @@ def test_refusal_message_never_echoes_input(pg_env):
     with pytest.raises(ReprovisionError) as ei:
         reprovision(_owner(owner_repo), "papel_inexistente_xyz")
     assert ei.value.args[0] == "role_missing"
+
+
+def test_reprovision_preserves_other_roles_grants(pg_env):
+    writer, owner_repo, _ = pg_env
+    role = _role(writer)
+    conn = _owner(owner_repo)
+    conn.execute("CREATE ROLE forge_outro_leitor NOLOGIN")
+    conn.execute("GRANT SELECT ON audit_log TO forge_outro_leitor")
+    conn.commit()
+    try:
+        _simulate_old_database(owner_repo, role)
+        reprovision(conn, role)
+        assert conn.execute("SELECT has_table_privilege('forge_outro_leitor', 'audit_log', 'SELECT')").fetchone()[0]
+    finally:
+        conn.rollback()
+        conn.execute("DROP OWNED BY forge_outro_leitor")
+        conn.execute("DROP ROLE forge_outro_leitor")
+        conn.commit()
+
+
+def test_grants_script_never_revokes_or_grants_delete_truncate():
+    from forge_core.storage.provisioning.reprovision import SCRIPT
+
+    text = SCRIPT.read_text(encoding="utf-8").upper()
+    assert "REVOKE" not in text
+    for line in text.splitlines():
+        if line.startswith("GRANT"):
+            assert "DELETE" not in line and "TRUNCATE" not in line

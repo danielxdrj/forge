@@ -1,25 +1,29 @@
 """Executor isolado de agentes (FRG-6, ADR-013): um container não privilegiado por execução.
 
-Supervisor (processo do Forge, no host) controla o `docker` CLI; o filho roda com rede negada, raiz somente
-leitura, sem capacidades, não root, sem mounts e sem variáveis do host. O filho só recebe um payload mínimo
-(id, título, objetivo da tarefa) e devolve UMA linha JSON validada. Nada de desserialização executável.
+O supervisor (processo do Forge, no host) controla o `docker` CLI. O filho roda com rede negada, raiz somente
+leitura, sem capacidades, não root, sem mounts e sem variáveis do host (`run_args` é o único perfil). O filho
+recebe um payload mínimo e devolve UMA linha JSON validada. Nada é desserializado como código.
+
+Confirmação de remoção: só é considerada removida a ausência comprovada (o daemon respondeu e não listou o
+container). Falha operacional (daemon inacessível, erro de autenticação, timeout) é `cleanup_unconfirmed`.
 
 Limite honesto: o container compartilha o kernel do host. Isto reduz a superfície, não é sandbox absoluto.
-Para a regra "escrita só pelo pai", o filho nunca fala com o banco nem com a auditoria.
 """
 from __future__ import annotations
 
 import json
-import os
 import subprocess
-from datetime import datetime, timezone
 import threading
 import time
 import uuid
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 
+from ..config import Settings, load_settings, require_automation_enabled
+from ..errors import AgentError
 from ..logging import redact
-from .runtime import AgentRuntime, RunResult
+from .approval import PRIVILEGED_DISABLED_MESSAGE
+from .runtime import RunResult
 from .spec import AgentOutcome
 
 DEFAULT_IMAGE = "forge-agent-sandbox:prod"
@@ -28,7 +32,9 @@ MAX_OUTPUT_BYTES = 64 * 1024
 MAX_LOGS = 50
 MAX_LOG_CHARS = 300
 MAX_SUMMARY_CHARS = 2000
+CHILD_ERRORS = frozenset({"agent_exception", "unknown_agent", "invalid_outcome"})
 _KILL_GRACE = 10.0
+_DOCKER_TIMEOUT = 20.0
 _NAME_PREFIX = "forge-agent-"
 
 _LIMITS = (
@@ -51,9 +57,14 @@ class SandboxResult:
     status: str  # success | failure | error | timeout | cancelled
     summary: str = ""
     logs: list[str] = field(default_factory=list)
-    error: str | None = None  # só código fixo, nunca texto do agente ou da entrada
+    error: str | None = None  # só código fixo (allowlist), nunca texto do agente ou da entrada
     usage: dict | None = None
     cost: float | None = None
+
+
+def run_args(name: str, image: str, command: tuple[str, ...]) -> list[str]:
+    """Argumentos de `docker run` do perfil de execução. Único lugar em que as flags de isolamento existem."""
+    return ["run", "--rm", "-i", "--name", name, *_LIMITS, image, *command]
 
 
 def validate_output(raw: bytes) -> dict:
@@ -76,7 +87,7 @@ def validate_output(raw: bytes) -> dict:
             isinstance(x, str) and len(x) <= MAX_LOG_CHARS for x in logs):
         raise ValueError("invalid_output")
     error = data.get("error")
-    if error is not None and (not isinstance(error, str) or len(error) > 80):
+    if error is not None and not isinstance(error, str):
         raise ValueError("invalid_output")
     usage = data.get("usage")
     if usage is not None and (not isinstance(usage, dict) or len(usage) > 20 or not all(
@@ -90,105 +101,143 @@ def validate_output(raw: bytes) -> dict:
             "error": error, "usage": usage, "cost": cost}
 
 
-def _docker(*args: str, timeout: float = 15.0) -> subprocess.CompletedProcess:
-    return subprocess.run(["docker", *args], capture_output=True, timeout=timeout, check=False)
+def interpret_output(raw: bytes) -> SandboxResult:
+    """Transforma a saída bruta do filho em resultado. Erro de protocolo nunca carrega o conteúdo recebido."""
+    if len(raw) > MAX_OUTPUT_BYTES:
+        return SandboxResult("error", error="output_too_large")
+    try:
+        data = validate_output(raw)
+    except (ValueError, UnicodeDecodeError, json.JSONDecodeError):
+        return SandboxResult("error", error="invalid_output")
+    if data["status"] == "error":
+        code = data["error"] if data["error"] in CHILD_ERRORS else "invalid_output"
+        return SandboxResult("error", logs=data["logs"], error=code)
+    return SandboxResult(data["status"], data["summary"], data["logs"], usage=data["usage"], cost=data["cost"])
 
 
-def _container_exists(name: str) -> bool:
-    return _docker("container", "inspect", name).returncode == 0
+def _docker(*args: str) -> subprocess.CompletedProcess:
+    return subprocess.run(["docker", *args], capture_output=True, text=True, timeout=_DOCKER_TIMEOUT, check=False)
+
+
+def container_state(name: str) -> str:
+    """'present' | 'absent' (comprovado: o daemon respondeu sem listar o nome) | 'unknown' (falha operacional)."""
+    try:
+        out = _docker("ps", "-aq", "--no-trunc", "--filter", f"name=^{name}$")
+    except (OSError, subprocess.SubprocessError):
+        return "unknown"
+    if out.returncode != 0:
+        return "unknown"
+    return "present" if out.stdout.strip() else "absent"
+
+
+def _destroy(name: str, proc: subprocess.Popen, reader: threading.Thread) -> bool:
+    """Mata e remove o container e confirma a ausência comprovada. Nunca levanta exceção."""
+    deadline = time.monotonic() + _KILL_GRACE
+    state = "unknown"
+    while True:
+        for args in (("kill", "--signal", "KILL", name), ("rm", "-f", name)):
+            try:
+                _docker(*args)
+            except (OSError, subprocess.SubprocessError):
+                pass
+        state = container_state(name)
+        if state != "present" or time.monotonic() > deadline:
+            break
+        time.sleep(0.2)
+    try:
+        if proc.poll() is None:
+            proc.kill()
+        proc.wait(timeout=2)
+    except (OSError, subprocess.SubprocessError):
+        pass
+    reader.join(_KILL_GRACE)
+    return state == "absent"
+
+
+def _pump(proc: subprocess.Popen, request: bytes, box: dict) -> None:
+    try:
+        proc.stdin.write(request)
+        proc.stdin.close()
+    except OSError:
+        pass
+    try:
+        box["out"] = proc.stdout.read(MAX_OUTPUT_BYTES + 1)
+    except (OSError, ValueError):
+        box["out"] = b""
 
 
 class DockerSandbox:
     """Executa um agente num container descartável. Falha fechada: nunca cai para execução em thread."""
 
-    def __init__(self, image: str = DEFAULT_IMAGE, *, command: tuple[str, ...] = ("python", "-m",
-                 "forge_core.agents.sandbox_child"), extra_env: dict | None = None):
+    def __init__(self, image: str = DEFAULT_IMAGE, *, command: tuple[str, ...] = (
+            "python", "-m", "forge_core.agents.sandbox_child")):
         self._image = image
         self._command = command
-        self._extra = extra_env or {}
 
-    def run(self, agent, payload: dict, timeout: float, cancel_event=None) -> SandboxResult:
+    def run(self, agent, payload: dict, timeout: float, cancel_event: threading.Event | None = None) -> SandboxResult:
         name = f"{_NAME_PREFIX}{uuid.uuid4().hex}"
         request = json.dumps({"agent": agent.spec.name, "payload": payload}, ensure_ascii=False).encode() + b"\n"
-        args = ["run", "--rm", "-i", "--name", name, *_LIMITS]
-        for k, v in self._extra.items():
-            args += ["--env", f"{k}={v}"]
-        args += [self._image, *self._command]
         try:
-            proc = subprocess.Popen(["docker", *args], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                    stderr=subprocess.DEVNULL)
+            proc = subprocess.Popen(["docker", *run_args(name, self._image, self._command)],
+                                    stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
         except OSError:
             return SandboxResult("error", error="docker_unavailable")
         box: dict = {}
-
-        def talk():
-            try:
-                proc.stdin.write(request)
-                proc.stdin.close()
-            except OSError:
-                pass
-            box["out"] = proc.stdout.read(MAX_OUTPUT_BYTES + 1)
-
-        reader = threading.Thread(target=talk, daemon=True)
+        reader = threading.Thread(target=_pump, args=(proc, request, box), daemon=True)
         reader.start()
+        result = SandboxResult("error", error="supervisor_failed")
+        try:
+            result = self._collect(proc, reader, box, timeout, cancel_event)
+        except Exception:
+            pass
+        finally:
+            confirmed = _destroy(name, proc, reader)
+        if not confirmed:
+            return SandboxResult("error", error="cleanup_unconfirmed")
+        return result
+
+    @staticmethod
+    def _collect(proc, reader, box, timeout, cancel_event) -> SandboxResult:
         deadline = time.monotonic() + timeout
         while reader.is_alive() and time.monotonic() < deadline:
             if cancel_event is not None and cancel_event.is_set():
-                break
-            reader.join(0.05)
-        cancelled = reader.is_alive() and cancel_event is not None and cancel_event.is_set()
-        timed_out = reader.is_alive() and not cancelled
-        if cancelled or timed_out or len(box.get("out", b"")) > MAX_OUTPUT_BYTES:
-            if not self._destroy(name, proc, reader):
-                return SandboxResult("error", error="cleanup_unconfirmed")
-            if cancelled:
                 return SandboxResult("cancelled", error="cancelled")
-            return SandboxResult("timeout", error="timeout") if timed_out else SandboxResult(
-                "error", error="output_too_large")
-        proc.wait(timeout=_KILL_GRACE)
-        if not self._destroy(name, proc, reader):
-            return SandboxResult("error", error="cleanup_unconfirmed")
-        if proc.returncode == 125 and not box.get("out"):  # docker não conseguiu criar o container
-            return SandboxResult("error", error="sandbox_unavailable")
-        try:
-            data = validate_output(box.get("out", b""))
-        except (ValueError, UnicodeDecodeError, json.JSONDecodeError):
-            return SandboxResult("error", error="invalid_output")
-        if data["status"] == "error":
-            return SandboxResult("error", logs=data["logs"], error=data["error"] or "agent_error")
-        return SandboxResult(data["status"], data["summary"], data["logs"], usage=data["usage"], cost=data["cost"])
-
-    def _destroy(self, name: str, proc: subprocess.Popen, reader: threading.Thread) -> bool:
-        """Mata o container (e, com ele, todos os processos descendentes), remove e confirma a remoção."""
-        _docker("kill", "--signal", "KILL", name)
-        _docker("rm", "-f", name)
+            reader.join(0.05)
+        if reader.is_alive():
+            return SandboxResult("timeout", error="timeout")
+        raw = box.get("out", b"")
+        if len(raw) > MAX_OUTPUT_BYTES:
+            return SandboxResult("error", error="output_too_large")
         try:
             proc.wait(timeout=_KILL_GRACE)
         except subprocess.TimeoutExpired:
-            proc.kill()
-        reader.join(_KILL_GRACE)
-        deadline = time.monotonic() + _KILL_GRACE
-        while time.monotonic() < deadline:
-            if not _container_exists(name):
-                return True
-            _docker("rm", "-f", name)
-            time.sleep(0.2)
-        return not _container_exists(name)
+            return SandboxResult("error", error="sandbox_stalled")
+        if proc.returncode == 125 and not raw:  # docker não conseguiu criar o container (ex.: imagem ausente)
+            return SandboxResult("error", error="sandbox_unavailable")
+        return interpret_output(raw)
 
 
-class IsolatedRuntime(AgentRuntime):
-    """Mesmo contrato do AgentRuntime (gates, RunResult), com a execução dentro do DockerSandbox.
+class IsolatedRuntime:
+    """Gates e contrato de execução de agentes. A execução exige um DockerSandbox; sem ele, recusa."""
 
-    Sem fallback: se o sandbox falhar, o resultado é `error` (ou `timeout`); nunca roda em thread.
-    O pai continua dono de banco, auditoria e transições: o filho só devolve o resultado.
-    """
-
-    def __init__(self, sandbox: DockerSandbox, settings=None):
-        super().__init__(settings=settings)
+    def __init__(self, sandbox: DockerSandbox | None = None, settings: Settings | None = None):
         self._sandbox = sandbox
+        self._settings = settings
+
+    def check_allowed(self, agent) -> None:
+        """Gate de execução: automação ligada, agente ativo e somente `read`. Levanta se não puder executar."""
+        settings = self._settings if self._settings is not None else load_settings()
+        require_automation_enabled(settings)
+        spec = agent.spec
+        if spec.requires_approval:
+            raise AgentError(f"agente {spec.name} não executa: {PRIVILEGED_DISABLED_MESSAGE}")
+        if not spec.active or spec.name in settings.agents_disabled:
+            raise AgentError(f"agente desativado: {spec.name}")
 
     def execute(self, agent, ctx, timeout: float | None = None) -> RunResult:
         self.check_allowed(agent)
+        if self._sandbox is None:
+            raise AgentError("runtime isolado sem sandbox: execução recusada")
         timeout = agent.spec.timeout_seconds if timeout is None else timeout
         started = datetime.now(timezone.utc).isoformat()
         payload = {"task_id": ctx.task.id, "title": ctx.task.title, "objective": ctx.task.objective}
@@ -208,4 +257,6 @@ class IsolatedRuntime(AgentRuntime):
 
 def default_runtime(settings=None) -> IsolatedRuntime:
     """Runtime padrão do Orchestrator: Docker. Sem Docker ou imagem, o despacho falha fechado (sem thread)."""
+    import os
+
     return IsolatedRuntime(DockerSandbox(os.environ.get(IMAGE_ENV) or DEFAULT_IMAGE), settings=settings)

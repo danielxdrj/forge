@@ -59,6 +59,13 @@ def _probe() -> dict:
         if os.waitstatus_to_exitcode(status) != 0:
             raise MemoryError("limite de memória aplicado ao filho")
 
+    root_ro = False
+    for line in open("/proc/self/mountinfo"):
+        fields = line.split()
+        if fields[4] == "/":
+            root_ro = "ro" in fields[5].split(",")
+            break
+
     caps = open("/proc/self/status").read().split("CapEff:")[1].split()[0]
     return {
         "uid": os.getuid(),
@@ -68,7 +75,11 @@ def _probe() -> dict:
         "write_big_tmp_ok": _try(write_big_tmp),
         "fork_ok": _try(fork_bomb),
         "alloc_512m_ok": _try(big_alloc),
-        "secret_env_visible": "FORGE_DATABASE_URL" in os.environ or "FORGE_PG_PASSWORD" in os.environ,
+        "root_ro": root_ro,
+        "write_tmp_ok": _try(lambda: open("/tmp/ok-tmp", "w").close()),
+        "secret_env_visible": "FORGE_DATABASE_URL" in os.environ or "FORGE_PG_PASSWORD" in os.environ
+        or "FORGE_SENTINEL_PARENT" in os.environ,
+        "env_size": len(os.environ),
         "docker_sock_visible": os.path.exists("/var/run/docker.sock"),
         "host_repo_visible": os.path.exists("/agent/repos/forge") or os.path.exists("/home/runner/work"),
         "timings_s": TIMINGS,

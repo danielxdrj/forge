@@ -3,7 +3,7 @@ import threading
 import pytest
 
 from forge_core.agents import AgentContext, AgentOutcome, AgentRegistry, AgentSpec, EchoAgent, default_registry
-from forge_core.agents.runtime import AgentRuntime
+from inprocess_runtime import InProcessRuntime as AgentRuntime
 from forge_core.config import load_settings
 from forge_core.errors import AgentError, AgentFailure
 from forge_core.tasks.model import Task

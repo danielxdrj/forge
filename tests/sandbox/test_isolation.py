@@ -3,7 +3,6 @@ import json
 import time
 
 from conftest import leftover_containers
-from forge_core.agents.runtime import AgentRuntime
 from forge_core.agents.sandbox import IsolatedRuntime
 from forge_core.tasks.model import Task
 from forge_test_probe import SECRET_MARKER, ProbeAgent
@@ -38,6 +37,9 @@ def test_probe_blocks_every_escape_attempt(sandbox):
     assert d["write_big_tmp_ok"] is False
     assert d["fork_ok"] is False
     assert d["alloc_512m_ok"] is False
+    assert d["root_ro"] is True
+    assert d["write_tmp_ok"] is True
+    assert d["env_size"] < 20
     assert d["secret_env_visible"] is False
     assert d["docker_sock_visible"] is False
     assert d["host_repo_visible"] is False
@@ -66,7 +68,7 @@ def test_output_too_large_is_refused(sandbox):
 
 def test_agent_exception_only_reports_its_type(sandbox):
     res = _run(sandbox, "raise_secret")
-    assert res.status == "error" and res.error == "RuntimeError"
+    assert res.status == "error" and res.error == "agent_exception"
     assert SECRET_MARKER not in repr(res)
     assert leftover_containers() == []
 
@@ -121,3 +123,28 @@ def test_public_dispatch_with_missing_image_fails_closed(tmp_path, monkeypatch):
     assert res.run_status == "error" and res.error == "sandbox_unavailable"
     assert res.task_status != "in_validation"
     assert leftover_containers() == []
+
+
+def test_cancel_stops_container_and_leaves_nothing(sandbox):
+    import threading
+
+    from forge_core.agents.spec import AgentContext
+
+    ctx = _ctx("sleep")
+    timer = threading.Timer(2, ctx.cancel_event.set)
+    timer.start()
+    try:
+        res = IsolatedRuntime(sandbox, settings=_settings()).execute(ProbeAgent(), ctx, 30)
+    finally:
+        timer.cancel()
+    assert res.status == "cancelled"
+    assert leftover_containers() == []
+
+
+def test_parent_environment_does_not_reach_child(sandbox, monkeypatch):
+    monkeypatch.setenv("FORGE_SENTINEL_PARENT", "valor-sentinela-" + "z" * 20)
+    res = _run(sandbox, "probe")
+    d = json.loads(res.outcome.summary)
+    assert d["secret_env_visible"] is False
+    assert d["env_size"] < 20
+    assert "valor-sentinela" not in repr(res)

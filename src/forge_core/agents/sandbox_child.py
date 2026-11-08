@@ -39,7 +39,7 @@ def run(request: dict, registry_factory: str = REGISTRY_FACTORY) -> dict:
         with contextlib.redirect_stdout(sys.stderr):
             outcome = agent.run(ctx)
     except Exception as exc:
-        return {"status": "error", "error": type(exc).__name__[:80], "logs": ctx.logs}
+        return {"status": "error", "error": "agent_exception", "logs": ctx.logs}
     if outcome.status not in ("success", "failure"):
         return {"status": "error", "error": "invalid_outcome", "logs": ctx.logs}
     result = {"status": outcome.status, "summary": outcome.summary[:2000], "logs": ctx.logs}
