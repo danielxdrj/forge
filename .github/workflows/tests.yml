@@ -1,0 +1,58 @@
+name: Tests
+
+# Testes do Core e verificação real do isolamento de agentes (FRG-6). Roda em runner hospedado
+# (ubuntu-latest, público e gratuito, com Docker). Permissão mínima: só leitura do conteúdo.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  core:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: forge_ci
+          POSTGRES_PASSWORD: forge_ci_fake_password
+          POSTGRES_DB: forge_ci
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U forge_ci" --health-interval 2s --health-retries 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Instalar dependências de teste
+        run: python -m pip install -e ".[postgres,dev]"
+      - name: pytest sem banco
+        run: python -m pytest tests/core -q -p no:cacheprovider
+        env:
+          FORGE_DATABASE_URL: ""
+      - name: pytest com Postgres efêmero
+        run: python -m pytest tests/core -q -p no:cacheprovider
+        env:
+          FORGE_DATABASE_URL: postgresql://forge_ci:forge_ci_fake_password@127.0.0.1:5432/postgres
+
+  sandbox-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Confirmar Docker disponível
+        run: docker version --format '{{.Server.Version}}'
+      - name: Build da imagem do agente de teste
+        run: docker build -f deploy/sandbox/Dockerfile -t forge-agent-sandbox:ci .
+      - name: Smoke de isolamento (rede, root fs, usuário, capacidades)
+        run: bash deploy/sandbox/smoke.sh forge-agent-sandbox:ci
