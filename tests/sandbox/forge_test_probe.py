@@ -48,7 +48,16 @@ def _probe() -> dict:
                 os._exit(0)
 
     def big_alloc():
-        bytearray(512 * 1024 * 1024)
+        pid = os.fork()
+        if pid == 0:
+            try:
+                bytearray(512 * 1024 * 1024)
+                os._exit(0)
+            except MemoryError:
+                os._exit(3)
+        _, status = os.waitpid(pid, 0)
+        if os.waitstatus_to_exitcode(status) != 0:
+            raise MemoryError("limite de memória aplicado ao filho")
 
     caps = open("/proc/self/status").read().split("CapEff:")[1].split()[0]
     return {
