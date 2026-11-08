@@ -67,3 +67,12 @@ class AuthenticationError(ForgeError):
 
 class AuthorizationError(ForgeError):
     """A identidade autenticada não tem o papel exigido pela operação (ou o papel foi revogado)."""
+
+
+class DraftError(ForgeError):
+    """Falha no rascunho de issue (validação, LLM, arquivo, gh local). Código fixo; sem segredo."""
+
+    def __init__(self, code: str, hint: str = ""):
+        super().__init__(code if not hint else f"{code}: {hint}")
+        self.code = code
+        self.hint = hint

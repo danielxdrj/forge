@@ -59,6 +59,10 @@ A tela fica em `frontend`. JavaScript é a linguagem. React monta o que aparece,
 
 As seções são investigação, automações, log local, conexões e configurações. As listas começam vazias. O formulário de conexão pede nome, tipo, destino e referência do segredo, e não grava o valor do segredo. Não há chamada à API e não há registros de exemplo.
 
+## Rascunho de issue
+
+`src/forge_core/draft/` gera o corpo no template fixo a partir de um `ProviderAdapter` (implementação Cursor CLI). A validação é determinística. O `gh` só roda depois da confirmação, no processo Forge, com testes em dublê (`tests/core/test_draft.py`).
+
 ## O que este guia não cobre ainda
 
-LLM, upload de log, conectores externos, cofre de segredos, a ligação da tela com a API e a publicação de tarefas no GitHub continuam nas etapas seguintes.
+Upload de log, conectores externos, cofre de segredos, a ligação da tela com a API e agentes privilegiados continuam nas etapas seguintes.

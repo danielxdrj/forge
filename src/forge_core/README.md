@@ -15,6 +15,7 @@ src/forge_core/
   agents/         Orchestrator, executor isolado em container (FRG-6, ADR-013), registro e agente echo (veja agents/README.md)
   projects/       projetos e repositórios gerenciáveis (FRG-5; veja projects/README.md)
   tasks/          gerenciamento de tarefas (FRG-15): model, rules (puras), service (TaskService)
+  draft/          rascunho de issue (Cursor CLI + gh local; ADR-015)
   queue/          fila de jobs persistida (SqlJobQueue)
   storage/        persistência (FRG-42)
     repository.py   interface Repository e entidades
@@ -36,6 +37,8 @@ docker-compose.dev.yml  Postgres de dev/teste (127.0.0.1:5433)
 | `FORGE_DATABASE_MIGRATION_URL` | não | URL do papel dono/migrador. Se definida, `open_repository` migra com ela e a aplicação conecta só com `FORGE_DATABASE_URL` (papel escritor). Nunca logada |
 | `FORGE_AGENTS_DISABLED` | não | agentes desativados, separados por vírgula (ex.: `echo`) |
 | `FORGE_PG_USER`/`FORGE_PG_PASSWORD`/`FORGE_PG_DB` | só para o compose de dev | credenciais do Postgres local; use valores fora do Git |
+| `FORGE_GITHUB_CLIENT_ID` | para login | client id público do OAuth App (device flow) |
+| `FORGE_CURSOR_AGENT` / `FORGE_CURSOR_MODEL` / `FORGE_GH_BIN` | não | caminhos/opções do rascunho de issue; não são segredos |
 
 Com `FORGE_AUTOMATION_ENABLED=false`, `start()` levanta `AutomationDisabledError` e `main()` sai com código 2. Ausente = ligado.
 
@@ -94,6 +97,9 @@ svc.is_ready(b.id)                              # False: a ainda não está done
 svc.change_status(b.id, "in_progress", ana)     # TaskRuleError: dependências obrigatórias pendentes
 svc.update_task(a.id, ana, expected_version=1, priority="high")
 ```
+
+## Rascunho de issue (ADR-015)
+`python -m forge_core.draft draft` (ou `forge-tasks draft`) gera o markdown no modelo fixo, grava tarefa via `TaskService` (papel `editor`) e só então, com `s`/`N` ou `--yes`, chama o `gh` local. Cursor CLI: pasta temporária vazia e deny documentado; risco residual aceito. Runbook: `docs/operacao/rascunho-issue.md`.
 
 ## Autenticação humana (ADR-014)
 `forge_core.auth`: login por OAuth device flow do GitHub (`github.py`), identidades e papéis `owner`/`editor`/`approver` em tabelas append-only (`store.py`) e CLI local (`cli.py`). Pré-requisito humano e operação: `docs/operacao/autenticacao-humana.md`. Os testes usam transporte falso (`tests/core/test_auth.py`).
