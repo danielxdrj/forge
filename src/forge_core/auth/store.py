@@ -5,6 +5,8 @@ Regras:
 - Papéis (owner, editor, approver) são concedidos e revogados por linhas append-only. Revogação vale na
   próxima operação: não há cache de papel nem de sessão.
 - Só existe um dono inicial, por bootstrap explícito (linha única em `bootstrap_owner`).
+- Sessões e bootstrap só nascem de um token OAuth verificado pelo GitHub (`verify`). Não há entrada que
+  aceite id ou login informados pelo chamador.
 - `Principal` só é produzido por `resolve_session`, que confere o token no banco. Texto (`pessoa:*`) nunca
   concede autoridade.
 
@@ -19,8 +21,11 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
-from ..errors import AuthenticationError, AuthorizationError
+from collections.abc import Callable
+
+from ..errors import AuthenticationError, AuthorizationError, ConfigError
 from ..storage.sql import SqlRepository
+from .github import GitHubIdentity
 
 ROLES = ("owner", "editor", "approver")
 _ISSUED = object()
@@ -40,20 +45,6 @@ class Principal:
             raise AuthenticationError("principal_forged")
 
 
-@dataclass(frozen=True)
-class SystemActor:
-    """Atribuição de processo do Core (ex.: orquestrador). Não é pessoa: não aprova nem edita como humano.
-
-    Só serve para as transições de status que o próprio sistema executa (`TaskService.change_status`).
-    Texto nunca vale como sistema. Quem controla o processo pode instanciar isto: fronteira documentada (ADR-014).
-    """
-
-    name: str
-
-
-ORCHESTRATOR_SYSTEM = SystemActor("orchestrator")
-
-
 def identity_id_for(github_id: int) -> str:
     return f"gh:{github_id}"
 
@@ -71,8 +62,9 @@ def _is_integrity_error(exc: Exception) -> bool:
 
 
 class AuthStore:
-    def __init__(self, repo: SqlRepository):
+    def __init__(self, repo: SqlRepository, verify: Callable[[str], "GitHubIdentity"] | None = None):
         self._repo = repo
+        self._verify = verify
 
     # --- identidade e bootstrap ---
 
@@ -83,8 +75,38 @@ class AuthStore:
                    (iid, github_id, login, _now(), github_id))
         return iid
 
-    def bootstrap_owner(self, github_id: int, login: str) -> tuple[Principal, str]:
-        """Primeiro dono da instalação. Só funciona uma vez; a segunda chamada (ou a concorrente) é recusada."""
+    def serialize_authorization(self, tx) -> None:
+        """Serializa com revogações e consumos de autorização na mesma transação.
+
+        SQLite: `BEGIN IMMEDIATE` já serializa escritores (no-op aqui). PostgreSQL: lock consultivo de
+        transação, sem privilégio de tabela extra. Sem isso, uma revogação poderia cair entre a checagem e o INSERT.
+        """
+        if self._repo.dialect != "sqlite":
+            tx.execute("SELECT pg_advisory_xact_lock(hashtext('forge:autorizacao'))")
+
+    def has_owner(self) -> bool:
+        return bool(self._repo.fetch("SELECT 1 FROM bootstrap_owner"))
+
+    def _verified(self, access_token: str) -> tuple[int, str]:
+        """Identidade vem SOMENTE do GitHub, a partir do token OAuth. Nunca de id ou login informados."""
+        if self._verify is None:
+            raise ConfigError("verificação de identidade não configurada")
+        if not isinstance(access_token, str) or not access_token:
+            raise AuthenticationError("invalid_identity")
+        ident = self._verify(access_token)
+        return ident.github_id, ident.login
+
+    def bootstrap_owner(self, access_token: str, expected_github_id: int) -> tuple[Principal, str]:
+        """Primeiro dono. Exige o id GitHub esperado (âncora do operador) e confere a identidade verificada.
+
+        Só funciona uma vez: a segunda chamada, ou a concorrente, é recusada pela linha singleton.
+        A identidade é conferida antes de qualquer escrita.
+        """
+        if self.has_owner():
+            raise AuthorizationError("bootstrap_already_done")
+        github_id, login = self._verified(access_token)
+        if github_id != expected_github_id:
+            raise AuthenticationError("bootstrap_identity_mismatch")
         try:
             with self._repo.transaction() as tx:
                 iid = self._upsert_identity(tx, github_id, login)
@@ -98,12 +120,16 @@ class AuthStore:
                 self._repo.record_audit("sistema:auth", "auth.bootstrap", "identity:new", "error: ja_inicializado")
                 raise AuthorizationError("bootstrap_already_done") from None
             raise
-        return self.open_session(github_id, login)
+        return self._open(github_id, login)
 
     # --- sessão ---
 
-    def open_session(self, github_id: int, login: str) -> tuple[Principal, str]:
-        """Cria sessão. Devolve (Principal, token). O token é mostrado uma vez; no banco fica só o hash."""
+    def open_session(self, access_token: str) -> tuple[Principal, str]:
+        """Sessão para a identidade verificada pelo GitHub. Devolve (Principal, token); no banco fica só o hash."""
+        github_id, login = self._verified(access_token)
+        return self._open(github_id, login)
+
+    def _open(self, github_id: int, login: str) -> tuple[Principal, str]:
         token = secrets.token_urlsafe(32)
         sid = uuid.uuid4().hex
         with self._repo.transaction() as tx:
@@ -134,9 +160,7 @@ class AuthStore:
             tx.audit(principal.identity_id, "auth.session_revoke", f"session:{principal.session_id}", "ok")
 
     def transition_actor(self, actor) -> str:
-        """Autor de uma transição de status: o orquestrador (SystemActor) ou uma pessoa com papel `editor`."""
-        if isinstance(actor, SystemActor) and actor == ORCHESTRATOR_SYSTEM:
-            return f"sistema:{actor.name}"
+        """Autor de uma transição de status: sempre uma pessoa autenticada com papel `editor` agora."""
         return self.require(actor, "editor").identity_id
 
     def human_id(self, principal, role: str) -> str:
@@ -194,6 +218,7 @@ class AuthStore:
             raise AuthorizationError("last_owner")
         try:
             with self._repo.transaction() as tx:
+                self.serialize_authorization(tx)
                 tx.execute("INSERT INTO role_revocations (grant_id, revoked_by, revoked_at) VALUES (?, ?, ?)",
                            (grant_id, owner.identity_id, _now()))
                 tx.audit(owner.identity_id, "auth.revoke", f"identity:{iid}", f"ok: role={role}")

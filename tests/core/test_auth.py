@@ -10,10 +10,11 @@ import urllib.error
 
 import pytest
 
-from auth_helpers import TEST_CLIENT_ID, FakeGitHub, actor, login
+from auth_helpers import TEST_CLIENT_ID, FakeGitHub, actor, oauth_token
 from forge_core.auth import cli
-from forge_core.auth.github import DeviceCode, DeviceFlow, DeviceFlowError, UrllibTransport
-from forge_core.auth.store import ORCHESTRATOR_SYSTEM, AuthStore, Principal, SystemActor
+from forge_core.auth.github import DeviceFlow, DeviceFlowError, UrllibTransport
+from forge_core.auth.github import GitHubIdentity
+from forge_core.auth.store import AuthStore, Principal
 from forge_core.errors import AuthenticationError, AuthorizationError, ConfigError
 from forge_core.storage import open_repository
 from forge_core.tasks import TaskService, TaskStatus as S
@@ -139,13 +140,13 @@ def test_only_hash_of_session_token_is_persisted_and_no_secret_leaks(make_repo, 
     caplog.set_level(logging.DEBUG)
     repo = make_repo()
     gh = Scripted([])
-    gh.select = lambda *a: None
     flow = DeviceFlow(TEST_CLIENT_ID, gh, sleep=lambda s: None)
-    _dc, ident = flow.login()
-    principal, token = AuthStore(repo).bootstrap_owner(ident.github_id, ident.login)
+    oauth = flow.poll_token(flow.start())
+    principal, token = AuthStore(repo, verify=flow.identity).bootstrap_owner(oauth, 42)
     stored = repo.fetch("SELECT token_hash FROM sessions")
     assert stored == [(hashlib.sha256(token.encode()).hexdigest(),)]
     assert SECRET_TOKEN not in json.dumps(repo.fetch("SELECT * FROM sessions"), default=str)
+    assert SECRET_TOKEN not in json.dumps(repo.fetch("SELECT * FROM identities"), default=str)
     dump = repr(repo.list_audit()) + caplog.text
     assert SECRET_TOKEN not in dump and token not in dump
 
@@ -154,8 +155,9 @@ def test_bootstrap_only_once_and_sanitized(make_repo):
     repo = make_repo()
     gh = FakeGitHub()
     actor(repo, "dona")  # primeiro dono já criado pelo elenco de teste (caminho real de bootstrap)
+    flow, oauth = oauth_token(gh, "intruso", 9999)
     with pytest.raises(AuthorizationError, match="bootstrap_already_done"):
-        AuthStore(repo).bootstrap_owner(9999, "intruso")
+        AuthStore(repo, verify=flow.identity).bootstrap_owner(oauth, 9999)
     assert repo.fetch("SELECT COUNT(*) FROM bootstrap_owner")[0][0] == 1
     assert not repo.fetch("SELECT 1 FROM identities WHERE github_id = 9999")
 
@@ -170,7 +172,7 @@ def test_concurrent_bootstrap_has_exactly_one_winner(tmp_path):
         repo = open_repository(url)
         barrier.wait()
         try:
-            AuthStore(repo).bootstrap_owner(gid, f"p{gid}")
+            AuthStore(repo, verify=lambda t: GitHubIdentity(int(t), f"p{t}")).bootstrap_owner(str(gid), gid)
             results.append(("ok", gid))
         except AuthorizationError as exc:
             results.append(("refused", str(exc)))
@@ -251,16 +253,66 @@ def test_text_and_forged_objects_grant_no_authority(make_repo):
         Principal("gh:1000", "dona", "sessao", _issued=object())
 
 
-def test_system_actor_only_moves_status_and_never_edits_or_approves(make_repo):
+class _FakeSystem:
+    """Objeto fabricado pelo chamador, com a mesma forma que um sistema antigo tinha."""
+    name = "orchestrator"
+    identity_id = "sistema:orchestrator"
+
+
+@pytest.mark.parametrize("fake", ["sistema:orchestrator", "agente:triagem", _FakeSystem(),
+                                  {"identity_id": "gh:1000"}, None])
+def test_status_change_refuses_text_and_fabricated_actors(make_repo, fake):
     repo = make_repo()
     svc = TaskService(repo)
     t = svc.create_task("t", actor(repo, "ana"))
-    svc.change_status(t.id, S.IN_PROGRESS, ORCHESTRATOR_SYSTEM)
-    assert svc.changes(t.id)[-1].actor == "sistema:orchestrator"
     with pytest.raises(AuthenticationError, match="principal_missing"):
-        svc.update_task(t.id, ORCHESTRATOR_SYSTEM, 2, title="sistema editando")
-    with pytest.raises(AuthenticationError, match="principal_missing"):
-        svc.create_task("nova", SystemActor("orchestrator"))
+        svc.change_status(t.id, S.IN_PROGRESS, fake)
+    assert svc.get_task(t.id).status == S.PENDING
+    assert not any(c.actor.startswith("sistema:") for c in svc.changes(t.id))
+
+
+def test_status_change_by_person_without_editor_role_is_refused(make_repo):
+    repo = make_repo()
+    svc = TaskService(repo)
+    t = svc.create_task("t", actor(repo, "ana"))
+    with pytest.raises(AuthorizationError, match="forbidden"):
+        svc.change_status(t.id, S.IN_PROGRESS, actor(repo, "solta"))
+    assert svc.get_task(t.id).status == S.PENDING
+
+
+def test_direct_session_and_bootstrap_calls_cannot_choose_an_identity(make_repo):
+    repo = make_repo()
+    gh = FakeGitHub()
+    flow, oauth = oauth_token(gh, "eva", 555)
+    store = AuthStore(repo, verify=flow.identity)
+    with pytest.raises(TypeError):
+        store.open_session(1000, "dona")  # sem id/login de entrada
+    with pytest.raises(AuthenticationError, match="invalid_identity"):
+        store.bootstrap_owner(1000, 1000)  # token não string nunca vira identidade
+    assert repo.fetch("SELECT COUNT(*) FROM bootstrap_owner")[0][0] == 0
+    with pytest.raises(ConfigError):
+        AuthStore(repo).open_session(oauth)  # sem verificador, não emite sessão
+    with pytest.raises(AuthenticationError, match="invalid_identity"):
+        store.open_session("")
+    assert repo.fetch("SELECT COUNT(*) FROM sessions")[0][0] == 0
+
+
+def test_bootstrap_with_verified_identity_other_than_expected_writes_nothing(make_repo):
+    repo = make_repo()
+    gh = FakeGitHub()
+    flow, oauth = oauth_token(gh, "eva", 555)
+    with pytest.raises(AuthenticationError, match="bootstrap_identity_mismatch"):
+        AuthStore(repo, verify=flow.identity).bootstrap_owner(oauth, 1000)
+    assert repo.fetch("SELECT COUNT(*) FROM bootstrap_owner")[0][0] == 0
+    assert repo.fetch("SELECT COUNT(*) FROM role_grants")[0][0] == 0
+    assert repo.fetch("SELECT COUNT(*) FROM sessions")[0][0] == 0
+
+
+def test_verifier_decides_identity_not_the_caller(make_repo):
+    repo = make_repo()
+    store = AuthStore(repo, verify=lambda token: GitHubIdentity(777, "nome-real"))
+    principal, _ = store.open_session("qualquer-token")
+    assert (principal.identity_id, principal.login) == ("gh:777", "nome-real")
 
 
 def test_principal_from_another_database_is_rejected(make_repo, tmp_path):
@@ -291,7 +343,8 @@ def test_auth_tables_are_append_only_and_writer_cannot_change_them_postgres(pg_e
 
     writer, owner, _ = pg_env
     actor(writer, "dona")
-    with pytest.raises(psycopg.errors.RaiseException, match="append-only"):
+    # TRUNCATE em tabela referenciada por FK é recusado pelo próprio Postgres, antes do gatilho: continua bloqueado.
+    with pytest.raises((psycopg.errors.RaiseException, psycopg.errors.FeatureNotSupported), match="append-only|foreign key|truncate|TRUNCATE"):
         owner._run([(sql, ())])
     with pytest.raises(psycopg.errors.InsufficientPrivilege):
         writer._run([(sql, ())])
@@ -305,29 +358,61 @@ def cli_env(tmp_path):
         "FORGE_CONFIG_DIR": str(tmp_path / "cfg"),
         "FORGE_DATABASE_URL": f"sqlite:///{tmp_path / 'cli.db'}",
         "FORGE_GITHUB_CLIENT_ID": TEST_CLIENT_ID,
-        "FORGE_SESSION_FILE": str(tmp_path / "sessao" / "session.json"),
     }
 
 
-def test_cli_bootstrap_whoami_grant_logout_flow(cli_env, tmp_path, capsys):
+def _files_under(root):
+    return [p for p in root.rglob("*") if p.is_file() and p.name != "cli.db"]
+
+
+def test_cli_bootstrap_only_for_expected_identity_and_no_session_file(cli_env, tmp_path, caplog):
+    caplog.set_level(logging.DEBUG)
     gh = Scripted([], token=SECRET_TOKEN, user=(42, "maria"))
     out, err = _Buf(), _Buf()
-    assert cli.run(["bootstrap"], cli_env, transport=gh, out=out, err=err) == 0
-    session = tmp_path / "sessao" / "session.json"
-    assert oct(session.stat().st_mode & 0o777) == "0o600"
+    assert cli.run(["bootstrap", "--expect-github-id", "42"], cli_env, transport=gh, out=out, err=err) == 0
     assert "ABCD-1234" in out.text and SECRET_TOKEN not in out.text + err.text
+    assert _files_under(tmp_path) == []
+    assert SECRET_TOKEN not in caplog.text
+
+    repo = open_repository(cli_env["FORGE_DATABASE_URL"])
+    assert repo.fetch("SELECT COUNT(*) FROM sessions")[0][0] == repo.fetch(
+        "SELECT COUNT(*) FROM session_revocations")[0][0] == 1
+    assert SECRET_TOKEN not in repr(repo.list_audit())
 
     out2 = _Buf()
-    assert cli.run(["whoami"], cli_env, out=out2) == 0
-    info = json.loads(out2.text)
+    assert cli.run(["whoami"], cli_env, transport=Scripted([], token="outro-token", user=(42, "maria")),
+                   out=out2) == 0
+    info = json.loads(out2.text.strip().splitlines()[-1])
     assert info["login"] == "maria" and info["identity"] == "gh:42" and info["roles"] == ["owner"]
 
-    assert cli.run(["grant", "--github-id", "1001", "--role", "editor"], cli_env, out=_Buf()) == 1  # gh:1001 não entrou
-    assert cli.run(["logout"], cli_env, out=_Buf()) == 0
-    assert not session.exists()
-    err3 = _Buf()
-    assert cli.run(["whoami"], cli_env, out=_Buf(), err=err3) == 1
-    assert "sessao_ausente" in err3.text
+
+def test_cli_bootstrap_refuses_other_identity_without_writing(cli_env):
+    gh = Scripted([], token=SECRET_TOKEN, user=(42, "maria"))
+    err = _Buf()
+    assert cli.run(["bootstrap", "--expect-github-id", "99"], cli_env, transport=gh, out=_Buf(), err=err) == 1
+    assert "bootstrap_identity_mismatch" in err.text and SECRET_TOKEN not in err.text
+    repo = open_repository(cli_env["FORGE_DATABASE_URL"])
+    assert repo.fetch("SELECT COUNT(*) FROM bootstrap_owner")[0][0] == 0
+    assert repo.fetch("SELECT COUNT(*) FROM sessions")[0][0] == 0
+
+
+def test_cli_bootstrap_refused_before_login_when_already_done(cli_env):
+    gh = Scripted([], token=SECRET_TOKEN, user=(42, "maria"))
+    assert cli.run(["bootstrap", "--expect-github-id", "42"], cli_env, transport=gh, out=_Buf(), err=_Buf()) == 0
+    err = _Buf()
+    assert cli.run(["bootstrap", "--expect-github-id", "42"], cli_env, transport=gh, out=_Buf(), err=err) == 1
+    assert "bootstrap_already_done" in err.text
+
+
+def test_cli_whoami_shows_no_roles_and_revokes_its_session(cli_env):
+    gh = Scripted([], token=SECRET_TOKEN, user=(7, "joao"))
+    out, err = _Buf(), _Buf()
+    assert cli.run(["whoami"], cli_env, transport=gh, out=out, err=err) == 0
+    assert json.loads(out.text.strip().splitlines()[-1])["roles"] == []
+    assert SECRET_TOKEN not in out.text + err.text
+    repo = open_repository(cli_env["FORGE_DATABASE_URL"])
+    assert repo.fetch("SELECT COUNT(*) FROM sessions")[0][0] == repo.fetch(
+        "SELECT COUNT(*) FROM session_revocations")[0][0] == 1
 
 
 def test_cli_errors_print_codes_only(cli_env, tmp_path):
@@ -336,7 +421,7 @@ def test_cli_errors_print_codes_only(cli_env, tmp_path):
             raise DeviceFlowError("network")
 
     err = _Buf()
-    assert cli.run(["login"], cli_env, transport=Boom(), out=_Buf(), err=err) == 1
+    assert cli.run(["whoami"], cli_env, transport=Boom(), out=_Buf(), err=err) == 1
     assert "network" in err.text and "Traceback" not in err.text
 
 
@@ -344,7 +429,8 @@ def test_cli_refuses_missing_client_id(cli_env):
     env = dict(cli_env)
     env.pop("FORGE_GITHUB_CLIENT_ID")
     err = _Buf()
-    assert cli.run(["bootstrap"], env, transport=Scripted([]), out=_Buf(), err=err) == 1
+    assert cli.run(["bootstrap", "--expect-github-id", "42"], env, transport=Scripted([]), out=_Buf(),
+                   err=err) == 1
     assert "FORGE_GITHUB_CLIENT_ID" in err.text
 
 

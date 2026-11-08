@@ -52,8 +52,8 @@ pytest
 `open_repository(url)` aplica as migrações pendentes e devolve um `Repository`. Cada `create_task`/`set_task_status` grava tarefa, evento de histórico e auditoria (quem, o quê, quando, alvo, resultado) na mesma transação; título, ator, alvo e resultado passam por `redact()`. Exemplo:
 ```python
 repo = open_repository(settings.database_url)
-task = repo.create_task("investigar alerta", actor="agente:triagem")
-repo.set_task_status(task.id, "running", actor="sistema:triagem")  # API legada: recusa autoria humana (ADR-014)
+# API legada de escrita de tarefa está desativada: use TaskService com Principal autenticado (ADR-014)
+task = TaskService(repo).create_task("investigar alerta", principal)
 repo.task_history(task.id); repo.list_audit()
 ```
 Outros componentes devem chamar `repo.record_audit(actor, action, target, result)` para operações próprias.
@@ -80,7 +80,7 @@ Rodam automaticamente em `open_repository`. Para criar uma: adicione `NNNN_descr
 `ProjectService` cadastra, lista, edita e desativa projetos e repositórios (migração `0008`, nunca apaga, `settings` validadas) e expõe `resolve_target` para a FRG-21. Veja `projects/README.md`.
 
 ## Orquestrador e agentes (FRG-24, ADR-011)
-`Orchestrator.dispatch(task_id)` despacha uma tarefa pronta ao agente designado e grava o resultado em `agent_runs`, `task_changes` e `audit_log`. Contrato, ficha, diagrama, exemplo e como adicionar agente: `agents/README.md`. Fronteira: só agentes `read` executam (registro e runtime recusam o resto; aprovação não é autenticação e não libera nada); só o `echo` existe. Reserva atômica de aprovação em `approval_consumptions` (migração `0007`). Papéis: o escritor tem SELECT/INSERT em `agent_runs` e `approval_consumptions` (append-only, sem DELETE); reprovisione com `postgres_roles.sql`. Limitações: timeout não mata a thread (FRG-6).
+`Orchestrator.dispatch(task_id, principal)` despacha (exige pessoa com papel `editor`; não há despacho autônomo por fila até existir identidade de serviço real) uma tarefa pronta ao agente designado e grava o resultado em `agent_runs`, `task_changes` e `audit_log`. Contrato, ficha, diagrama, exemplo e como adicionar agente: `agents/README.md`. Fronteira: só agentes `read` executam (registro e runtime recusam o resto; aprovação não é autenticação e não libera nada); só o `echo` existe. Reserva atômica de aprovação em `grant_consumptions` (migração `0010`; `approval_consumptions` da `0007` fica como histórico). Papéis: o escritor tem SELECT/INSERT em `agent_runs`, `grant_consumptions` e `approval_consumptions` (append-only, sem DELETE); reprovisione com `postgres_roles.sql`. Limitações: timeout não mata a thread (FRG-6).
 
 ## Tarefas (FRG-15, ADR-010)
 `TaskService(repo)` gerencia projetos, etapas, tarefas e subtarefas sobre o mesmo banco (migração `0005`). Toda escrita humana recebe um `Principal` autenticado com papel `editor` (ADR-014). Texto como `"pessoa:ana"` é recusado. Em exemplos, `ana` é um Principal obtido por login (`python -m forge_core.auth.cli login`).

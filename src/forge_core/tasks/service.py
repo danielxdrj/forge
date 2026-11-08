@@ -131,6 +131,8 @@ class TaskService:
                     start_date: str | None = None, due_date: str | None = None,
                     stage_id: str | None = None, parent_id: str | None = None, required: bool = True) -> Task:
         actor = self._auth.human_id(actor, "editor")
+        title, objective, context, scope, acceptance_criteria = (
+            redact(v) for v in (title, objective, context, scope, acceptance_criteria))
         task_id = str(uuid.uuid4())
 
         def fn(tx, now):
@@ -161,6 +163,7 @@ class TaskService:
     def update_task(self, task_id: str, actor: str, expected_version: int, **fields) -> Task:
         """Edita campos (não o status). `expected_version` evita sobrescrever mudança de outra pessoa."""
         actor = self._auth.human_id(actor, "editor")
+        fields = {k: redact(v) if isinstance(v, str) else v for k, v in fields.items()}
         def fn(tx, now):
             unknown = set(fields) - set(_EDITABLE)
             if unknown:

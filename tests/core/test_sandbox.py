@@ -148,7 +148,7 @@ def test_public_dispatch_without_docker_fails_closed_and_never_runs_in_thread(tm
     repo = open_repository(f"sqlite:///{tmp_path / 'd.db'}")
     svc = TaskService(repo)
     t = svc.create_task("tarefa", actor(svc, "ana"), assignee_kind="agent", assignee_id="echo")
-    res = Orchestrator(repo, default_registry(), tasks=svc, settings=_settings()).dispatch(t.id)
+    res = Orchestrator(repo, default_registry(), tasks=svc, settings=_settings()).dispatch(t.id, actor(repo, "ana"))
     assert res.run_status == "error" and res.error == "docker_unavailable"
     assert res.outcome is None and res.task_status != "in_validation"
     assert svc.get_task(t.id).status != "in_validation"

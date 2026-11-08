@@ -188,17 +188,22 @@ def test_planned_initial_status_and_assignee_pair(make_service):
     assert (p.assignee_kind, p.assignee_id) == ("person", "ana")
 
 
-def test_legacy_repository_api_refuses_human_authorship(make_service):
+def actor_id(svc, name):
+    return actor(svc, name).identity_id
+
+
+def test_legacy_repository_api_refuses_every_actor_and_writes_nothing(make_service):
     svc, repo, _ = make_service()
-    with pytest.raises(ConfigError, match="TaskService"):
-        repo.create_task("antiga", "pessoa:ana")
+    for ator in ("pessoa:ana", "gh:1001", "sistema:migracao", "agente:qualquer", "sistema:orchestrator"):
+        with pytest.raises(ConfigError, match="TaskService"):
+            repo.create_task("antiga", ator)
     with pytest.raises(ConfigError, match="TaskService"):
         repo.create_task("antiga", actor(svc, "ana"))
-    legacy = repo.create_task("antiga", "sistema:migracao")
-    repo.set_task_status(legacy.id, "running", "sistema:migracao")
-    got = svc.get_task(legacy.id)
-    assert got.status == "in_progress" and got.version == 2
-    assert [c.new_value for c in svc.changes(legacy.id)] == ["pending", "in_progress"]
+    t = svc.create_task("nova", actor(svc, "ana"))
+    with pytest.raises(ConfigError, match="TaskService"):
+        repo.set_task_status(t.id, "in_progress", "sistema:migracao")
+    assert svc.get_task(t.id).status == "pending" and svc.get_task(t.id).version == 1
+    assert [c.actor for c in svc.changes(t.id)] == [actor_id(svc, "ana")]
 
 
 def test_task_log_tables_are_append_only_sqlite(tmp_path):

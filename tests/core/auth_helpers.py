@@ -36,19 +36,23 @@ class FakeGitHub:
         self._pending_token = self.register(login, github_id)
 
 
-def login(repo, gh: FakeGitHub, login_name: str, github_id: int):
-    """Login verificado: device flow falso, sessão nova, e resolução do token no banco."""
+def oauth_token(gh: FakeGitHub, login_name: str, github_id: int):
+    """Token OAuth obtido pelo device flow falso. Só isto entra no store; id e login vêm do GitHub."""
     gh.select(login_name, github_id)
     flow = DeviceFlow(TEST_CLIENT_ID, gh, sleep=lambda s: None)
-    _dc, ident = flow.login()
-    _principal, token = AuthStore(repo).open_session(ident.github_id, ident.login)
-    return AuthStore(repo).resolve_session(token)
+    return flow, flow.poll_token(flow.start())
+
+
+def login(repo, gh: FakeGitHub, login_name: str, github_id: int):
+    """Login verificado: device flow falso, sessão nova, e resolução do token de sessão no banco."""
+    flow, oauth = oauth_token(gh, login_name, github_id)
+    _principal, session_token = AuthStore(repo, verify=flow.identity).open_session(oauth)
+    return AuthStore(repo).resolve_session(session_token)
 
 
 def bootstrap(repo, gh: FakeGitHub, login_name: str = "dona", github_id: int = 1000):
-    gh.select(login_name, github_id)
-    _dc, ident = DeviceFlow(TEST_CLIENT_ID, gh, sleep=lambda s: None).login()
-    principal, _token = AuthStore(repo).bootstrap_owner(ident.github_id, ident.login)
+    flow, oauth = oauth_token(gh, login_name, github_id)
+    principal, _token = AuthStore(repo, verify=flow.identity).bootstrap_owner(oauth, github_id)
     return principal
 
 

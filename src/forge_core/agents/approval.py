@@ -35,7 +35,7 @@ def decide(spec: AgentSpec, approved: bool) -> str:
 class ApprovalLedger:
     """Concessão em `approval_grants` (ligada à identidade e à versão) e reserva atômica de uso único.
 
-    `reserve` insere o grant_id em `approval_consumptions` (chave primária). Duas reservas concorrentes da
+    `reserve` insere o grant_id em `grant_consumptions` (chave primária, namespace próprio de `approval_grants`). Duas reservas concorrentes da
     mesma concessão: só uma vence. A reserva confere, no momento do consumo, que a versão ainda é a aprovada
     e que o aprovador ainda tem o papel `approver`. Concessão revogada ou versão alterada não libera.
     """
@@ -46,16 +46,18 @@ class ApprovalLedger:
         self._clock = clock or (lambda: datetime.now(timezone.utc))
         self._after_candidate_read: Callable[[], None] | None = None  # gancho de teste
 
-    def _task_version(self, task_id: str) -> int | None:
-        rows = self._repo.fetch("SELECT version FROM tasks WHERE id = ?", (task_id,))
+    def _task_version(self, task_id: str, tx=None, lock: bool = False) -> int | None:
+        sql = "SELECT version FROM tasks WHERE id = ?"
+        if lock and self._repo.dialect != "sqlite":
+            sql += " FOR UPDATE"
+        rows = tx.execute(sql, (task_id,)).fetchall() if tx is not None else self._repo.fetch(sql, (task_id,))
         return rows[0][0] if rows else None
 
     def _untrusted_authorship(self, task_id: str) -> bool:
         return any(not actor.startswith(("gh:", "agente:", "sistema:")) for actor in self._auth.editors_of(task_id))
 
     def grant(self, task_id: str, approver, agent: str) -> None:
-        version = self._task_version(task_id)
-        if version is None:
+        if self._task_version(task_id) is None:
             raise ApprovalError("aprovação recusada: tarefa inexistente")
         try:
             principal = self._auth.require(approver, "approver")
@@ -68,6 +70,10 @@ class ApprovalLedger:
         if principal.identity_id in self._auth.editors_of(task_id):
             self._refuse(principal.identity_id, task_id, "self_approval")
         with self._repo.transaction() as tx:
+            self._auth.serialize_authorization(tx)
+            version = self._task_version(task_id, tx, lock=True)
+            if version is None:
+                raise ApprovalError("aprovação recusada: tarefa inexistente")
             tx.execute("INSERT INTO approval_grants (task_id, agent, task_version, identity_id, granted_at) "
                        "VALUES (?, ?, ?, ?, ?)",
                        (task_id, agent, version, principal.identity_id, self._clock().isoformat()))
@@ -80,7 +86,7 @@ class ApprovalLedger:
 
     _CANDIDATE = (
         "SELECT g.id FROM approval_grants g WHERE g.task_id = ? AND g.agent = ? AND g.task_version = ? "
-        "AND NOT EXISTS (SELECT 1 FROM approval_consumptions c WHERE c.grant_id = g.id) "
+        "AND NOT EXISTS (SELECT 1 FROM grant_consumptions c WHERE c.grant_id = g.id) "
         "AND EXISTS (SELECT 1 FROM role_grants rg WHERE rg.identity_id = g.identity_id AND rg.role = 'approver' "
         "AND NOT EXISTS (SELECT 1 FROM role_revocations rv WHERE rv.grant_id = rg.id)) ORDER BY g.id"
     )
@@ -94,13 +100,18 @@ class ApprovalLedger:
         return rows[0][0]
 
     def reserve(self, task_id: str, agent: str, consumed_by: str) -> int | None:
-        """Consome uma concessão disponível e devolve o grant_id, ou None se não houver."""
+        """Consome uma concessão disponível e devolve o grant_id, ou None se não houver.
+
+        Versão, papel do aprovador e consumo são conferidos e gravados na MESMA transação, depois de
+        serializada com revogações (`serialize_authorization`) e com o bloqueio da linha da tarefa.
+        """
         for _ in range(_MAX_ATTEMPTS):
-            version = self._task_version(task_id)
-            if version is None:
-                return None
             try:
                 with self._repo.transaction() as tx:
+                    self._auth.serialize_authorization(tx)
+                    version = self._task_version(task_id, tx, lock=True)
+                    if version is None:
+                        return None
                     rows = tx.execute(self._CANDIDATE + " LIMIT 1", (task_id, agent, version)).fetchall()
                     if not rows:
                         return None
@@ -108,7 +119,7 @@ class ApprovalLedger:
                     if self._after_candidate_read is not None:
                         self._after_candidate_read()
                     tx.execute(
-                        "INSERT INTO approval_consumptions (grant_id, task_id, agent, consumed_by, consumed_at) "
+                        "INSERT INTO grant_consumptions (grant_id, task_id, agent, consumed_by, consumed_at) "
                         "VALUES (?, ?, ?, ?, ?)",
                         (grant_id, task_id, agent, consumed_by, self._clock().isoformat()))
                     tx.audit(consumed_by, "approval.consumed", f"task:{task_id}",

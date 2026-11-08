@@ -13,17 +13,17 @@ import threading
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from typing import Any
+from datetime import datetime, timezone
 
 from ..config import Settings, load_settings, require_automation_enabled
-from ..errors import (AgentError, ApprovalError, DispatchRefusedError, JobFailure, TaskConflictError,
-                      TaskRuleError)
+from ..errors import (AgentError, ApprovalError, AuthenticationError, AuthorizationError, DispatchRefusedError,
+                      TaskConflictError, TaskRuleError)
 from ..logging import redact
 from ..storage.sql import SqlRepository
 from ..tasks import TaskService
 from ..tasks.model import AssigneeKind, Task, TaskStatus as S
-from ..auth.store import ORCHESTRATOR_SYSTEM, AuthStore
+from ..auth.store import AuthStore
 from .approval import DISABLED, NEEDS_APPROVAL, PRIVILEGED_DISABLED_MESSAGE, ApprovalLedger, decide
 from .registry import AgentRegistry
 from .runtime import RunResult
@@ -93,8 +93,13 @@ class Orchestrator:
 
     # --- despacho ---
 
-    def dispatch(self, task_id: str, requested_by: str = ORCHESTRATOR_ACTOR,
-                 cancel_event: threading.Event | None = None) -> DispatchResult:
+    def dispatch(self, task_id: str, actor, cancel_event: threading.Event | None = None) -> DispatchResult:
+        """Despacha como pessoa autenticada com papel `editor` (ADR-014). Texto e objetos do chamador não valem.
+
+        Sem sessão e papel ativos, nada muda de status e nada é executado.
+        """
+        principal = AuthStore(self._repo).require(actor, "editor")
+        requested_by = principal.identity_id
         settings = self._effective_settings()
         require_automation_enabled(settings)
         task = self._tasks.get_task(task_id)
@@ -123,8 +128,8 @@ class Orchestrator:
             self._refuse(requested_by, task_id, "agent.dispatch", str(exc))
 
         try:  # a mudança de status é o desempate entre despachos concorrentes
-            self._tasks.change_status(task_id, S.IN_PROGRESS, ORCHESTRATOR_SYSTEM, expected_version=task.version)
-        except (TaskRuleError, TaskConflictError) as exc:
+            self._tasks.change_status(task_id, S.IN_PROGRESS, principal, expected_version=task.version)
+        except (TaskRuleError, TaskConflictError, AuthorizationError, AuthenticationError) as exc:
             self._refuse(requested_by, task_id, "agent.dispatch", f"não foi possível iniciar: {exc}")
         self._repo.record_audit(requested_by, "agent.dispatch", f"task:{task_id}", f"ok: agent={name}")
 
@@ -135,8 +140,8 @@ class Orchestrator:
 
         target = S.IN_VALIDATION if run.status == "success" else S.BLOCKED
         try:
-            self._tasks.change_status(task_id, target, ORCHESTRATOR_SYSTEM)
-        except (TaskRuleError, TaskConflictError) as exc:  # ex.: a tarefa foi cancelada durante a execução
+            self._tasks.change_status(task_id, target, principal)
+        except (TaskRuleError, TaskConflictError, AuthorizationError, AuthenticationError) as exc:  # ex.: a tarefa foi cancelada durante a execução
             self._repo.record_audit(ORCHESTRATOR_ACTOR, "agent.result", f"task:{task_id}",
                                     f"error: status não atualizado ({type(exc).__name__}) run={run_id}")
         final = self._tasks.get_task(task_id)
@@ -182,22 +187,3 @@ class Orchestrator:
         self._repo.record_audit(principal.identity_id, "orchestrator.split_applied",
                                 f"task:{task_id}", f"ok: n={len(created)}")
         return created
-
-    # --- adaptador para a fila (FRG-40) ---
-
-    def enqueue(self, queue, task_id: str, actor: str):
-        """Enfileira o despacho. A chave inclui a version: repetir é idempotente até a tarefa mudar."""
-        task = self._tasks.get_task(task_id)
-        if task is None:
-            raise KeyError(task_id)
-        return queue.enqueue(JOB_KIND, {"task_id": task_id}, actor,
-                             idempotency_key=f"{JOB_KIND}:{task_id}:{task.version}")
-
-    def job_handler(self) -> Callable[[Any], None]:
-        """Handler para `JobQueue.run_once`. Recusa vira falha definitiva (reenfileire após resolver)."""
-        def handle(job) -> None:
-            try:
-                self.dispatch(job.payload["task_id"])
-            except DispatchRefusedError as exc:
-                raise JobFailure(str(exc), retryable=False) from None
-        return handle
