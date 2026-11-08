@@ -1,7 +1,8 @@
 # Executor isolado de agentes (FRG-6, ADR-013). Construído antes da execução; o agente não instala nada.
-# Base fixa por tag. Pinar por digest antes de produção (pendência do ADR-013).
+# Base fixada por digest do índice multi-arquitetura de python:3.12-slim, obtido do registry Docker Hub em
+# 08/11/2026 (sha256:4840d514...). Para atualizar: obter o novo digest, trocar aqui e no ADR-013, e rodar o CI.
 
-FROM python:3.12-slim AS base
+FROM python:3.12-slim@sha256:4840d514c583a4d3d8cad3940e68dee6f0f6f3635c12fcd0a3d74c21a5b93a54 AS base
 RUN useradd --uid 65532 --no-create-home --shell /usr/sbin/nologin agent
 COPY src/forge_core /opt/forge/forge_core
 ENV PYTHONPATH=/opt/forge PYTHONDONTWRITEBYTECODE=1
