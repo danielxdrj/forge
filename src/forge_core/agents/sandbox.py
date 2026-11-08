@@ -166,6 +166,10 @@ def _pump(proc: subprocess.Popen, request: bytes, box: dict) -> None:
         box["out"] = b""
 
 
+def _cancelled(cancel_event: threading.Event | None) -> bool:
+    return cancel_event is not None and cancel_event.is_set()
+
+
 class DockerSandbox:
     """Executa um agente num container descartável. Falha fechada: nunca cai para execução em thread."""
 
@@ -200,9 +204,11 @@ class DockerSandbox:
     def _collect(proc, reader, box, timeout, cancel_event) -> SandboxResult:
         deadline = time.monotonic() + timeout
         while reader.is_alive() and time.monotonic() < deadline:
-            if cancel_event is not None and cancel_event.is_set():
+            if _cancelled(cancel_event):
                 return SandboxResult("cancelled", error="cancelled")
             reader.join(0.05)
+        if _cancelled(cancel_event):
+            return SandboxResult("cancelled", error="cancelled")
         if reader.is_alive():
             return SandboxResult("timeout", error="timeout")
         raw = box.get("out", b"")
@@ -212,6 +218,8 @@ class DockerSandbox:
             proc.wait(timeout=_KILL_GRACE)
         except subprocess.TimeoutExpired:
             return SandboxResult("error", error="sandbox_stalled")
+        if _cancelled(cancel_event):
+            return SandboxResult("cancelled", error="cancelled")
         if proc.returncode == 125 and not raw:  # docker não conseguiu criar o container (ex.: imagem ausente)
             return SandboxResult("error", error="sandbox_unavailable")
         return interpret_output(raw)

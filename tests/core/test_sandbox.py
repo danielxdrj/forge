@@ -1,3 +1,4 @@
+import threading
 """Testes unitários do executor isolado, sem Docker: protocolo, gates e falha fechada."""
 import json
 
@@ -311,3 +312,65 @@ def test_run_args_profile_is_the_only_isolation_definition():
         assert flag in args
     assert "-v" not in args and "--volume" not in args and "--privileged" not in args
     assert not any(a.startswith("--mount") or a.startswith("--env") or a == "-e" for a in args)
+
+
+def _finished_reader():
+    reader = threading.Thread(target=lambda: None)
+    reader.start()
+    reader.join()
+    return reader
+
+
+def test_cancel_observed_after_reader_finished_is_not_success():
+    from forge_core.agents.sandbox import DockerSandbox
+
+    ev = threading.Event()
+    ev.set()
+    box = {"out": b'{"status":"success","summary":"ok"}\n'}
+    res = DockerSandbox._collect(FakeProc(), _finished_reader(), box, 5, ev)
+    assert res.status == "cancelled"
+
+
+def test_cancel_during_wait_discards_success():
+    from forge_core.agents.sandbox import DockerSandbox
+
+    ev = threading.Event()
+
+    class CancellingProc(FakeProc):
+        def wait(self, timeout=None):
+            ev.set()
+            return 0
+
+    box = {"out": b'{"status":"success","summary":"ok"}\n'}
+    res = DockerSandbox._collect(CancellingProc(), _finished_reader(), box, 5, ev)
+    assert res.status == "cancelled"
+
+
+def test_cancel_during_wait_with_unconfirmed_cleanup_reports_cleanup(fake_docker, monkeypatch):
+    import subprocess
+
+    from forge_core.agents.sandbox import DockerSandbox
+
+    ev = threading.Event()
+
+    class CancellingProc(FakeProc):
+        def wait(self, timeout=None):
+            ev.set()
+            return 0
+
+    import forge_core.agents.sandbox as sb
+
+    monkeypatch.setattr(sb.subprocess, "Popen", lambda *a, **k: CancellingProc(out=b'{"status":"success"}\n'))
+    fake_docker["state"]["ps"] = ("raise", 0, "")
+    res = DockerSandbox("img").run(Agent(), {}, 5, ev)
+    assert res.error == "cleanup_unconfirmed"
+
+
+def test_cancel_before_start_is_cancelled_and_destroyed(fake_docker):
+    from forge_core.agents.sandbox import DockerSandbox
+
+    ev = threading.Event()
+    ev.set()
+    res = DockerSandbox("img").run(Agent(), {}, 5, ev)
+    assert res.status == "cancelled"
+    assert any(c[0] == "rm" for c in fake_docker["calls"])
