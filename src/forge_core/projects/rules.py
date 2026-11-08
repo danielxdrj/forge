@@ -5,7 +5,7 @@ import json
 import re
 
 from ..errors import ProjectRuleError
-from ..logging import redact
+from ..logging import TOKEN_SHAPE, redact
 
 PROVIDERS = ("github",)
 SETTINGS_MAX_BYTES = 8 * 1024
@@ -16,7 +16,6 @@ _OWNER = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}$")
 _REPO = re.compile(r"^[A-Za-z0-9._-]{1,100}$")
 _BAD_REF_CHARS = re.compile(r"[\x00-\x20\x7f~^:?*\[\\]")
 _PREFIX = re.compile(r"^[A-Za-z0-9._/-]{1,40}$")
-_TOKEN_SHAPE = re.compile(r"(?i)\b(gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{16,}|AKIA[0-9A-Z]{12,})")
 
 
 def _text(value, label: str, max_len: int) -> str:
@@ -94,7 +93,7 @@ def _validate_labels(value) -> list[str]:
 
 def _reject_secret_like(values: list[str]) -> None:
     for v in values:
-        if _TOKEN_SHAPE.search(v) or redact(v) != v:
+        if TOKEN_SHAPE.search(v) or redact(v) != v:
             raise ProjectRuleError("settings com cara de segredo recusadas: segredo não vai para o banco")
 
 

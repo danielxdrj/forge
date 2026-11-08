@@ -2,7 +2,12 @@ import os
 import uuid
 from pathlib import Path
 
+import sys
+from pathlib import Path
+
 import pytest
+
+sys.path.insert(0, str(Path(__file__).parent))
 
 PG_URL = os.environ.get("FORGE_DATABASE_URL")
 
@@ -88,3 +93,13 @@ def _forge_env(monkeypatch):
     monkeypatch.setenv("FORGE_CONFIG_DIR", "cfg.example.invalid")
     monkeypatch.delenv("FORGE_AUTOMATION_ENABLED", raising=False)
     monkeypatch.delenv("FORGE_AGENTS_DISABLED", raising=False)
+
+
+@pytest.fixture(autouse=True)
+def _inprocess_transport(monkeypatch):
+    """Testes locais: o Orchestrator usa o dublê de transporte (sem Docker). O isolamento real: tests/sandbox."""
+    from forge_core.agents.sandbox import IsolatedRuntime
+    from inprocess_sandbox import InProcessSandbox
+
+    monkeypatch.setattr("forge_core.agents.orchestrator.default_runtime",
+                        lambda settings=None: IsolatedRuntime(InProcessSandbox(), settings=settings))

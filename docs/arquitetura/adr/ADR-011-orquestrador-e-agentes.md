@@ -1,6 +1,6 @@
 # ADR-011: Orquestrador, Agent Runtime e aprovação
 
-- **Status:** Aprovado (06/11/2026)
+- **Status:** Aprovado (06/11/2026). Atualizado pela ADR-013: o runtime público passou a ser isolado em container; a execução em thread não é mais caminho público.
 - **Data:** 2026-11-06
 - **Revisar quando:** existir a tarefa de autenticação de aprovadores, a FRG-6 (isolamento) ou a FRG-46 (revisão do ADR-003)
 

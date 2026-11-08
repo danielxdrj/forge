@@ -12,7 +12,7 @@ src/forge_core/
   logging.py      log JSON com redação de segredos
   errors.py       ForgeError, ConfigError, AutomationDisabledError
   backup.py       backup/restauração do SQLite
-  agents/         Orchestrator, Agent Runtime, registro e agente echo (FRG-24; veja agents/README.md)
+  agents/         Orchestrator, executor isolado em container (FRG-6, ADR-013), registro e agente echo (veja agents/README.md)
   projects/       projetos e repositórios gerenciáveis (FRG-5; veja projects/README.md)
   tasks/          gerenciamento de tarefas (FRG-15): model, rules (puras), service (TaskService)
   queue/          fila de jobs persistida (SqlJobQueue)
@@ -140,3 +140,6 @@ Erro de `psycopg` ausente: `pip install -e ".[postgres]"`. `audit_log é append-
 Sem Forge API (framework em aberto), fila (FRG-40), orquestrador (FRG-24). Formato único de configuração: variáveis de ambiente; arquivos da empresa serão lidos de `FORGE_CONFIG_DIR` em etapa futura.
 
 Limitações: a fila é por polling (sem push), sem ordem garantida além de `run_at, id`, sem retenção ou limpeza de jobs concluídos e sem jitter por padrão (parâmetro `jitter`); o Postgres não tem restauração automatizada nem teste de backup automático; sem retenção/arquivamento nem painel de auditoria; `redact()` é por regex e Bearer/Basic mascara até o fim da linha; a auditoria de `start()` ainda não é gravada (o Core não abre o banco na inicialização).
+
+## Isolamento de agentes e reprovisionamento (FRG-6, ADR-013)
+O Orchestrator só usa runtime isolado (Docker). Sem Docker, o despacho falha fechado. O reprovisionamento de grants em bancos existentes é manual: `docs/operacao/reprovisionamento-postgres.md`.
