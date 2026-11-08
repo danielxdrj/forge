@@ -91,3 +91,33 @@ def test_orchestrator_audit_never_contains_secret(sandbox, tmp_path):
 
 def test_isolated_runtime_is_not_thread_runtime():
     assert issubclass(IsolatedRuntime, AgentRuntime)
+
+
+def test_public_default_dispatch_runs_echo_in_container(tmp_path):
+    """Caminho público: Orchestrator sem runtime injetado usa o executor Docker, sem thread."""
+    from forge_core.agents import Orchestrator, default_registry
+    from forge_core.storage import open_repository
+    from forge_core.tasks import TaskService
+
+    repo = open_repository(f"sqlite:///{tmp_path / 'p.db'}")
+    svc = TaskService(repo)
+    t = svc.create_task("tarefa real", "pessoa:ana", objective="objetivo", assignee_kind="agent", assignee_id="echo")
+    res = Orchestrator(repo, default_registry(), tasks=svc, settings=_settings()).dispatch(t.id)
+    assert res.run_status == "success" and res.task_status == "in_validation"
+    assert "echo" in res.outcome.summary
+    assert leftover_containers() == []
+
+
+def test_public_dispatch_with_missing_image_fails_closed(tmp_path, monkeypatch):
+    from forge_core.agents import Orchestrator, default_registry
+    from forge_core.storage import open_repository
+    from forge_core.tasks import TaskService
+
+    monkeypatch.setenv("FORGE_AGENT_SANDBOX_IMAGE", "forge-agent-sandbox:nao-existe")
+    repo = open_repository(f"sqlite:///{tmp_path / 'm.db'}")
+    svc = TaskService(repo)
+    t = svc.create_task("tarefa", "pessoa:ana", assignee_kind="agent", assignee_id="echo")
+    res = Orchestrator(repo, default_registry(), tasks=svc, settings=_settings()).dispatch(t.id)
+    assert res.run_status == "error" and res.error == "sandbox_unavailable"
+    assert res.task_status != "in_validation"
+    assert leftover_containers() == []

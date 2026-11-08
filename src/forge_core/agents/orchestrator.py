@@ -25,7 +25,8 @@ from ..tasks import TaskService
 from ..tasks.model import AssigneeKind, Task, TaskStatus as S
 from .approval import DISABLED, NEEDS_APPROVAL, PRIVILEGED_DISABLED_MESSAGE, ApprovalLedger, decide
 from .registry import AgentRegistry
-from .runtime import AgentRuntime, RunResult
+from .runtime import RunResult
+from .sandbox import IsolatedRuntime, default_runtime
 from .spec import AgentContext, AgentOutcome
 
 ORCHESTRATOR_ACTOR = "agente:orchestrator"
@@ -55,12 +56,14 @@ def _clean(value: Any) -> Any:
 
 class Orchestrator:
     def __init__(self, repo: SqlRepository, registry: AgentRegistry, tasks: TaskService | None = None,
-                 settings: Settings | None = None, runtime: AgentRuntime | None = None,
+                 settings: Settings | None = None, runtime: IsolatedRuntime | None = None,
                  clock: Callable[[], datetime] | None = None):
         self._repo, self._registry, self._settings = repo, registry, settings
         self._clock = clock or (lambda: datetime.now(timezone.utc))
         self._tasks = tasks or TaskService(repo, self._clock)
-        self._runtime = runtime or AgentRuntime(settings=settings)
+        self._runtime = runtime or default_runtime(settings)
+        if not isinstance(self._runtime, IsolatedRuntime):
+            raise TypeError("Orchestrator exige runtime isolado (FRG-6, ADR-013); execução em thread não é público")
         self.approvals = ApprovalLedger(repo, self._clock)
 
     def _effective_settings(self) -> Settings:

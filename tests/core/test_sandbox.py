@@ -20,7 +20,7 @@ class FakeSandbox:
     def __init__(self, result):
         self.result, self.calls = result, 0
 
-    def run(self, agent, payload, timeout):
+    def run(self, agent, payload, timeout, cancel_event=None):
         self.calls += 1
         return self.result
 
@@ -108,5 +108,47 @@ def test_docker_missing_fails_closed(monkeypatch):
         raise FileNotFoundError("docker")
 
     monkeypatch.setattr("forge_core.agents.sandbox.subprocess.Popen", boom)
-    res = DockerSandbox("img").run("echo", {}, 5)
+    res = DockerSandbox("img").run(Agent(), {}, 5)
     assert res.status == "error" and res.error == "docker_unavailable"
+
+
+def test_orchestrator_refuses_thread_runtime(tmp_path):
+    from forge_core.agents import AgentRegistry, Orchestrator
+    from forge_core.agents.runtime import AgentRuntime
+    from forge_core.storage import open_repository
+
+    with pytest.raises(TypeError, match="runtime isolado"):
+        Orchestrator(open_repository(f"sqlite:///{tmp_path / 'x.db'}"), AgentRegistry(), runtime=AgentRuntime())
+
+
+def test_public_dispatch_without_docker_fails_closed_and_never_runs_in_thread(tmp_path, monkeypatch):
+    import forge_core.agents.orchestrator as orch_mod
+    import forge_core.agents.sandbox as sandbox_mod
+    from forge_core.agents import Orchestrator, default_registry
+    from forge_core.storage import open_repository
+    from forge_core.tasks import TaskService
+
+    monkeypatch.setattr(orch_mod, "default_runtime", sandbox_mod.default_runtime)  # o padrão REAL, sem dublê
+    monkeypatch.setenv("PATH", "")  # sem docker
+    repo = open_repository(f"sqlite:///{tmp_path / 'd.db'}")
+    svc = TaskService(repo)
+    t = svc.create_task("tarefa", "pessoa:ana", assignee_kind="agent", assignee_id="echo")
+    res = Orchestrator(repo, default_registry(), tasks=svc, settings=_settings()).dispatch(t.id)
+    assert res.run_status == "error" and res.error == "docker_unavailable"
+    assert res.outcome is None and res.task_status != "in_validation"
+    assert svc.get_task(t.id).status != "in_validation"
+
+
+def test_runtime_passes_usage_and_cost_from_protocol():
+    from forge_core.agents.sandbox import SandboxResult
+
+    rt = IsolatedRuntime(FakeSandbox(SandboxResult("success", "ok", usage={"tokens": 3}, cost=0.5)),
+                         settings=_settings())
+    res = rt.execute(Agent(), _ctx())
+    assert res.outcome.usage == {"tokens": 3} and res.outcome.cost == 0.5
+
+
+def test_protocol_rejects_bad_usage_and_cost():
+    for raw in (b'{"status":"success","usage":{"a":"x"}}\n', b'{"status":"success","cost":true}\n'):
+        with pytest.raises(ValueError):
+            validate_output(raw)

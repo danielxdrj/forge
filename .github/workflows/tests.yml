@@ -64,3 +64,4 @@ jobs:
         run: python -m pytest tests/sandbox -q -p no:cacheprovider -rs
         env:
           FORGE_SANDBOX_IMAGE: forge-agent-sandbox:test
+          FORGE_AGENT_SANDBOX_IMAGE: forge-agent-sandbox:prod

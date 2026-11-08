@@ -10,6 +10,7 @@ Para a regra "escrita só pelo pai", o filho nunca fala com o banco nem com a au
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 from datetime import datetime, timezone
 import threading
@@ -22,6 +23,7 @@ from .runtime import AgentRuntime, RunResult
 from .spec import AgentOutcome
 
 DEFAULT_IMAGE = "forge-agent-sandbox:prod"
+IMAGE_ENV = "FORGE_AGENT_SANDBOX_IMAGE"
 MAX_OUTPUT_BYTES = 64 * 1024
 MAX_LOGS = 50
 MAX_LOG_CHARS = 300
@@ -46,10 +48,12 @@ _LIMITS = (
 
 @dataclass(frozen=True)
 class SandboxResult:
-    status: str  # success | failure | error | timeout
+    status: str  # success | failure | error | timeout | cancelled
     summary: str = ""
     logs: list[str] = field(default_factory=list)
     error: str | None = None  # só código fixo, nunca texto do agente ou da entrada
+    usage: dict | None = None
+    cost: float | None = None
 
 
 def validate_output(raw: bytes) -> dict:
@@ -60,7 +64,7 @@ def validate_output(raw: bytes) -> dict:
     if len(lines) != 1:
         raise ValueError("invalid_output")
     data = json.loads(lines[0])
-    if not isinstance(data, dict) or set(data) - {"status", "summary", "logs", "error"}:
+    if not isinstance(data, dict) or set(data) - {"status", "summary", "logs", "error", "usage", "cost"}:
         raise ValueError("invalid_output")
     if data.get("status") not in ("success", "failure", "error"):
         raise ValueError("invalid_output")
@@ -74,8 +78,16 @@ def validate_output(raw: bytes) -> dict:
     error = data.get("error")
     if error is not None and (not isinstance(error, str) or len(error) > 80):
         raise ValueError("invalid_output")
+    usage = data.get("usage")
+    if usage is not None and (not isinstance(usage, dict) or len(usage) > 20 or not all(
+            isinstance(k, str) and len(k) <= 40 and isinstance(v, (int, float)) and not isinstance(v, bool)
+            for k, v in usage.items())):
+        raise ValueError("invalid_output")
+    cost = data.get("cost")
+    if cost is not None and (not isinstance(cost, (int, float)) or isinstance(cost, bool)):
+        raise ValueError("invalid_output")
     return {"status": data["status"], "summary": summary, "logs": [redact(x) for x in logs],
-            "error": error}
+            "error": error, "usage": usage, "cost": cost}
 
 
 def _docker(*args: str, timeout: float = 15.0) -> subprocess.CompletedProcess:
@@ -95,9 +107,9 @@ class DockerSandbox:
         self._command = command
         self._extra = extra_env or {}
 
-    def run(self, agent: str, payload: dict, timeout: float) -> SandboxResult:
+    def run(self, agent, payload: dict, timeout: float, cancel_event=None) -> SandboxResult:
         name = f"{_NAME_PREFIX}{uuid.uuid4().hex}"
-        request = json.dumps({"agent": agent, "payload": payload}, ensure_ascii=False).encode() + b"\n"
+        request = json.dumps({"agent": agent.spec.name, "payload": payload}, ensure_ascii=False).encode() + b"\n"
         args = ["run", "--rm", "-i", "--name", name, *_LIMITS]
         for k, v in self._extra.items():
             args += ["--env", f"{k}={v}"]
@@ -119,23 +131,32 @@ class DockerSandbox:
 
         reader = threading.Thread(target=talk, daemon=True)
         reader.start()
-        reader.join(timeout)
-        timed_out = reader.is_alive()
-        if timed_out or len(box.get("out", b"")) > MAX_OUTPUT_BYTES:
+        deadline = time.monotonic() + timeout
+        while reader.is_alive() and time.monotonic() < deadline:
+            if cancel_event is not None and cancel_event.is_set():
+                break
+            reader.join(0.05)
+        cancelled = reader.is_alive() and cancel_event is not None and cancel_event.is_set()
+        timed_out = reader.is_alive() and not cancelled
+        if cancelled or timed_out or len(box.get("out", b"")) > MAX_OUTPUT_BYTES:
             if not self._destroy(name, proc, reader):
                 return SandboxResult("error", error="cleanup_unconfirmed")
+            if cancelled:
+                return SandboxResult("cancelled", error="cancelled")
             return SandboxResult("timeout", error="timeout") if timed_out else SandboxResult(
                 "error", error="output_too_large")
         proc.wait(timeout=_KILL_GRACE)
         if not self._destroy(name, proc, reader):
             return SandboxResult("error", error="cleanup_unconfirmed")
+        if proc.returncode == 125 and not box.get("out"):  # docker não conseguiu criar o container
+            return SandboxResult("error", error="sandbox_unavailable")
         try:
             data = validate_output(box.get("out", b""))
         except (ValueError, UnicodeDecodeError, json.JSONDecodeError):
             return SandboxResult("error", error="invalid_output")
         if data["status"] == "error":
             return SandboxResult("error", logs=data["logs"], error=data["error"] or "agent_error")
-        return SandboxResult(data["status"], data["summary"], data["logs"])
+        return SandboxResult(data["status"], data["summary"], data["logs"], usage=data["usage"], cost=data["cost"])
 
     def _destroy(self, name: str, proc: subprocess.Popen, reader: threading.Thread) -> bool:
         """Mata o container (e, com ele, todos os processos descendentes), remove e confirma a remoção."""
@@ -171,13 +192,20 @@ class IsolatedRuntime(AgentRuntime):
         timeout = agent.spec.timeout_seconds if timeout is None else timeout
         started = datetime.now(timezone.utc).isoformat()
         payload = {"task_id": ctx.task.id, "title": ctx.task.title, "objective": ctx.task.objective}
-        res = self._sandbox.run(agent.spec.name, payload, timeout)
+        res = self._sandbox.run(agent, payload, timeout, ctx.cancel_event)
         logs = ctx.logs + res.logs
         ctx.seal()
         finished = datetime.now(timezone.utc).isoformat()
         if res.status in ("success", "failure"):
-            outcome = AgentOutcome(status=res.status, summary=res.summary)
+            outcome = AgentOutcome(status=res.status, summary=res.summary, usage=res.usage, cost=res.cost)
             return RunResult(res.status, outcome, None, started, finished, logs)
         if res.status == "timeout":
             return RunResult("timeout", None, f"timeout após {timeout}s", started, finished, logs)
+        if res.status == "cancelled":
+            return RunResult("cancelled", None, "cancelado", started, finished, logs)
         return RunResult("error", None, res.error or "error", started, finished, logs)
+
+
+def default_runtime(settings=None) -> IsolatedRuntime:
+    """Runtime padrão do Orchestrator: Docker. Sem Docker ou imagem, o despacho falha fechado (sem thread)."""
+    return IsolatedRuntime(DockerSandbox(os.environ.get(IMAGE_ENV) or DEFAULT_IMAGE), settings=settings)

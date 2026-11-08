@@ -42,7 +42,12 @@ def run(request: dict, registry_factory: str = REGISTRY_FACTORY) -> dict:
         return {"status": "error", "error": type(exc).__name__[:80], "logs": ctx.logs}
     if outcome.status not in ("success", "failure"):
         return {"status": "error", "error": "invalid_outcome", "logs": ctx.logs}
-    return {"status": outcome.status, "summary": outcome.summary[:2000], "logs": ctx.logs}
+    result = {"status": outcome.status, "summary": outcome.summary[:2000], "logs": ctx.logs}
+    if outcome.usage is not None:
+        result["usage"] = outcome.usage
+    if outcome.cost is not None:
+        result["cost"] = outcome.cost
+    return result
 
 
 def main() -> None:

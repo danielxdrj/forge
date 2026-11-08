@@ -2,7 +2,8 @@ import threading
 
 import pytest
 
-from forge_core.agents import AgentOutcome, AgentRegistry, AgentRuntime, AgentSpec, EchoAgent, Orchestrator, default_registry
+from forge_core.agents import AgentOutcome, AgentRegistry, AgentSpec, EchoAgent, Orchestrator, default_registry
+from forge_core.agents.runtime import AgentRuntime
 from forge_core.agents.approval import ALLOW, DISABLED, NEEDS_APPROVAL, decide
 from forge_core.config import load_settings
 from forge_core.errors import (AgentError, AgentFailure, ApprovalError, AutomationDisabledError, DispatchRefusedError)

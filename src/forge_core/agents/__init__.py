@@ -2,7 +2,7 @@ from .echo import EchoAgent
 from .orchestrator import DispatchResult, Orchestrator
 from .provider import ProviderAdapter, ProviderResponse
 from .registry import AgentRegistry
-from .runtime import AgentRuntime, RunResult
+from .runtime import RunResult
 from .spec import Agent, AgentContext, AgentOutcome, AgentSpec, Permission
 
 
@@ -13,6 +13,6 @@ def default_registry() -> AgentRegistry:
     return registry
 
 
-__all__ = ["Agent", "AgentContext", "AgentOutcome", "AgentRegistry", "AgentRuntime", "AgentSpec", "DispatchResult",
+__all__ = ["Agent", "AgentContext", "AgentOutcome", "AgentRegistry", "AgentSpec", "DispatchResult",
            "EchoAgent", "Orchestrator", "Permission", "ProviderAdapter", "ProviderResponse", "RunResult",
            "default_registry"]
