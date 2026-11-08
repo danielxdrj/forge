@@ -1,5 +1,5 @@
-import threading
 """Testes unitários do executor isolado, sem Docker: protocolo, gates e falha fechada."""
+import threading
 import json
 
 import pytest
