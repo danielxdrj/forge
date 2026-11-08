@@ -16,12 +16,18 @@ from forge_core.agents.spec import AgentOutcome, AgentSpec, Permission
 SECRET_MARKER = "ghp_" + "Q" * 36 + "PROBEMARKER"
 
 
+TIMINGS: dict = {}
+
+
 def _try(fn) -> bool:
+    started = time.monotonic()
     try:
         fn()
         return True
     except Exception:
         return False
+    finally:
+        TIMINGS[fn.__name__] = round(time.monotonic() - started, 2)
 
 
 def _probe() -> dict:
@@ -54,12 +60,13 @@ def _probe() -> dict:
         "secret_env_visible": "FORGE_DATABASE_URL" in os.environ or "FORGE_PG_PASSWORD" in os.environ,
         "docker_sock_visible": os.path.exists("/var/run/docker.sock"),
         "host_mount_visible": os.path.exists("/home") or os.path.exists("/agent"),
+        "timings_s": TIMINGS,
     }
 
 
 class ProbeAgent:
     spec = AgentSpec(name="probe", responsibility="teste de isolamento", scope="nenhum",
-                     tools=(), permissions=(Permission.READ,), execution="container", timeout_seconds=8.0)
+                     tools=(), permissions=(Permission.READ,), execution="container", timeout_seconds=30.0)
 
     def run(self, ctx):
         mode = ctx.task.title
