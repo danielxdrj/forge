@@ -89,7 +89,7 @@ def test_orchestrator_audit_never_contains_secret(sandbox, tmp_path):
     reg.register(ProbeAgent())
     orch = Orchestrator(repo, reg, tasks=svc, settings=_settings(), runtime=IsolatedRuntime(sandbox, _settings()))
     t = svc.create_task("raise_secret", actor(svc, "ana"), assignee_kind="agent", assignee_id="probe")
-    orch.dispatch(t.id)
+    orch.dispatch(t.id, actor(svc, "ana"))
     dump = repr(repo.list_audit()) + repr(repo.fetch("SELECT * FROM agent_runs")) + repr(
         repo.fetch("SELECT * FROM task_changes"))
     assert SECRET_MARKER not in dump
@@ -105,7 +105,7 @@ def test_public_default_dispatch_runs_echo_in_container(tmp_path):
     repo = open_repository(f"sqlite:///{tmp_path / 'p.db'}")
     svc = TaskService(repo)
     t = svc.create_task("tarefa real", actor(svc, "ana"), objective="objetivo", assignee_kind="agent", assignee_id="echo")
-    res = Orchestrator(repo, default_registry(), tasks=svc, settings=_settings()).dispatch(t.id)
+    res = Orchestrator(repo, default_registry(), tasks=svc, settings=_settings()).dispatch(t.id, actor(svc, "ana"))
     assert res.run_status == "success" and res.task_status == "in_validation"
     assert "echo" in res.outcome.summary
     assert leftover_containers() == []
@@ -120,7 +120,7 @@ def test_public_dispatch_with_missing_image_fails_closed(tmp_path, monkeypatch):
     repo = open_repository(f"sqlite:///{tmp_path / 'm.db'}")
     svc = TaskService(repo)
     t = svc.create_task("tarefa", actor(svc, "ana"), assignee_kind="agent", assignee_id="echo")
-    res = Orchestrator(repo, default_registry(), tasks=svc, settings=_settings()).dispatch(t.id)
+    res = Orchestrator(repo, default_registry(), tasks=svc, settings=_settings()).dispatch(t.id, actor(svc, "ana"))
     assert res.run_status == "error" and res.error == "sandbox_unavailable"
     assert res.task_status != "in_validation"
     assert leftover_containers() == []
