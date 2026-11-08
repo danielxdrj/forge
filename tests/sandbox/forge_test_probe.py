@@ -70,7 +70,7 @@ def _probe() -> dict:
         "alloc_512m_ok": _try(big_alloc),
         "secret_env_visible": "FORGE_DATABASE_URL" in os.environ or "FORGE_PG_PASSWORD" in os.environ,
         "docker_sock_visible": os.path.exists("/var/run/docker.sock"),
-        "host_mount_visible": os.path.exists("/home") or os.path.exists("/agent"),
+        "host_repo_visible": os.path.exists("/agent/repos/forge") or os.path.exists("/home/runner/work"),
         "timings_s": TIMINGS,
     }
 

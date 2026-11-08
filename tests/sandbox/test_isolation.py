@@ -40,7 +40,7 @@ def test_probe_blocks_every_escape_attempt(sandbox):
     assert d["alloc_512m_ok"] is False
     assert d["secret_env_visible"] is False
     assert d["docker_sock_visible"] is False
-    assert d["host_mount_visible"] is False
+    assert d["host_repo_visible"] is False
     assert leftover_containers() == []
 
 
