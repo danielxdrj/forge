@@ -43,7 +43,9 @@ def _probe() -> dict:
 
     def fork_bomb():
         for _ in range(200):
-            os.fork()
+            pid = os.fork()
+            if pid == 0:
+                os._exit(0)
 
     def big_alloc():
         bytearray(512 * 1024 * 1024)
