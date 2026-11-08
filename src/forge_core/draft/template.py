@@ -151,22 +151,25 @@ def render(data: dict) -> str:
     ]) + "\n"
 
 
+def _has_pending(value) -> bool:
+    if isinstance(value, list):
+        return any(_has_pending(v) for v in value)
+    return PENDING.lower() in str(value or "").lower()
+
+
 def required_pending(data: dict, meta: dict) -> list[str]:
-    """Campos que bloqueiam escrita remota se estiverem pendentes."""
+    """Qualquer ocorrência de [PENDENTE] em campo obrigatório bloqueia escrita remota."""
     blocked: list[str] = []
-    if PENDING in data["title"] or not TITLE_RE.match(data["title"]):
+    if _has_pending(data["title"]) or not TITLE_RE.match(data["title"]):
         blocked.append("title")
     for key in ("solicitado_por", "objetivo", "contexto", "situacao_atual"):
-        if data[key] == PENDING:
+        if _has_pending(data[key]):
             blocked.append(key)
-    if all(p == PENDING for p in data["problemas"]):
-        blocked.append("problemas")
-    if all(p == PENDING for p in data["comportamento_esperado"]):
-        blocked.append("comportamento_esperado")
-    if all(p == PENDING for p in data["criterios"]):
-        blocked.append("criterios")
+    for key in ("problemas", "comportamento_esperado", "criterios"):
+        if _has_pending(data[key]):
+            blocked.append(key)
     for key in ("tipo", "prioridade", "size"):
-        if not (meta.get(key) or "").strip() or meta.get(key) == PENDING:
+        if not (meta.get(key) or "").strip() or _has_pending(meta.get(key)):
             blocked.append(key)
     return blocked
 

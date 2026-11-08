@@ -1,4 +1,8 @@
-"""Orquestra rascunho local, tarefa Forge e (depois da confirmação) o gh do usuário."""
+"""Orquestra rascunho local, tarefa Forge e (depois da confirmação) o gh do usuário.
+
+Rede e banco não são uma transação. Checkpoint em arquivo ao lado do markdown
+recupera o vínculo se a gravação local falhar depois da issue.
+"""
 from __future__ import annotations
 
 import json
@@ -34,28 +38,75 @@ class DraftResult:
     published: bool
 
 
+def sidecar_path(output: Path) -> Path:
+    return output.with_name(output.name + ".forge-remote.json")
+
+
 def parse_remote(context: str) -> RemoteState:
     if REMOTE_START not in context:
         return RemoteState()
     raw = context.split(REMOTE_START, 1)[1].split(REMOTE_END, 1)[0]
     try:
         data = json.loads(raw)
-        return RemoteState(
-            issue=data.get("issue"), url=data.get("url"),
-            branch=data.get("branch"), item_id=data.get("item_id"),
-            phase=data.get("phase") or "none",
-        )
+        return _state_from_dict(data)
     except (json.JSONDecodeError, TypeError, AttributeError):
         return RemoteState()
 
 
+def _state_from_dict(data: dict) -> RemoteState:
+    return RemoteState(
+        issue=data.get("issue"), url=data.get("url"),
+        branch=data.get("branch"), item_id=data.get("item_id"),
+        phase=data.get("phase") or "none", repo=data.get("repo"),
+    )
+
+
 def attach_remote(context: str, remote: RemoteState) -> str:
     base = context.split(REMOTE_START, 1)[0].rstrip()
-    payload = json.dumps({
-        "issue": remote.issue, "url": remote.url, "branch": remote.branch,
-        "item_id": remote.item_id, "phase": remote.phase,
-    }, ensure_ascii=False)
+    payload = json.dumps(_state_to_dict(remote), ensure_ascii=False)
     return f"{base}{REMOTE_START}{payload}{REMOTE_END}\n"
+
+
+def _state_to_dict(remote: RemoteState) -> dict:
+    return {
+        "issue": remote.issue, "url": remote.url, "branch": remote.branch,
+        "item_id": remote.item_id, "phase": remote.phase, "repo": remote.repo,
+    }
+
+
+def write_checkpoint(output: Path, remote: RemoteState) -> None:
+    sidecar_path(output).write_text(
+        json.dumps(_state_to_dict(remote), ensure_ascii=False), encoding="utf-8")
+
+
+def read_checkpoint(output: Path) -> RemoteState | None:
+    path = sidecar_path(output)
+    if not path.is_file():
+        return None
+    try:
+        return _state_from_dict(json.loads(path.read_text(encoding="utf-8")))
+    except (json.JSONDecodeError, TypeError, OSError):
+        raise DraftError("checkpoint_invalid")
+
+
+def merge_remote(a: RemoteState, b: RemoteState | None) -> RemoteState:
+    if b is None:
+        return a
+    if a.url and b.url and a.url.rstrip("/") != b.url.rstrip("/"):
+        raise DraftError("remote_mismatch")
+    return RemoteState(
+        issue=a.issue or b.issue,
+        url=a.url or b.url,
+        branch=a.branch or b.branch,
+        item_id=a.item_id or b.item_id,
+        phase=_later_phase(a.phase, b.phase),
+        repo=a.repo or b.repo,
+    )
+
+
+def _later_phase(x: str, y: str) -> str:
+    order = ("none", "issue", "board", "done")
+    return order[max(order.index(x if x in order else "none"), order.index(y if y in order else "none"))]
 
 
 def write_exclusive(path: Path, text: str) -> None:
@@ -101,7 +152,20 @@ class DraftService:
             assignee_kind="person",
             assignee_id=ASSIGNEE,
         )
-        return DraftResult(task.id, data["title"], body, str(output), RemoteState(), False)
+        return DraftResult(task.id, data["title"], body, str(output), RemoteState(repo=repo), False)
+
+    def load_resume(self, task_id: str, output: Path, principal: Principal, repo: str) -> DraftResult:
+        self.tasks._auth.require(principal, "editor")
+        repo = validate_repo(repo)
+        task = self.tasks.get_task(task_id)
+        if task is None:
+            raise DraftError("task_missing")
+        if not output.is_file():
+            raise DraftError("file_missing")
+        body = output.read_text(encoding="utf-8")
+        remote = merge_remote(parse_remote(task.context), read_checkpoint(output))
+        remote.repo = remote.repo or repo
+        return DraftResult(task.id, task.title, body, str(output), remote, remote.phase == "done")
 
     def preview_text(self, result: DraftResult, repo: str, meta: dict, branch_prefix: str) -> str:
         pending = required_pending(parse_model_json_from_body(result.body), meta)
@@ -120,8 +184,10 @@ class DraftService:
             f"branch prevista: {branch_prefix or ''}N-slug",
             f"arquivo: {result.path}",
             f"tarefa: {result.task_id}",
+            f"fase remota: {result.remote.phase}",
             f"pendencias: {', '.join(pending) if pending else '(nenhuma)'}",
-            "Mutações se confirmado: gh issue create; project item-add; item-edit; issue develop.",
+            "Mutações se confirmado: gh issue create (só se ainda não houver issue); "
+            "project item-add; item-edit; issue develop. Sem apagar issue.",
         ])
 
     def publish(self, result: DraftResult, repo: str, principal: Principal, meta: dict,
@@ -136,17 +202,22 @@ class DraftService:
         task = self.tasks.get_task(result.task_id)
         if task is None:
             raise DraftError("task_missing")
-        remote = parse_remote(task.context)
+        output = Path(result.path)
+        remote = merge_remote(parse_remote(task.context), read_checkpoint(output))
+        remote.repo = remote.repo or repo
         gh = self.gh
+        remote = self._reconcile(gh, remote, repo, result.title)
         if remote.phase == "none":
             gh.preflight()
             fields = gh.list_fields()
-            self._resolve_board(fields, meta)  # fail before create
+            self._resolve_board(fields, meta)
             ref = gh.create_issue(repo, result.title, result.path, ASSIGNEE)
-            remote = RemoteState(issue=ref.number, url=ref.url, phase="issue")
-            self._save_remote(result.task_id, principal, task.context, task.version, remote)
+            remote = RemoteState(issue=ref.number, url=ref.url, phase="issue", repo=repo)
+            write_checkpoint(output, remote)
+            self._save_remote(result.task_id, principal, remote)
             task = self.tasks.get_task(result.task_id)
         if remote.phase == "issue":
+            write_checkpoint(output, remote)
             gh.preflight()
             fields = gh.list_fields()
             ids = self._resolve_board(fields, meta)
@@ -164,19 +235,36 @@ class DraftService:
                 ef, eo = ids["escopo"]
                 gh.edit_select(item_id, ef, eo)
             remote.phase = "board"
-            self._save_remote(result.task_id, principal, task.context, task.version, remote)
+            write_checkpoint(output, remote)
+            self._save_remote(result.task_id, principal, remote)
             task = self.tasks.get_task(result.task_id)
         if remote.phase == "board":
             name = branch_name(remote.issue, result.title, branch_prefix)
             remote.branch = gh.develop(repo, remote.issue, name)
             remote.phase = "done"
-            self._save_remote(result.task_id, principal, task.context, task.version, remote)
+            write_checkpoint(output, remote)
+            self._save_remote(result.task_id, principal, remote)
         result.remote = remote
         result.published = remote.phase == "done"
         return result
 
-    def _save_remote(self, task_id: str, principal: Principal, context: str, version: int,
-                     remote: RemoteState) -> None:
+    def _reconcile(self, gh: GhCli, remote: RemoteState, repo: str, title: str) -> RemoteState:
+        if not remote.url and remote.phase == "none":
+            return remote
+        if not remote.url:
+            raise DraftError("remote_mismatch")
+        viewed = gh.view_issue(remote.url, repo)
+        if remote.issue is not None and viewed.number != remote.issue:
+            raise DraftError("remote_mismatch")
+        if viewed.title and viewed.title != title:
+            raise DraftError("remote_mismatch")
+        remote.issue = viewed.number
+        remote.url = viewed.url
+        if remote.phase == "none":
+            remote.phase = "issue"
+        return remote
+
+    def _save_remote(self, task_id: str, principal: Principal, remote: RemoteState) -> None:
         task = self.tasks.get_task(task_id)
         if task is None:
             raise DraftError("task_missing")
@@ -223,7 +311,9 @@ def parse_model_json_from_body(body: str) -> dict:
             acc.append(line)
         return acc
 
-    bullets = lambda block: [ln[2:].strip() for ln in block if ln.startswith("- ")] or [PENDING]
+    def bullets(block):
+        return [ln[2:].strip() for ln in block if ln.startswith("- ")] or [PENDING]
+
     problemas_block = after("Foram reportados os seguintes problemas:")
     novos = ""
     items = []

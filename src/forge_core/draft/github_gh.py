@@ -1,12 +1,19 @@
-"""Porta do GitHub CLI local. Sessão nativa do gh (keyring). Sem GH_TOKEN no env."""
+"""Porta do GitHub CLI local. Sessão nativa do gh (keyring). Sem GH_TOKEN no env.
+
+`gh issue create` imprime a URL (não tem --json). Número: parse da URL e
+`gh issue view URL --json number,url`. Iterações: GraphQL documentado
+(https://docs.github.com/en/issues/planning-and-tracking-with-projects/automating-your-project/using-the-api-to-manage-projects),
+porque `gh project field-list` não devolve configuration.iterations.
+"""
 from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
-from datetime import date
+from dataclasses import dataclass
+from datetime import date, timedelta
 
 from ..errors import DraftError
 from .envfilter import GH_ENV_ALLOW, filter_env
@@ -15,6 +22,7 @@ from .template import PROJECT_NUMBER, PROJECT_OWNER
 Runner = Callable[..., subprocess.CompletedProcess]
 MAX_OUTPUT = 256 * 1024
 DEFAULT_TIMEOUT = 60
+ISSUE_URL = re.compile(r"https://github\.com/[^/\s]+/[^/\s]+/issues/(\d+)")
 
 FIELD_ALIASES = {
     "sprint": ("sprint", "sprint semana", "iteration", "iteração"),
@@ -24,11 +32,39 @@ FIELD_ALIASES = {
     "escopo": ("escopo", "scope"),
 }
 
+# Query oficial (campos extra title/duration existem no tipo GraphQL ProjectV2IterationFieldIteration).
+FIELDS_QUERY = """
+query($id: ID!) {
+  node(id: $id) {
+    ... on ProjectV2 {
+      fields(first: 100) {
+        nodes {
+          ... on ProjectV2Field { id name }
+          ... on ProjectV2IterationField {
+            id name
+            configuration {
+              iterations { id startDate duration title }
+              completedIterations { id startDate duration title }
+            }
+          }
+          ... on ProjectV2SingleSelectField {
+            id name
+            options { id name }
+          }
+        }
+      }
+    }
+  }
+}
+"""
+
 
 @dataclass
 class IssueRef:
     number: int
     url: str
+    title: str | None = None
+    state: str | None = None
 
 
 @dataclass
@@ -38,6 +74,7 @@ class RemoteState:
     branch: str | None = None
     item_id: str | None = None
     phase: str = "none"
+    repo: str | None = None
 
 
 class GhCli:
@@ -85,7 +122,6 @@ class GhCli:
         if "not logged" in low or "you are not logged" in low:
             raise DraftError("gh_not_logged")
         if "project" not in low:
-            # gh auth status lista scopes; ausência de project impede o board
             raise DraftError("project_scope", "gh auth refresh -s project")
         view = self._run([
             "project", "view", str(PROJECT_NUMBER), "--owner", PROJECT_OWNER, "--format", "json",
@@ -98,11 +134,27 @@ class GhCli:
     def create_issue(self, repo: str, title: str, body_path: str, assignee: str) -> IssueRef:
         text = self._run([
             "issue", "create", "--repo", repo, "--title", title, "--body-file", body_path,
-            "--assignee", assignee, "--json", "number,url",
+            "--assignee", assignee,
+        ])
+        if "--json" in text:
+            raise DraftError("gh_error")
+        match = ISSUE_URL.search(text)
+        if not match:
+            raise DraftError("gh_error")
+        url = match.group(0)
+        number = int(match.group(1))
+        viewed = self.view_issue(url, repo)
+        if viewed.number != number or viewed.url.rstrip("/") != url.rstrip("/"):
+            raise DraftError("remote_mismatch")
+        return viewed
+
+    def view_issue(self, url_or_number: str, repo: str) -> IssueRef:
+        text = self._run([
+            "issue", "view", str(url_or_number), "--repo", repo, "--json", "number,url,title,state",
         ])
         data = _json(text)
         try:
-            return IssueRef(int(data["number"]), str(data["url"]))
+            return IssueRef(int(data["number"]), str(data["url"]), data.get("title"), data.get("state"))
         except (KeyError, TypeError, ValueError) as exc:
             raise DraftError("gh_error") from exc
 
@@ -118,15 +170,17 @@ class GhCli:
         return str(item_id)
 
     def list_fields(self) -> list[dict]:
-        text = self._run([
-            "project", "field-list", str(PROJECT_NUMBER), "--owner", PROJECT_OWNER,
-            "--format", "json", "--limit", "100",
-        ])
-        data = _json(text)
-        fields = data.get("fields", data if isinstance(data, list) else [])
-        if not isinstance(fields, list):
+        """Schema real via GraphQL (iterações e opções). Não usa field-list para Sprint."""
+        if not self.project_id:
             raise DraftError("project_schema")
-        return fields
+        text = self._run([
+            "api", "graphql", "-F", f"id={self.project_id}", "-f", f"query={FIELDS_QUERY}",
+        ])
+        payload = _json(text)
+        nodes = (((payload.get("data") or {}).get("node") or {}).get("fields") or {}).get("nodes")
+        if not isinstance(nodes, list):
+            raise DraftError("project_schema")
+        return [_normalize_field(n) for n in nodes if isinstance(n, dict) and n.get("id")]
 
     def edit_select(self, item_id: str, field_id: str, option_id: str) -> None:
         if not self.project_id:
@@ -159,6 +213,17 @@ def _json(text: str):
         raise DraftError("gh_error") from exc
 
 
+def _normalize_field(node: dict) -> dict:
+    cfg = node.get("configuration") or {}
+    iterations = list(cfg.get("iterations") or []) + list(cfg.get("completedIterations") or [])
+    return {
+        "id": node["id"],
+        "name": node.get("name") or "",
+        "options": node.get("options") or [],
+        "iterations": iterations,
+    }
+
+
 def find_field(fields: list[dict], kind: str) -> dict:
     aliases = FIELD_ALIASES[kind]
     for field in fields:
@@ -181,7 +246,7 @@ def match_option(field: dict, wanted: str) -> str:
 
 def current_iteration_id(field: dict, today: date, wanted: str | None) -> str:
     iterations = field.get("iterations") or []
-    if wanted:
+    if wanted and wanted.strip():
         w = wanted.strip().lower()
         for it in iterations:
             title = str(it.get("title") or it.get("name") or "").strip().lower()
@@ -199,7 +264,6 @@ def current_iteration_id(field: dict, today: date, wanted: str | None) -> str:
             days = int(duration)
         except (TypeError, ValueError):
             continue
-        from datetime import timedelta
         if begin <= today < begin + timedelta(days=days):
             return str(iid)
     raise DraftError("pending_meta", "sprint")

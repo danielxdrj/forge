@@ -11,17 +11,15 @@ python -m pip install -e ".[dev]"
 $env:FORGE_CONFIG_DIR = "<CAMINHO>"
 $env:FORGE_DATABASE_URL = "sqlite:///<CAMINHO>\forge.db"
 $env:FORGE_GITHUB_CLIENT_ID = "<CLIENT_ID_PUBLICO>"   # só nesta sessão
-# opcional, modelo já incluído na sua conta Cursor (não ative on-demand):
-$env:FORGE_CURSOR_MODEL = "composer-2.5"
-$env:FORGE_CURSOR_AGENT = "agent"   # se o binário não estiver no PATH, coloque o caminho
+$env:FORGE_CURSOR_AGENT = "agent"
+# Modelo explícito da SUA assinatura Cursor. Confira em `agent models` o que o plano cobre.
+# Não há garantia de custo zero. Não ligue on-demand / yolo / force.
+$env:FORGE_CURSOR_MODEL = "<MODELO_DA_ASSINATURA>"
 
-# Cursor CLI (você instala e entra)
 irm 'https://cursor.com/install?win32=true' | iex
 agent --version
 agent login
-agent status
-
-# GitHub CLI (você instala e entra; keyring nativo)
+agent models
 gh auth status
 # Se o board falhar por escopo project, VOCÊ roda (o Forge não roda):
 #   gh auth refresh -s project
@@ -29,27 +27,39 @@ gh auth status
 
 OAuth Client ID é o público já usado no login Forge. Não grave token no Git.
 
-## Gerar (login editor a cada comando)
+## Gerar
+
+`--contexto` e `--arquivo` são exclusivos. Posicional é alias de `--contexto`. `--arquivo -` lê stdin.
 
 ```powershell
-python -m forge_core.draft draft "o relatorio X soma em dobro" --repo ferreiraeborzone/<repo> --output .\rascunho.md --tipo Bug --prioridade Alta --size 3
-# ou: python -m forge_core.draft draft --file .\contexto.txt --repo ferreiraeborzone/<repo> ...
-# ou: forge-tasks draft "..." --repo ferreiraeborzone/<repo> ...
+python -m forge_core.draft draft --contexto "o relatorio X soma em dobro" --repo ferreiraeborzone/<repo> --output .\rascunho.md --tipo Bug --prioridade Alta --size 3
+
+python -m forge_core.draft draft --arquivo .\contexto.txt --repo ferreiraeborzone/<repo> --output .\rascunho.md --tipo Bug --prioridade Alta --size 3
+
+Get-Content .\contexto.txt -Raw | python -m forge_core.draft draft --arquivo - --repo ferreiraeborzone/<repo> --output .\rascunho.md --tipo Bug --prioridade Alta --size 3
+
+forge-tasks draft --contexto "..." --repo ferreiraeborzone/<repo> --output .\rascunho.md --tipo Bug --prioridade Alta --size 3
 ```
 
-(`forge-tasks draft` equivale depois do `pip install -e .`.)
+A CLI mostra a issue, destino, board e pergunta `s/N` (default N). Sem TTY e sem `--yes`, não publica. Anote o `tarefa <uuid>` impresso.
 
-A CLI mostra a issue completa, repo, board `ferreiraeborzone` / IT Backlog `projects/13`, assignee `danielxdrj` e pergunta `s/N` (default N). Sem TTY e sem `--yes`, publica nada; o markdown e a tarefa Forge já existem.
+`--yes` **não** ignora `[PENDENTE]` (em qualquer campo obrigatório), papel `editor` nem escopo `project`.
+
+## Retomar após falha parcial (mesmo markdown, sem novo LLM)
 
 ```powershell
-python -m forge_core.draft draft "..." --repo ferreiraeborzone/<repo> --output .\rascunho.md --tipo Bug --prioridade Alta --size 3 --yes
+python -m forge_core.draft draft --retomar <uuid-da-tarefa> --repo ferreiraeborzone/<repo> --output .\rascunho.md --tipo Bug --prioridade Alta --size 3 --yes
 ```
 
-`--yes` **não** ignora `[PENDENTE]`, papel nem escopo `project`. Sprint = iteração da semana atual no schema, ou `--sprint "Semana NN"` se o nome existir. `--escopo` só preenche campo de board se o schema tiver Escopo.
+Não apague a issue no GitHub para “desfazer”. Se o remoto não bater com o checkpoint (`rascunho.md.forge-remote.json`), o comando falha sem criar outra issue.
 
-Saída esperada após confirmar: número e URL da issue, nome da branch (`gh issue develop`), id da tarefa Forge. Arquivo markdown não é sobrescrito se já existir.
+## Próximos passos (não nesta entrega)
+
+Print/anexo de imagem, OCR, Gmail e n8n: nova implementação de `ContextSource`, etapa própria.
 
 ## Limites
 
 - Isolamento Cursor: pasta vazia + deny documentado. **Não é garantia total** (ADR-015).
-- Este repositório **não** cria issue da empresa em teste. Não extraímos tokens da Cursor CLI nem do `gh`.
+- Sprint vem de GraphQL (`gh api graphql` com sessão nativa), não de `gh project field-list`.
+- `gh issue create` imprime URL; não usamos `--json` nesse comando.
+- Testes não criam issue da empresa.

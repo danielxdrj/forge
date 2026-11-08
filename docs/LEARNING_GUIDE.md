@@ -61,7 +61,7 @@ As seções são investigação, automações, log local, conexões e configura�
 
 ## Rascunho de issue
 
-`src/forge_core/draft/` gera o corpo no template fixo a partir de um `ProviderAdapter` (implementação Cursor CLI). A validação é determinística. O `gh` só roda depois da confirmação, no processo Forge, com testes em dublê (`tests/core/test_draft.py`).
+`src/forge_core/draft/` lê contexto por `ContextSource` (`--contexto` / `--arquivo`, stdin `-`), gera o corpo no template fixo e só então, com confirmação ou `--retomar`, chama o `gh` (dublê em `tests/core/test_draft.py`).
 
 ## O que este guia não cobre ainda
 

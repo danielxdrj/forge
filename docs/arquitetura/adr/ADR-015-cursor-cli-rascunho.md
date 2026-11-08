@@ -14,8 +14,8 @@ O Forge precisa redigir um rascunho de issue a partir de contexto livre e, depoi
 - **D2. Risco residual.** Deny + pasta vazia **não** são sandbox forte. A CLI pode ainda tentar tools. Isto foi aceito explicitamente. Não há garantia total.
 - **D3. Interface única `ProviderAdapter.complete`.** Só contexto do usuário + instrução do template entram no prompt. Sem credencial Forge/GitHub/banco. Claude Code fica para troca futura de adaptador, não nesta entrega.
 - **D4. Env allowlist.** O subprocesso Cursor recebe PATH, HOME/USERPROFILE/APPDATA (login nativo da CLI) e, se existirem, `CURSOR_API_KEY` / `CURSOR_AUTH_TOKEN` de sessão. Não recebe `GH_TOKEN`, `GITHUB_TOKEN`, `FORGE_*`, `DATABASE_URL`. O subprocesso `gh` (só depois da confirmação, no Forge) recebe allowlist própria, também sem esses tokens; usa o keyring nativo.
-- **D5. gh só no Forge.** Preview + `s`/`N` (default N). `--yes` pula só o prompt. Não fura `[PENDENTE]`, papel `editor` nem escopo `project`. Falha de project: mostrar `gh auth refresh -s project`, não executar. Board `ferreiraeborzone` / IT Backlog `projects/13`; IDs e opções vêm do schema real. Assignee `danielxdrj`. Branch: `gh issue develop` com `{prefix}{n}-{slug}` se houver prefixo (ADR-012).
-- **D6. Sem lock de banco na rede.** Papel revalidado na gravação local; `gh` corre fora da transação. Falha parcial grava número/URL/item já obtidos; retry não recria a issue. O Forge não apaga remoto.
+- **D5. gh só no Forge.** Preview + `s`/`N` (default N). `--yes` pula só o prompt. Qualquer `[PENDENTE]` em campo obrigatório bloqueia. Falha de project: mostrar `gh auth refresh -s project`, não executar. `gh issue create` devolve URL (sem `--json`). Sprint/opções: `gh api graphql` documentado (field-list não traz iterations). Assignee `danielxdrj`. Branch: `gh issue develop`.
+- **D6. Sem transação banco+rede.** Checkpoint `*.md.forge-remote.json` + `--retomar <tarefa>`. Reconciliar com `gh issue view` antes de criar de novo. O Forge não apaga issue.
 
 ## Consequências
 
