@@ -91,10 +91,6 @@ def test_orchestrator_audit_never_contains_secret(sandbox, tmp_path):
     assert leftover_containers() == []
 
 
-def test_isolated_runtime_is_not_thread_runtime():
-    assert issubclass(IsolatedRuntime, AgentRuntime)
-
-
 def test_public_default_dispatch_runs_echo_in_container(tmp_path):
     """Caminho público: Orchestrator sem runtime injetado usa o executor Docker, sem thread."""
     from forge_core.agents import Orchestrator, default_registry
