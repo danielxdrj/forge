@@ -53,9 +53,6 @@ class ApprovalLedger:
         rows = tx.execute(sql, (task_id,)).fetchall() if tx is not None else self._repo.fetch(sql, (task_id,))
         return rows[0][0] if rows else None
 
-    def _untrusted_authorship(self, task_id: str) -> bool:
-        return any(not actor.startswith(("gh:", "agente:", "sistema:")) for actor in self._auth.editors_of(task_id))
-
     def grant(self, task_id: str, approver, agent: str) -> None:
         if self._task_version(task_id) is None:
             raise ApprovalError("aprovação recusada: tarefa inexistente")
@@ -65,20 +62,27 @@ class ApprovalLedger:
             self._refuse("nao_autenticado", task_id, str(exc))
         except AuthorizationError as exc:
             self._refuse(getattr(approver, "identity_id", "nao_autenticado"), task_id, str(exc))
-        if self._untrusted_authorship(task_id):
-            self._refuse(principal.identity_id, task_id, "untrusted_authorship")
-        if principal.identity_id in self._auth.editors_of(task_id):
-            self._refuse(principal.identity_id, task_id, "self_approval")
-        with self._repo.transaction() as tx:
-            self._auth.serialize_authorization(tx)
-            version = self._task_version(task_id, tx, lock=True)
-            if version is None:
-                raise ApprovalError("aprovação recusada: tarefa inexistente")
-            tx.execute("INSERT INTO approval_grants (task_id, agent, task_version, identity_id, granted_at) "
-                       "VALUES (?, ?, ?, ?, ?)",
-                       (task_id, agent, version, principal.identity_id, self._clock().isoformat()))
-            tx.audit(principal.identity_id, "approval.granted", f"task:{task_id}",
-                     f"ok: agent={agent} version={version}")
+        refusal = None
+        try:
+            with self._auth.authorized(principal, "approver") as tx:
+                version = self._task_version(task_id, tx, lock=True)
+                authors = self._auth.editors_of(task_id, tx)
+                if version is None:
+                    refusal = "tarefa inexistente"
+                elif any(not a.startswith(("gh:", "agente:", "sistema:")) for a in authors):
+                    refusal = "untrusted_authorship"
+                elif principal.identity_id in authors:
+                    refusal = "self_approval"
+                else:
+                    tx.execute("INSERT INTO approval_grants (task_id, agent, task_version, identity_id, granted_at) "
+                               "VALUES (?, ?, ?, ?, ?)",
+                               (task_id, agent, version, principal.identity_id, self._clock().isoformat()))
+                    tx.audit(principal.identity_id, "approval.granted", f"task:{task_id}",
+                             f"ok: agent={agent} version={version}")
+        except (AuthenticationError, AuthorizationError) as exc:
+            self._refuse(principal.identity_id, task_id, str(exc))
+        if refusal is not None:
+            self._refuse(principal.identity_id, task_id, refusal)
 
     def _refuse(self, actor: str, task_id: str, reason: str) -> None:
         self._repo.record_audit(actor, "approval.granted", f"task:{task_id}", f"error: {reason}")

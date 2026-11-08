@@ -57,10 +57,10 @@ class ProjectService:
     def _lock(self) -> str:
         return " FOR UPDATE" if self._repo.dialect == "postgres" else ""
 
-    def _run(self, action: str, actor: str, target: str, fn):
+    def _run(self, action: str, actor: str, target: str, fn, principal):
         err: Exception | None = None
         result = None
-        with self._repo.transaction() as tx:
+        with self._auth.authorized(principal, "editor") as tx:
             try:
                 result = fn(tx, self._now())
             except _REFUSALS as exc:
@@ -130,7 +130,8 @@ class ProjectService:
     # --- projetos ---
 
     def create_project(self, title: str, actor: str, description: str = "") -> ProjectInfo:
-        actor = self._auth.human_id(actor, "editor")
+        principal = self._auth.require(actor, "editor")
+        actor = principal.identity_id
         def fn(tx, now):
             t, d = rules.validate_title(title), rules.validate_description(description)
             pid = str(uuid.uuid4())
@@ -138,11 +139,12 @@ class ProjectService:
                        "VALUES (?, ?, ?, 1, 1, ?, ?)", (pid, t, d, now, now))
             tx.audit(actor, "project.create", f"project:{pid}", "ok")
             return ProjectInfo(pid, t, d, True, 1, now, now)
-        return self._run("project.create", actor, "project:new", fn)
+        return self._run("project.create", actor, "project:new", fn, principal)
 
     def update_project(self, project_id: str, actor: str, expected_version: int, *, title: str | None = None,
                        description: str | None = None) -> ProjectInfo:
-        actor = self._auth.human_id(actor, "editor")
+        principal = self._auth.require(actor, "editor")
+        actor = principal.identity_id
         def fn(tx, now):
             cur = self._load_project(tx, project_id, self._lock())
             if cur.version != expected_version:
@@ -156,11 +158,12 @@ class ProjectService:
                        "WHERE id = ? AND version = ?", (new_t, new_d, now, project_id, expected_version))
             tx.audit(actor, "project.update", f"project:{project_id}", f"ok: fields={','.join(changed)}")
             return ProjectInfo(cur.id, new_t, new_d, cur.active, cur.version + 1, cur.created_at, now)
-        return self._run("project.update", actor, f"project:{project_id}", fn)
+        return self._run("project.update", actor, f"project:{project_id}", fn, principal)
 
     def deactivate_project(self, project_id: str, actor: str, expected_version: int | None = None) -> ProjectInfo:
         """Desativa o projeto e, em cascata, todos os repositórios dele (na mesma transação)."""
-        actor = self._auth.human_id(actor, "editor")
+        principal = self._auth.require(actor, "editor")
+        actor = principal.identity_id
         def fn(tx, now):
             cur = self._load_project(tx, project_id, self._lock())
             if expected_version is not None and cur.version != expected_version:
@@ -177,11 +180,12 @@ class ProjectService:
             for rid in ids:
                 tx.audit(actor, "repository.deactivate", f"repository:{rid}", "ok: cascade")
             return ProjectInfo(cur.id, cur.title, cur.description, False, cur.version + 1, cur.created_at, now)
-        return self._run("project.deactivate", actor, f"project:{project_id}", fn)
+        return self._run("project.deactivate", actor, f"project:{project_id}", fn, principal)
 
     def reactivate_project(self, project_id: str, actor: str, expected_version: int | None = None) -> ProjectInfo:
         """Reativa só o projeto. Os repositórios continuam inativos até serem reativados um a um."""
-        actor = self._auth.human_id(actor, "editor")
+        principal = self._auth.require(actor, "editor")
+        actor = principal.identity_id
         def fn(tx, now):
             cur = self._load_project(tx, project_id, self._lock())
             if expected_version is not None and cur.version != expected_version:
@@ -192,14 +196,15 @@ class ProjectService:
                        (now, project_id))
             tx.audit(actor, "project.reactivate", f"project:{project_id}", "ok")
             return ProjectInfo(cur.id, cur.title, cur.description, True, cur.version + 1, cur.created_at, now)
-        return self._run("project.reactivate", actor, f"project:{project_id}", fn)
+        return self._run("project.reactivate", actor, f"project:{project_id}", fn, principal)
 
     # --- repositórios ---
 
     def add_repository(self, project_id: str, name: str, owner: str, repo_name: str, actor: str, *,
                        default_branch: str = "main", settings: dict | None = None,
                        provider: str = "github") -> RepositoryInfo:
-        actor = self._auth.human_id(actor, "editor")
+        principal = self._auth.require(actor, "editor")
+        actor = principal.identity_id
         def fn(tx, now):
             n, o, rn = rules.validate_name(name), rules.validate_owner(owner), rules.validate_repo_name(repo_name)
             prov, branch = rules.validate_provider(provider), rules.validate_branch(default_branch, "default_branch")
@@ -213,13 +218,14 @@ class ProjectService:
                 (rid, project_id, n, prov, o, rn, branch, json.dumps(st, sort_keys=True), now, now))
             tx.audit(actor, "repository.create", f"repository:{rid}", "ok")
             return RepositoryInfo(rid, project_id, n, prov, o, rn, branch, True, st, 1, now, now)
-        return self._run("repository.create", actor, f"project:{project_id}", fn)
+        return self._run("repository.create", actor, f"project:{project_id}", fn, principal)
 
     def update_repository(self, repository_id: str, actor: str, expected_version: int, *, name: str | None = None,
                           owner: str | None = None, repo_name: str | None = None, default_branch: str | None = None,
                           settings: dict | None = None) -> RepositoryInfo:
         """Edita campos. `settings`, quando informado, SUBSTITUI o objeto inteiro."""
-        actor = self._auth.human_id(actor, "editor")
+        principal = self._auth.require(actor, "editor")
+        actor = principal.identity_id
         def fn(tx, now):
             cur = self._load_repo(tx, repository_id, self._lock())
             if cur.version != expected_version:
@@ -244,9 +250,11 @@ class ProjectService:
             return RepositoryInfo(cur.id, cur.project_id, new["name"], cur.provider, new["owner"], new["repo_name"],
                                   new["default_branch"], cur.active, new["settings"], cur.version + 1,
                                   cur.created_at, now)
-        return self._run("repository.update", actor, f"repository:{repository_id}", fn)
+        return self._run("repository.update", actor, f"repository:{repository_id}", fn, principal)
 
     def _set_repo_active(self, repository_id: str, actor: str, expected_version: int | None, active: bool):
+        principal = self._auth.require(actor, "editor")
+        actor = principal.identity_id
         action = "repository.reactivate" if active else "repository.deactivate"
 
         def fn(tx, now):
@@ -262,12 +270,10 @@ class ProjectService:
             tx.audit(actor, action, f"repository:{repository_id}", "ok")
             return RepositoryInfo(cur.id, cur.project_id, cur.name, cur.provider, cur.owner, cur.repo_name,
                                   cur.default_branch, active, cur.settings, cur.version + 1, cur.created_at, now)
-        return self._run(action, actor, f"repository:{repository_id}", fn)
+        return self._run(action, actor, f"repository:{repository_id}", fn, principal)
 
     def deactivate_repository(self, repository_id: str, actor: str, expected_version: int | None = None):
-        actor = self._auth.human_id(actor, "editor")
         return self._set_repo_active(repository_id, actor, expected_version, False)
 
     def reactivate_repository(self, repository_id: str, actor: str, expected_version: int | None = None):
-        actor = self._auth.human_id(actor, "editor")
         return self._set_repo_active(repository_id, actor, expected_version, True)

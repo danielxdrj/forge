@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import hashlib
 import secrets
+from contextlib import contextmanager
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -152,9 +153,51 @@ class AuthStore:
         sid, iid, login = rows[0]
         return Principal(iid, login, sid, _issued=_ISSUED)
 
-    def revoke_session(self, principal: Principal) -> None:
-        self.require_session(principal)
+    @contextmanager
+    def authorized(self, principal, role: str | None):
+        """Seção crítica de escrita: serializa com revogações e confere sessão e papel DENTRO da transação.
+
+        Linearização: uma revogação confirmada antes do lock desta seção vale (a escrita é recusada). Uma escrita
+        que confirma antes do lock da revogação permanece, e a revogação vale só para operações seguintes.
+        A checagem de fora da seção (`require`) é só para recusa rápida, nunca a autoridade.
+        """
+        if role is not None and role not in ROLES:
+            raise AuthorizationError("role_unknown")
+        denied: Exception | None = None
         with self._repo.transaction() as tx:
+            self.serialize_authorization(tx)
+            try:
+                self._check_in_tx(tx, principal, role)
+            except (AuthenticationError, AuthorizationError) as exc:
+                denied = exc
+            if denied is None:
+                yield tx
+        if denied is not None:
+            who = principal.identity_id if isinstance(principal, Principal) else "nao_autenticado"
+            self._repo.record_audit(who, "auth.denied", f"role:{role or 'sessao'}", f"error: {denied}")
+            raise denied
+
+    def _check_in_tx(self, tx, principal, role: str | None) -> None:
+        if not isinstance(principal, Principal):
+            raise AuthenticationError("principal_missing")
+        rows = tx.execute(
+            "SELECT 1 FROM sessions s WHERE s.id = ? AND s.identity_id = ? "
+            "AND NOT EXISTS (SELECT 1 FROM session_revocations r WHERE r.session_id = s.id)",
+            (principal.session_id, principal.identity_id)).fetchall()
+        if not rows:
+            raise AuthenticationError("invalid_session")
+        if role is not None and not self._has_role_in_tx(tx, principal.identity_id, role):
+            raise AuthorizationError("forbidden")
+
+    @staticmethod
+    def _has_role_in_tx(tx, identity_id: str, role: str) -> bool:
+        return bool(tx.execute(
+            "SELECT 1 FROM role_grants g WHERE g.identity_id = ? AND g.role = ? "
+            "AND NOT EXISTS (SELECT 1 FROM role_revocations v WHERE v.grant_id = g.id)",
+            (identity_id, role)).fetchall())
+
+    def revoke_session(self, principal: Principal) -> None:
+        with self.authorized(principal, None) as tx:
             tx.execute("INSERT INTO session_revocations (session_id, revoked_at) VALUES (?, ?)",
                        (principal.session_id, _now()))
             tx.audit(principal.identity_id, "auth.session_revoke", f"session:{principal.session_id}", "ok")
@@ -187,7 +230,7 @@ class AuthStore:
         return bool(rows)
 
     def require(self, principal, role: str) -> Principal:
-        """Verificação por operação: sessão ativa E papel ativo agora. Negativa é auditada, sem segredos."""
+        """Recusa rápida fora da seção crítica. A autoridade é conferida de novo dentro de `authorized`."""
         if role not in ROLES:
             raise AuthorizationError("role_unknown")
         self.require_session(principal)
@@ -197,48 +240,66 @@ class AuthStore:
         return principal
 
     def grant_role(self, owner, github_id: int, role: str) -> None:
-        self.require(owner, "owner")
-        if role not in ROLES or role == "owner":
-            raise AuthorizationError("role_unknown")
         iid = identity_id_for(github_id)
-        if not self._identity_exists(iid):
-            raise AuthorizationError("identity_unknown")
-        with self._repo.transaction() as tx:
+        with self.authorized(owner, "owner") as tx:
+            if role not in ROLES or role == "owner":
+                raise AuthorizationError("role_unknown")
+            if not tx.execute("SELECT 1 FROM identities WHERE id = ?", (iid,)).fetchall():
+                raise AuthorizationError("identity_unknown")
             tx.execute("INSERT INTO role_grants (identity_id, role, granted_by, granted_at) VALUES (?, ?, ?, ?)",
                        (iid, role, owner.identity_id, _now()))
             tx.audit(owner.identity_id, "auth.grant", f"identity:{iid}", f"ok: role={role}")
 
     def revoke_role(self, owner, grant_id: int) -> None:
-        self.require(owner, "owner")
-        rows = self._repo.fetch("SELECT identity_id, role FROM role_grants WHERE id = ?", (grant_id,))
-        if not rows:
-            raise AuthorizationError("grant_unknown")
-        iid, role = rows[0]
-        if role == "owner" and self._active_owner_count() <= 1:
-            raise AuthorizationError("last_owner")
-        try:
-            with self._repo.transaction() as tx:
-                self.serialize_authorization(tx)
-                tx.execute("INSERT INTO role_revocations (grant_id, revoked_by, revoked_at) VALUES (?, ?, ?)",
-                           (grant_id, owner.identity_id, _now()))
-                tx.audit(owner.identity_id, "auth.revoke", f"identity:{iid}", f"ok: role={role}")
-        except Exception as exc:
-            if _is_integrity_error(exc):
-                raise AuthorizationError("grant_already_revoked") from None
-            raise
+        with self.authorized(owner, "owner") as tx:
+            rows = tx.execute("SELECT identity_id, role FROM role_grants WHERE id = ?", (grant_id,)).fetchall()
+            if not rows:
+                raise AuthorizationError("grant_unknown")
+            iid, role = rows[0]
+            if role == "owner" and self._active_owner_count(tx) <= 1:
+                raise AuthorizationError("last_owner")
+            if tx.execute("SELECT 1 FROM role_revocations WHERE grant_id = ?", (grant_id,)).fetchall():
+                raise AuthorizationError("grant_already_revoked")
+            tx.execute("INSERT INTO role_revocations (grant_id, revoked_by, revoked_at) VALUES (?, ?, ?)",
+                       (grant_id, owner.identity_id, _now()))
+            tx.audit(owner.identity_id, "auth.revoke", f"identity:{iid}", f"ok: role={role}")
 
-    def _identity_exists(self, iid: str) -> bool:
-        return bool(self._repo.fetch("SELECT 1 FROM identities WHERE id = ?", (iid,)))
-
-    def _active_owner_count(self) -> int:
-        rows = self._repo.fetch(
-            "SELECT COUNT(*) FROM role_grants g WHERE g.role = 'owner' "
-            "AND NOT EXISTS (SELECT 1 FROM role_revocations v WHERE v.grant_id = g.id)")
+    def _active_owner_count(self, tx=None) -> int:
+        sql = ("SELECT COUNT(*) FROM role_grants g WHERE g.role = 'owner' "
+               "AND NOT EXISTS (SELECT 1 FROM role_revocations v WHERE v.grant_id = g.id)")
+        rows = tx.execute(sql).fetchall() if tx is not None else self._repo.fetch(sql)
         return rows[0][0]
 
-    def editors_of(self, task_id: str) -> set[str]:
+    def editors_of(self, task_id: str, tx=None) -> set[str]:
         """Identidades que alteraram ou mudaram o status da tarefa, em qualquer versão."""
-        rows = self._repo.fetch(
-            "SELECT actor FROM task_changes WHERE task_id = ? UNION SELECT actor FROM task_history WHERE task_id = ?",
-            (task_id, task_id))
+        sql = "SELECT actor FROM task_changes WHERE task_id = ? UNION SELECT actor FROM task_history WHERE task_id = ?"
+        rows = (tx.execute(sql, (task_id, task_id)).fetchall() if tx is not None
+                else self._repo.fetch(sql, (task_id, task_id)))
         return {r[0] for r in rows}
+
+    def principal_for_dispatch(self, dispatch_id: str) -> Principal:
+        """Reabre uma sessão em memória para o pedido de despacho, se o editor ainda tiver o papel.
+
+        Não lê token OAuth nem bearer: o vínculo é a linha `dispatch_requests` gravada no enqueue.
+        O token da sessão nova não sai daqui (só o hash no banco). Quem chama revoga ao terminar.
+        """
+        token = secrets.token_urlsafe(32)
+        sid = uuid.uuid4().hex
+        with self._repo.transaction() as tx:
+            self.serialize_authorization(tx)
+            rows = tx.execute(
+                "SELECT identity_id FROM dispatch_requests WHERE id = ?", (dispatch_id,)).fetchall()
+            if len(rows) != 1:
+                raise AuthenticationError("invalid_session")
+            iid = rows[0][0]
+            if not self._has_role_in_tx(tx, iid, "editor"):
+                raise AuthorizationError("forbidden")
+            ident = tx.execute("SELECT github_id, login FROM identities WHERE id = ?", (iid,)).fetchall()
+            if len(ident) != 1:
+                raise AuthenticationError("invalid_session")
+            github_id, login = ident[0]
+            tx.execute("INSERT INTO sessions (id, identity_id, token_hash, login, created_at) VALUES (?, ?, ?, ?, ?)",
+                       (sid, iid, _digest(token), login, _now()))
+            tx.audit(iid, "auth.session_open", f"session:{sid}", "ok: dispatch")
+        del token
+        return Principal(iid, login, sid, _issued=_ISSUED)

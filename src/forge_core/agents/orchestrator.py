@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 
 from ..config import Settings, load_settings, require_automation_enabled
 from ..errors import (AgentError, ApprovalError, AuthenticationError, AuthorizationError, DispatchRefusedError,
-                      TaskConflictError, TaskRuleError)
+                      JobFailure, TaskConflictError, TaskRuleError)
 from ..logging import redact
 from ..storage.sql import SqlRepository
 from ..tasks import TaskService
@@ -187,3 +187,64 @@ class Orchestrator:
         self._repo.record_audit(principal.identity_id, "orchestrator.split_applied",
                                 f"task:{task_id}", f"ok: n={len(created)}")
         return created
+
+    def enqueue(self, queue, task_id: str, actor):
+        """Enfileira um despacho autorizado. O job guarda só o id do pedido, nunca token ou OAuth.
+
+        A pessoa precisa ser `editor` na seção serializada. A execução revalida papel, sessão e versão.
+        """
+        auth = AuthStore(self._repo)
+        principal = auth.require(actor, "editor")
+        requested_by = principal.identity_id
+        task = self._tasks.get_task(task_id)
+        if task is None:
+            self._refuse(requested_by, task_id, "agent.enqueue", "tarefa inexistente")
+        dispatch_id = uuid.uuid4().hex
+        lock = " FOR UPDATE" if self._repo.dialect != "sqlite" else ""
+        version = None
+        with auth.authorized(principal, "editor") as tx:
+            rows = tx.execute(f"SELECT version FROM tasks WHERE id = ?{lock}", (task_id,)).fetchall()
+            if rows:
+                version = rows[0][0]
+                tx.execute(
+                    "INSERT INTO dispatch_requests (id, task_id, task_version, identity_id, requested_at) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    (dispatch_id, task_id, version, requested_by, self._clock().isoformat()))
+                tx.audit(requested_by, "agent.enqueue", f"task:{task_id}", f"ok: version={version}")
+        if version is None:
+            self._refuse(requested_by, task_id, "agent.enqueue", "tarefa inexistente")
+        return queue.enqueue(
+            JOB_KIND, {"dispatch_id": dispatch_id, "task_id": task_id},
+            requested_by, idempotency_key=f"orchestrate:{task_id}:{version}")
+
+    def job_handler(self):
+        """Handler da fila: revalida o vínculo e o papel vivo, despacha, revoga a sessão temporária."""
+        def handle(job) -> None:
+            payload = job.payload if isinstance(job.payload, dict) else {}
+            dispatch_id, task_id = payload.get("dispatch_id"), payload.get("task_id")
+            if not isinstance(dispatch_id, str) or not isinstance(task_id, str) or not dispatch_id or not task_id:
+                raise JobFailure("despacho recusado: payload", retryable=False)
+            rows = self._repo.fetch(
+                "SELECT task_id, task_version FROM dispatch_requests WHERE id = ?", (dispatch_id,))
+            if len(rows) != 1 or rows[0][0] != task_id:
+                raise JobFailure("despacho recusado: vinculo", retryable=False)
+            expected_version = rows[0][1]
+            task = self._tasks.get_task(task_id)
+            if task is None or task.version != expected_version:
+                raise JobFailure("despacho recusado: versao", retryable=False)
+            auth = AuthStore(self._repo)
+            principal = None
+            try:
+                principal = auth.principal_for_dispatch(dispatch_id)
+                self.dispatch(task_id, principal)
+            except (AuthenticationError, AuthorizationError, DispatchRefusedError, ApprovalError) as exc:
+                raise JobFailure(f"despacho recusado: {exc}", retryable=False) from None
+            finally:
+                if principal is not None:
+                    try:
+                        auth.revoke_session(principal)
+                    except AuthenticationError:
+                        pass
+        return handle
+
+    handler = job_handler  # nome antigo da FRG-24; mesmo contrato

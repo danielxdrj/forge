@@ -250,16 +250,21 @@ def test_propose_split_creates_nothing_and_apply_needs_a_person(env):
     assert len(created) == 3 and len(svc.subtasks(t.id)) == 3
 
 
-def test_no_unattended_dispatch_path_without_a_service_identity(env):
+def test_text_and_system_actors_cannot_dispatch_or_enqueue(env):
     repo, svc, reg, mk = env
     orch = mk()
-    assert not hasattr(orch, "enqueue") and not hasattr(orch, "job_handler") and not hasattr(orch, "handler")
     t = agent_task(svc)
     with pytest.raises(AuthenticationError, match="principal_missing"):
         orch.dispatch(t.id, "sistema:fila")
     with pytest.raises(AuthenticationError, match="principal_missing"):
         orch.dispatch(t.id, None)
-    assert svc.get_task(t.id).status == S.PENDING and runs(repo) == []
+    from forge_core.queue import SqlJobQueue
+    q = SqlJobQueue(repo)
+    with pytest.raises(AuthenticationError, match="principal_missing"):
+        orch.enqueue(q, t.id, "sistema:fila")
+    with pytest.raises(AuthenticationError, match="principal_missing"):
+        orch.enqueue(q, t.id, "agente:echo")
+    assert svc.get_task(t.id).status == S.PENDING and runs(repo) == [] and q.list_jobs() == []
 
 
 def test_agent_runs_append_only_sqlite(tmp_path):
