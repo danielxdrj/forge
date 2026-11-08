@@ -59,3 +59,11 @@ class ProjectRuleError(ForgeError):
 
 class ProjectConflictError(ForgeError):
     """O projeto ou repositório mudou desde a leitura (version diferente): releia e tente de novo."""
+
+
+class AuthenticationError(ForgeError):
+    """Sessão ausente, inválida, revogada ou expirada. Mensagem fixa: nunca ecoa o token recebido."""
+
+
+class AuthorizationError(ForgeError):
+    """A identidade autenticada não tem o papel exigido pela operação (ou o papel foi revogado)."""

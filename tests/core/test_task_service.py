@@ -3,7 +3,8 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from forge_core.errors import TaskConflictError, TaskRuleError
+from auth_helpers import actor
+from forge_core.errors import ConfigError, TaskConflictError, TaskRuleError
 from forge_core.storage import SqlRepository, open_repository
 from forge_core.storage.migrate import migrate
 from forge_core.tasks import TaskService, TaskStatus as S
@@ -32,14 +33,14 @@ def make_service(request, tmp_path):
 
 def walk(svc, task_id, *statuses):
     for st in statuses:
-        svc.change_status(task_id, st, "pessoa:ana")
+        svc.change_status(task_id, st, actor(svc, "ana"))
 
 
 def test_create_and_read_full_model(make_service):
     svc, repo, _ = make_service()
-    p = svc.create_project("Projeto", "pessoa:ana")
-    st = svc.create_stage(p.id, "Etapa 1", "pessoa:ana")
-    t = svc.create_task("Implementar", "pessoa:ana", objective="o", context="c", scope="s",
+    p = svc.create_project("Projeto", actor(svc, "ana"))
+    st = svc.create_stage(p.id, "Etapa 1", actor(svc, "ana"))
+    t = svc.create_task("Implementar", actor(svc, "ana"), objective="o", context="c", scope="s",
                         acceptance_criteria="a", priority="high", assignee_kind="agent", assignee_id="dev",
                         due_date="2026-04-01", stage_id=st.id)
     got = svc.get_task(t.id)
@@ -52,98 +53,98 @@ def test_create_and_read_full_model(make_service):
 
 def test_dependency_gates_execution_and_dates_are_set(make_service):
     svc, repo, _ = make_service()
-    a, b = svc.create_task("a", "p"), svc.create_task("b", "p")
-    svc.add_dependency(b.id, a.id, "p")
+    a, b = svc.create_task("a", actor(svc, "ana")), svc.create_task("b", actor(svc, "ana"))
+    svc.add_dependency(b.id, a.id, actor(svc, "ana"))
     assert not svc.is_ready(b.id) and svc.is_ready(a.id)
     with pytest.raises(TaskRuleError, match="dependências obrigatórias"):
-        svc.change_status(b.id, S.IN_PROGRESS, "p")
+        svc.change_status(b.id, S.IN_PROGRESS, actor(svc, "ana"))
     assert repo.list_audit()[-1].result.startswith("error")
     walk(svc, a.id, S.IN_PROGRESS, S.IN_VALIDATION, S.DONE)
     done = svc.get_task(a.id)
     assert done.start_date == "2026-03-01" and done.completed_at is not None
     assert svc.is_ready(b.id)
-    svc.change_status(b.id, S.IN_PROGRESS, "p")
+    svc.change_status(b.id, S.IN_PROGRESS, actor(svc, "ana"))
 
 
 def test_optional_dependency_does_not_block(make_service):
     svc, *_ = make_service()
-    a, b = svc.create_task("a", "p"), svc.create_task("b", "p")
-    svc.add_dependency(b.id, a.id, "p", required=False)
+    a, b = svc.create_task("a", actor(svc, "ana")), svc.create_task("b", actor(svc, "ana"))
+    svc.add_dependency(b.id, a.id, actor(svc, "ana"), required=False)
     assert svc.is_ready(b.id)
 
 
 def test_subtasks_block_parent_completion(make_service):
     svc, *_ = make_service()
-    parent = svc.create_task("pai", "p")
-    req = svc.create_task("obrigatória", "p", parent_id=parent.id)
-    opt = svc.create_task("opcional", "p", parent_id=parent.id, required=False)
+    parent = svc.create_task("pai", actor(svc, "ana"))
+    req = svc.create_task("obrigatória", actor(svc, "ana"), parent_id=parent.id)
+    opt = svc.create_task("opcional", actor(svc, "ana"), parent_id=parent.id, required=False)
     walk(svc, parent.id, S.IN_PROGRESS, S.IN_VALIDATION)
     with pytest.raises(TaskRuleError, match="subtarefas obrigatórias"):
-        svc.change_status(parent.id, S.DONE, "p")
+        svc.change_status(parent.id, S.DONE, actor(svc, "ana"))
     walk(svc, req.id, S.IN_PROGRESS, S.IN_VALIDATION, S.DONE)
-    svc.change_status(parent.id, S.DONE, "p")  # a opcional pendente não bloqueia
+    svc.change_status(parent.id, S.DONE, actor(svc, "ana"))  # a opcional pendente não bloqueia
     assert svc.get_task(opt.id).status == "pending"
     assert {s.id for s in svc.subtasks(parent.id)} == {req.id, opt.id}
 
 
 def test_subtask_rules(make_service):
     svc, *_ = make_service()
-    p = svc.create_project("P", "p")
-    st = svc.create_stage(p.id, "E", "p")
-    parent = svc.create_task("pai", "p", stage_id=st.id)
-    sub = svc.create_task("sub", "p", parent_id=parent.id)
+    p = svc.create_project("P", actor(svc, "ana"))
+    st = svc.create_stage(p.id, "E", actor(svc, "ana"))
+    parent = svc.create_task("pai", actor(svc, "ana"), stage_id=st.id)
+    sub = svc.create_task("sub", actor(svc, "ana"), parent_id=parent.id)
     assert sub.stage_id == st.id  # herda a etapa
     with pytest.raises(TaskRuleError, match="profundidade"):
-        svc.create_task("neta", "p", parent_id=sub.id)
+        svc.create_task("neta", actor(svc, "ana"), parent_id=sub.id)
     with pytest.raises(KeyError):
-        svc.create_task("x", "p", parent_id="nao-existe")
+        svc.create_task("x", actor(svc, "ana"), parent_id="nao-existe")
     with pytest.raises(KeyError):
-        svc.create_task("x", "p", stage_id="nao-existe")
+        svc.create_task("x", actor(svc, "ana"), stage_id="nao-existe")
 
 
 def test_cycle_and_self_dependency_refused(make_service):
     svc, repo, _ = make_service()
-    a, b = svc.create_task("a", "p"), svc.create_task("b", "p")
-    svc.add_dependency(b.id, a.id, "p")
+    a, b = svc.create_task("a", actor(svc, "ana")), svc.create_task("b", actor(svc, "ana"))
+    svc.add_dependency(b.id, a.id, actor(svc, "ana"))
     with pytest.raises(TaskRuleError, match="ciclo"):
-        svc.add_dependency(a.id, b.id, "p")
+        svc.add_dependency(a.id, b.id, actor(svc, "ana"))
     with pytest.raises(TaskRuleError):
-        svc.add_dependency(a.id, a.id, "p")
-    svc.add_dependency(b.id, a.id, "p")  # repetir é idempotente
+        svc.add_dependency(a.id, a.id, actor(svc, "ana"))
+    svc.add_dependency(b.id, a.id, actor(svc, "ana"))  # repetir é idempotente
     assert len(svc.dependencies(b.id)) == 1
 
 
 def test_invalid_transition_refused_and_audited(make_service):
     svc, repo, _ = make_service()
-    t = svc.create_task("a", "p")
+    t = svc.create_task("a", actor(svc, "ana"))
     with pytest.raises(TaskRuleError, match="transição inválida"):
-        svc.change_status(t.id, S.DONE, "p")
+        svc.change_status(t.id, S.DONE, actor(svc, "ana"))
     assert svc.get_task(t.id).status == "pending" and svc.get_task(t.id).version == 1
     last = repo.list_audit()[-1]
     assert last.action == "task.status" and last.result.startswith("error")
     with pytest.raises(KeyError):
-        svc.change_status("nao-existe", S.PENDING, "p")
+        svc.change_status("nao-existe", S.PENDING, actor(svc, "ana"))
 
 
 def test_history_records_old_and_new_values(make_service):
     svc, repo, _ = make_service()
-    t = svc.create_task("a", "p", priority="low")
-    svc.update_task(t.id, "pessoa:ana", 1, priority="urgent", title="novo")
-    svc.change_status(t.id, S.IN_PROGRESS, "agente:dev")
+    t = svc.create_task("a", actor(svc, "ana"), priority="low")
+    svc.update_task(t.id, actor(svc, "ana"), 1, priority="urgent", title="novo")
+    svc.change_status(t.id, S.IN_PROGRESS, actor(svc, "ana"))
     ch = [(c.field, c.old_value, c.new_value, c.actor) for c in svc.changes(t.id)]
-    assert ("status", None, "pending", "p") in ch
-    assert ("priority", "low", "urgent", "pessoa:ana") in ch and ("title", "a", "novo", "pessoa:ana") in ch
-    assert ("status", "pending", "in_progress", "agente:dev") in ch
-    assert ("start_date", None, "2026-03-01", "agente:dev") in ch
+    assert ("status", None, "pending", actor(svc, "ana").identity_id) in ch
+    assert ("priority", "low", "urgent", actor(svc, "ana").identity_id) in ch and ("title", "a", "novo", actor(svc, "ana").identity_id) in ch
+    assert ("status", "pending", "in_progress", "gh:1001") in ch
+    assert ("start_date", None, "2026-03-01", "gh:1001") in ch
     assert [e.status for e in repo.task_history(t.id)] == ["pending", "in_progress"]
-    actions = [a.action for a in repo.list_audit() if a.action != "seed"]
+    actions = [a.action for a in repo.list_audit() if a.action != "seed" and not a.action.startswith("auth.")]
     assert actions == ["task.create", "task.update", "task.status"]
 
 
 def test_audit_never_contains_task_text(make_service):
     svc, repo, _ = make_service()
-    t = svc.create_task("TITULOSENTINEL", "p", objective="OBJSENTINEL")
-    svc.update_task(t.id, "p", 1, context="CTXSENTINEL")
+    t = svc.create_task("TITULOSENTINEL", actor(svc, "ana"), objective="OBJSENTINEL")
+    svc.update_task(t.id, actor(svc, "ana"), 1, context="CTXSENTINEL")
     dump = repr(repo.list_audit())
     assert not any(x in dump for x in ("TITULOSENTINEL", "OBJSENTINEL", "CTXSENTINEL"))
     assert "fields=context" in dump
@@ -152,55 +153,64 @@ def test_audit_never_contains_task_text(make_service):
 def test_optimistic_version_conflict(make_service):
     svc, repo, _ = make_service()
     svc2, _, _ = make_service()
-    t = svc.create_task("a", "p")
-    svc.update_task(t.id, "ana", 1, priority="high")
+    t = svc.create_task("a", actor(svc, "ana"))
+    svc.update_task(t.id, actor(svc, "ana"), 1, priority="high")
     with pytest.raises(TaskConflictError):
-        svc2.update_task(t.id, "bia", 1, priority="low")  # leu a versão 1, já é 2
+        svc2.update_task(t.id, actor(svc2, "bia"), 1, priority="low")  # leu a versão 1, já é 2
     with pytest.raises(TaskConflictError):
-        svc2.change_status(t.id, S.IN_PROGRESS, "bia", expected_version=1)
+        svc2.change_status(t.id, S.IN_PROGRESS, actor(svc2, "bia"), expected_version=1)
     assert svc.get_task(t.id).priority == "high" and svc.get_task(t.id).version == 2
-    svc2.update_task(t.id, "bia", 2, priority="low")
+    svc2.update_task(t.id, actor(svc2, "bia"), 2, priority="low")
 
 
 def test_update_noop_unknown_field_and_terminal(make_service):
     svc, *_ = make_service()
-    t = svc.create_task("a", "p")
-    assert svc.update_task(t.id, "p", 1, title="a").version == 1  # sem mudança, sem nova versão
+    t = svc.create_task("a", actor(svc, "ana"))
+    assert svc.update_task(t.id, actor(svc, "ana"), 1, title="a").version == 1  # sem mudança, sem nova versão
     with pytest.raises(TaskRuleError, match="não editáveis"):
-        svc.update_task(t.id, "p", 1, status="done")
-    svc.change_status(t.id, S.CANCELLED, "p")
+        svc.update_task(t.id, actor(svc, "ana"), 1, status="done")
+    svc.change_status(t.id, S.CANCELLED, actor(svc, "ana"))
     with pytest.raises(TaskRuleError, match="cancelled"):
-        svc.update_task(t.id, "p", 2, title="b")
+        svc.update_task(t.id, actor(svc, "ana"), 2, title="b")
     with pytest.raises(TaskRuleError):
-        svc.change_status(t.id, S.PENDING, "p")
+        svc.change_status(t.id, S.PENDING, actor(svc, "ana"))
 
 
 def test_planned_initial_status_and_assignee_pair(make_service):
     svc, *_ = make_service()
-    t = svc.create_task("a", "p", status=S.PLANNED)
+    t = svc.create_task("a", actor(svc, "ana"), status=S.PLANNED)
     assert t.status == "planned"
     with pytest.raises(TaskRuleError):
-        svc.create_task("b", "p", status=S.DONE)
+        svc.create_task("b", actor(svc, "ana"), status=S.DONE)
     with pytest.raises(TaskRuleError):
-        svc.create_task("b", "p", assignee_kind="person")
-    p = svc.update_task(t.id, "p", 1, assignee_kind="person", assignee_id="ana")
+        svc.create_task("b", actor(svc, "ana"), assignee_kind="person")
+    p = svc.update_task(t.id, actor(svc, "ana"), 1, assignee_kind="person", assignee_id="ana")
     assert (p.assignee_kind, p.assignee_id) == ("person", "ana")
 
 
-def test_legacy_repository_api_stays_compatible(make_service):
+def actor_id(svc, name):
+    return actor(svc, name).identity_id
+
+
+def test_legacy_repository_api_refuses_every_actor_and_writes_nothing(make_service):
     svc, repo, _ = make_service()
-    legacy = repo.create_task("antiga", "pessoa:ana")
-    repo.set_task_status(legacy.id, "running", "pessoa:ana")
-    got = svc.get_task(legacy.id)
-    assert got.status == "in_progress" and got.version == 2
-    assert [c.new_value for c in svc.changes(legacy.id)] == ["pending", "in_progress"]
+    for ator in ("pessoa:ana", "gh:1001", "sistema:migracao", "agente:qualquer", "sistema:orchestrator"):
+        with pytest.raises(ConfigError, match="TaskService"):
+            repo.create_task("antiga", ator)
+    with pytest.raises(ConfigError, match="TaskService"):
+        repo.create_task("antiga", actor(svc, "ana"))
+    t = svc.create_task("nova", actor(svc, "ana"))
+    with pytest.raises(ConfigError, match="TaskService"):
+        repo.set_task_status(t.id, "in_progress", "sistema:migracao")
+    assert svc.get_task(t.id).status == "pending" and svc.get_task(t.id).version == 1
+    assert [c.actor for c in svc.changes(t.id)] == [actor_id(svc, "ana")]
 
 
 def test_task_log_tables_are_append_only_sqlite(tmp_path):
     import sqlite3
 
     repo = open_repository(f"sqlite:///{tmp_path / 'a.db'}")
-    t = TaskService(repo).create_task("a", "p")
+    t = TaskService(repo).create_task("a", actor(repo, "ana"))
     for table in ("task_history", "task_changes"):
         for sql in (f"UPDATE {table} SET actor = 'x'", f"DELETE FROM {table}"):
             with pytest.raises(sqlite3.DatabaseError, match="append-only"):
@@ -214,7 +224,7 @@ def test_task_log_tables_are_append_only_postgres(pg_env, table, sql):
     import psycopg
 
     writer, owner, _ = pg_env
-    TaskService(writer).create_task("a", "p")
+    TaskService(writer).create_task("a", actor(writer, "ana"))
     with pytest.raises(psycopg.errors.RaiseException, match="append-only"):
         owner._run([(sql.format(t=table), ())])  # o dono também é bloqueado pelo trigger
     with pytest.raises(psycopg.errors.InsufficientPrivilege):
@@ -244,9 +254,9 @@ def _seed_and_migrate(conn, dialect):
                     (tid, f"tarefa {tid}", st, "2026-01-01T00:00:00+00:00", "2026-01-01T00:00:00+00:00"))
         for i, hist in enumerate(["created"] + (["running"] if st != "created" else []) + (["done"] if st == "done" else [])):
             cur.execute(f"INSERT INTO task_history (task_id, status, actor, at) VALUES ({ph},{ph},{ph},{ph})",
-                        (tid, hist, "pessoa:ana", f"2026-01-0{i + 1}T00:00:00+00:00"))
+                        (tid, hist, "gh:1001", f"2026-01-0{i + 1}T00:00:00+00:00"))
     cur.execute(f"INSERT INTO audit_log (at, actor, action, target, result) VALUES ({ph},{ph},{ph},{ph},{ph})",
-                ("2026-01-01T00:00:00+00:00", "pessoa:ana", "task.create", "task:t1", "ok"))
+                ("2026-01-01T00:00:00+00:00", "gh:1001", "task.create", "task:t1", "ok"))
     conn.commit()
     before = [tuple(r) for r in _all(conn, "SELECT id, task_id, actor, at FROM task_history ORDER BY id")]
     repo = SqlRepository(conn, dialect)  # aplica 0005
@@ -272,7 +282,7 @@ def _check_migrated(repo, before):
     assert after == before  # mesmas linhas, ids, atores e datas; só o vocabulário do status mudou
     assert len(repo.list_audit()) == 1 and repo.list_audit()[0].action == "task.create"
     # dados migrados já funcionam com as regras novas
-    svc.change_status("t1", S.IN_PROGRESS, "pessoa:ana")
+    svc.change_status("t1", S.IN_PROGRESS, actor(svc, "ana"))
     assert svc.get_task("t1").status == "in_progress"
     assert svc.get_task("t3").status == "done"
 
@@ -298,9 +308,9 @@ def _race_add_dependency(make_service, setup_edges, racing):
     Sem serialização as duas chegam à barreira juntas e as duas validam sobre o mesmo grafo antigo.
     """
     setup, _, _ = make_service()
-    ids = {name: setup.create_task(name, "p").id for name in "ABC"}
+    ids = {name: setup.create_task(name, actor(setup, "ana")).id for name in "ABC"}
     for a, b in setup_edges:
-        setup.add_dependency(ids[a], ids[b], "p")
+        setup.add_dependency(ids[a], ids[b], actor(setup, "ana"))
     barrier = threading.Barrier(2)
 
     def hook():
@@ -315,7 +325,7 @@ def _race_add_dependency(make_service, setup_edges, racing):
         svc, _, _ = make_service()
         svc._after_edges_read = hook
         try:
-            svc.add_dependency(ids[a], ids[b], "p")
+            svc.add_dependency(ids[a], ids[b], actor(setup, "ana"))
             results[i] = "ok"
         except Exception as exc:
             results[i] = exc

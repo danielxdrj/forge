@@ -52,8 +52,8 @@ pytest
 `open_repository(url)` aplica as migrações pendentes e devolve um `Repository`. Cada `create_task`/`set_task_status` grava tarefa, evento de histórico e auditoria (quem, o quê, quando, alvo, resultado) na mesma transação; título, ator, alvo e resultado passam por `redact()`. Exemplo:
 ```python
 repo = open_repository(settings.database_url)
-task = repo.create_task("investigar alerta", actor="agente:triagem")
-repo.set_task_status(task.id, "running", actor="pessoa:ana")
+# API legada de escrita de tarefa está desativada: use TaskService com Principal autenticado (ADR-014)
+task = TaskService(repo).create_task("investigar alerta", principal)
 repo.task_history(task.id); repo.list_audit()
 ```
 Outros componentes devem chamar `repo.record_audit(actor, action, target, result)` para operações próprias.
@@ -80,20 +80,23 @@ Rodam automaticamente em `open_repository`. Para criar uma: adicione `NNNN_descr
 `ProjectService` cadastra, lista, edita e desativa projetos e repositórios (migração `0008`, nunca apaga, `settings` validadas) e expõe `resolve_target` para a FRG-21. Veja `projects/README.md`.
 
 ## Orquestrador e agentes (FRG-24, ADR-011)
-`Orchestrator.dispatch(task_id)` despacha uma tarefa pronta ao agente designado e grava o resultado em `agent_runs`, `task_changes` e `audit_log`. Contrato, ficha, diagrama, exemplo e como adicionar agente: `agents/README.md`. Fronteira: só agentes `read` executam (registro e runtime recusam o resto; aprovação não é autenticação e não libera nada); só o `echo` existe. Reserva atômica de aprovação em `approval_consumptions` (migração `0007`). Papéis: o escritor tem SELECT/INSERT em `agent_runs` e `approval_consumptions` (append-only, sem DELETE); reprovisione com `postgres_roles.sql`. Limitações: timeout não mata a thread (FRG-6).
+`Orchestrator.dispatch(task_id, principal)` despacha (exige pessoa com papel `editor`) uma tarefa pronta ao agente designado e grava o resultado em `agent_runs`, `task_changes` e `audit_log`. `enqueue(queue, task_id, principal)` grava `dispatch_requests` (migração `0012`) e um job `{dispatch_id, task_id}` — sem token. `job_handler()` revalida papel, sessão e versão. Contrato, ficha, diagrama, exemplo e como adicionar agente: `agents/README.md`. Fronteira: só agentes `read` executam (registro e runtime recusam o resto; aprovação não é autenticação e não libera nada); só o `echo` existe. Reserva atômica de aprovação em `grant_consumptions` (migração `0010`; `approval_consumptions` da `0007` fica como histórico; `0011` copia só o que bate com `approval_grants`). Papéis: o escritor tem SELECT/INSERT em `agent_runs`, `grant_consumptions`, `dispatch_requests` e `approval_consumptions` (append-only, sem DELETE); reprovisione com `postgres_roles.sql`. Limitações: timeout não mata a thread (FRG-6).
 
 ## Tarefas (FRG-15, ADR-010)
-`TaskService(repo)` gerencia projetos, etapas, tarefas e subtarefas sobre o mesmo banco (migração `0005`). Sem variável de ambiente nova.
+`TaskService(repo)` gerencia projetos, etapas, tarefas e subtarefas sobre o mesmo banco (migração `0005`). Toda escrita humana recebe um `Principal` autenticado com papel `editor` (ADR-014). Texto como `"pessoa:ana"` é recusado. Em exemplos, `ana` é um Principal obtido por device flow (a CLI faz login por comando; não há arquivo de sessão).
 ```python
 svc = TaskService(repo)
-proj = svc.create_project("Forge", actor="pessoa:ana"); etapa = svc.create_stage(proj.id, "Fase 1", "pessoa:ana")
-a = svc.create_task("Modelo", "pessoa:ana", stage_id=etapa.id, assignee_kind="agent", assignee_id="dev")
-b = svc.create_task("Testes", "pessoa:ana", stage_id=etapa.id)
-svc.add_dependency(b.id, a.id, "pessoa:ana")           # b depende de a (obrigatória)
-svc.is_ready(b.id)                                       # False: a ainda não está done
-svc.change_status(b.id, "in_progress", "pessoa:ana")     # TaskRuleError: dependências obrigatórias pendentes
-svc.update_task(a.id, "pessoa:ana", expected_version=1, priority="high")
+proj = svc.create_project("Forge", ana); etapa = svc.create_stage(proj.id, "Fase 1", ana)
+a = svc.create_task("Modelo", ana, stage_id=etapa.id, assignee_kind="agent", assignee_id="dev")
+b = svc.create_task("Testes", ana, stage_id=etapa.id)
+svc.add_dependency(b.id, a.id, ana)           # b depende de a (obrigatória)
+svc.is_ready(b.id)                              # False: a ainda não está done
+svc.change_status(b.id, "in_progress", ana)     # TaskRuleError: dependências obrigatórias pendentes
+svc.update_task(a.id, ana, expected_version=1, priority="high")
 ```
+
+## Autenticação humana (ADR-014)
+`forge_core.auth`: login por OAuth device flow do GitHub (`github.py`), identidades e papéis `owner`/`editor`/`approver` em tabelas append-only (`store.py`) e CLI local (`cli.py`). Pré-requisito humano e operação: `docs/operacao/autenticacao-humana.md`. Os testes usam transporte falso (`tests/core/test_auth.py`).
 - **Status:** `planned`, `pending`, `in_progress`, `blocked`, `in_validation`, `done`, `cancelled` (`cancelled` é extra, ADR-010).
   `planned→pending|cancelled`; `pending→in_progress|blocked|cancelled`; `in_progress→blocked|in_validation|cancelled`; `blocked→pending|in_progress|cancelled`; `in_validation→done|in_progress|cancelled`; `done` e `cancelled` são finais.
 - **Pronta para execução:** `pending` com todas as dependências obrigatórias `done` (`is_ready`). Entrar em `in_progress` exige isso. Dependência opcional não bloqueia.
@@ -104,7 +107,7 @@ svc.update_task(a.id, "pessoa:ana", expected_version=1, priority="high")
 - **Concorrência:** `update_task` exige `expected_version`; versão diferente levanta `TaskConflictError` (releia e tente de novo).
 - **Ciclos e concorrência:** `add_dependency` valida o ciclo e insere de forma atômica. No PostgreSQL toma `pg_advisory_xact_lock` global do grafo de dependências no início da transação (solta no commit/rollback); no SQLite, `BEGIN IMMEDIATE` já serializa. Escolhido por ser simples e o volume de mudanças no grafo ser baixo; custo: inclusões de dependência esperam umas pelas outras. Alternativas descartadas: SERIALIZABLE com retry (mais complexo) e linha guardiã por projeto (tarefas sem projeto ficariam sem guardião).
 - **Histórico:** `svc.changes(id)` (campo, valor antigo e novo, ator, data) e `repo.task_history(id)` (status). Ambos append-only (trigger). Toda mudança e toda recusa vão para `audit_log` (`task.create|update|status|dependency`, `project.create`, `stage.create`), só com nomes de campos e status: o texto da tarefa não entra na auditoria. Não coloque segredos em tarefas.
-- **API antiga:** `repo.create_task/set_task_status` seguem funcionando (sem regras de transição; `created`→`pending`, `running`→`in_progress`). Prefira `TaskService`.
+- **API antiga:** `repo.create_task/set_task_status` recusam qualquer ator (ADR-014). Use `TaskService` com `Principal`.
 - **Papéis:** o escritor tem SELECT/INSERT em `task_changes`, `projects`, `stages` e SELECT/INSERT/UPDATE em `task_dependencies`; nenhum DELETE (reprovisione com `postgres_roles.sql`).
 - **Troubleshooting:** `TaskRuleError: transição inválida` → veja a tabela acima; `dependências obrigatórias pendentes` → conclua a dependência (uma dependência cancelada não conta como concluída; ajuste-a para opcional ou crie nova tarefa); `TaskConflictError` → releia a tarefa.
 - **Limitações:** dependências não podem ser removidas (sem DELETE), apenas alteradas entre obrigatória/opcional; sem edição de projeto/etapa; `done`/`cancelled` não reabrem; sem integração com `jobs` (FRG-24), GitHub (FRG-29) nem eventos (FRG-17).
@@ -113,7 +116,7 @@ svc.update_task(a.id, "pessoa:ana", expected_version=1, priority="high")
 `SqlJobQueue(repo, settings=None, max_attempts=5, backoff_base=30, backoff_cap=3600, lease_seconds=300)` usa o mesmo banco e as mesmas migrações (`0003_jobs`). Sem variável de ambiente nova.
 ```python
 q = SqlJobQueue(repo, settings)
-q.enqueue("sincronizar", {"ref": "abc"}, actor="pessoa:ana", idempotency_key="evento-42")
+q.enqueue("sincronizar", {"ref": "abc"}, actor="gh:1001", idempotency_key="evento-42")  # atribuição no job; autoridade só via Principal no Orchestrator.enqueue
 q.run_once(meu_handler, actor="agente:worker")   # claim + handler + complete/fail
 ```
 - **Estados:** `queued` → `running` → `succeeded`; erro volta a `queued` com `run_at` no futuro (backoff) até esgotar `max_attempts`, quando vira `failed` (definitivo). `cancelled` por `cancel()`.

@@ -1,6 +1,7 @@
 """Reprovisionamento de grants em banco existente (ADR-013). Roda só com Postgres efêmero."""
 import pytest
 
+from auth_helpers import actor
 from forge_core.errors import ForgeError
 from forge_core.storage.provisioning.reprovision import ReprovisionError, reprovision
 from forge_core.tasks import TaskService
@@ -37,7 +38,7 @@ def test_old_database_is_repaired_and_reapplying_is_idempotent(pg_env):
     writer, owner_repo, _ = pg_env
     role = _role(writer)
     svc = TaskService(writer)
-    before = svc.create_task("dados antes", "pessoa:ana")
+    before = svc.create_task("dados antes", actor(writer, "ana"))
     _simulate_old_database(owner_repo, role)
     assert not _has(writer, "projects", "UPDATE")
 

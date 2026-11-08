@@ -6,6 +6,7 @@ ficam fora do Core (ADR-005); aqui há apenas o caminho para eles.
 from __future__ import annotations
 
 import os
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 
@@ -24,6 +25,7 @@ class Settings:
     database_url: str | None = field(default=None, repr=False)
     database_migration_url: str | None = field(default=None, repr=False)
     agents_disabled: tuple[str, ...] = ()
+    github_client_id: str | None = None
 
 
 def _bool(name: str, raw: str) -> bool:
@@ -66,10 +68,13 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
         n.strip().lower() for n in env.get("FORGE_AGENTS_DISABLED", "").split(",") if n.strip()
     )
 
+    client_id = env.get("FORGE_GITHUB_CLIENT_ID", "").strip() or None
+    if client_id and not re.fullmatch(r"[A-Za-z0-9._-]{1,64}", client_id):
+        problems.append("FORGE_GITHUB_CLIENT_ID inválido: use só o client id público do OAuth App")
     if problems:
         raise ConfigError("Configuração inválida:\n- " + "\n- ".join(problems))
-    return Settings(config_dir=config_dir, log_level=log_level, automation_enabled=automation, database_url=database_url, database_migration_url=migration_url,
-                    agents_disabled=agents_disabled)
+    return Settings(config_dir=config_dir, log_level=log_level, automation_enabled=automation, database_url=database_url,
+                    database_migration_url=migration_url, agents_disabled=agents_disabled, github_client_id=client_id)
 
 
 def is_automation_enabled(settings: Settings) -> bool:

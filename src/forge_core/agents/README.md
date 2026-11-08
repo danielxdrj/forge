@@ -13,6 +13,7 @@ Stdlib apenas. Nenhuma IA: o provedor ficará atrás de `ProviderAdapter` (só i
 
 ## Fronteira de segurança e limitações reais
 - Só agentes `read` executam, e só o `echo` e os agentes de teste existem. Privilegiados e agentes reais continuam bloqueados (registro, runtime e Orchestrator), inclusive em chamadas diretas.
+- Despacho por fila: `enqueue` exige `editor` humano e persiste `dispatch_requests`; o job não leva token. `job_handler` revalida papel e versão. Sem identidade de serviço nova.
 - O registro de aprovação não é autenticação (ADR-011). Para liberar privilegiados: autenticação de aprovadores e nova ADR.
 - O container compartilha o kernel do host.
 - Efeitos externos do próprio agente só são bloqueados pela rede negada e pelo filesystem somente leitura; o que for escrito no tmpfs some com o container.

@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 
 from ..errors import TaskConflictError, TaskRuleError
 from ..logging import redact
+from ..auth.store import AuthStore
 from ..storage.sql import SqlRepository
 from . import rules
 from .model import Dependency, Project, Stage, Task, TaskChange, TaskStatus as S
@@ -52,6 +53,7 @@ class TaskService:
     def __init__(self, repo: SqlRepository, clock: Callable[[], datetime] | None = None):
         self._repo = repo
         self._clock = clock or (lambda: datetime.now(timezone.utc))
+        self._auth = AuthStore(repo)
         self._after_edges_read: Callable[[], None] | None = None  # gancho de teste (corridas determinísticas)
 
     def _now(self) -> str:
@@ -60,11 +62,14 @@ class TaskService:
     def _lock(self) -> str:
         return " FOR UPDATE" if self._repo.dialect == "postgres" else ""
 
-    def _run(self, action: str, actor: str, target: str, fn):
-        """Executa `fn(tx, now)` numa transação; recusas de regra viram auditoria `error:` e relançam."""
+    def _run(self, action: str, actor: str, target: str, fn, principal):
+        """Executa `fn(tx, now)` na seção autorizada (sessão e papel conferidos na mesma transação).
+
+        Recusas de regra viram auditoria `error:` e relançam.
+        """
         err: Exception | None = None
         result = None
-        with self._repo.transaction() as tx:
+        with self._auth.authorized(principal, "editor") as tx:
             try:
                 result = fn(tx, self._now())
             except _REFUSALS as exc:
@@ -89,6 +94,8 @@ class TaskService:
         return _task(rows[0])
 
     def create_project(self, title: str, actor: str) -> Project:
+        principal = self._auth.require(actor, "editor")
+        actor = principal.identity_id
         def fn(tx, now):
             if not title.strip():
                 raise TaskRuleError("título do projeto é obrigatório")
@@ -97,9 +104,11 @@ class TaskService:
                        (pid, title, now, now))
             tx.audit(actor, "project.create", f"project:{pid}", "ok")
             return Project(pid, title, now)
-        return self._run("project.create", actor, "project:new", fn)
+        return self._run("project.create", actor, "project:new", fn, principal)
 
     def create_stage(self, project_id: str, title: str, actor: str) -> Stage:
+        principal = self._auth.require(actor, "editor")
+        actor = principal.identity_id
         def fn(tx, now):
             if not title.strip():
                 raise TaskRuleError("título da etapa é obrigatório")
@@ -110,7 +119,7 @@ class TaskService:
                        (sid, project_id, title, now))
             tx.audit(actor, "stage.create", f"stage:{sid}", "ok")
             return Stage(sid, project_id, title, now)
-        return self._run("stage.create", actor, f"project:{project_id}", fn)
+        return self._run("stage.create", actor, f"project:{project_id}", fn, principal)
 
     def list_projects(self) -> list[Project]:
         return [Project(*r) for r in self._repo.fetch("SELECT id, title, created_at FROM projects ORDER BY created_at, id")]
@@ -126,6 +135,10 @@ class TaskService:
                     assignee_kind: str | None = None, assignee_id: str | None = None,
                     start_date: str | None = None, due_date: str | None = None,
                     stage_id: str | None = None, parent_id: str | None = None, required: bool = True) -> Task:
+        principal = self._auth.require(actor, "editor")
+        actor = principal.identity_id
+        title, objective, context, scope, acceptance_criteria = (
+            redact(v) for v in (title, objective, context, scope, acceptance_criteria))
         task_id = str(uuid.uuid4())
 
         def fn(tx, now):
@@ -150,11 +163,14 @@ class TaskService:
                        (task_id, status, actor, now))
             self._change(tx, task_id, "status", None, status, actor, now)
             tx.audit(actor, "task.create", f"task:{task_id}", "ok")
-        self._run("task.create", actor, "task:new", fn)
+        self._run("task.create", actor, "task:new", fn, principal)
         return self.get_task(task_id)  # type: ignore[return-value]
 
     def update_task(self, task_id: str, actor: str, expected_version: int, **fields) -> Task:
         """Edita campos (não o status). `expected_version` evita sobrescrever mudança de outra pessoa."""
+        principal = self._auth.require(actor, "editor")
+        actor = principal.identity_id
+        fields = {k: redact(v) if isinstance(v, str) else v for k, v in fields.items()}
         def fn(tx, now):
             unknown = set(fields) - set(_EDITABLE)
             if unknown:
@@ -179,10 +195,12 @@ class TaskService:
             for f in changed:
                 self._change(tx, task_id, f, getattr(task, f), merged[f], actor, now)
             tx.audit(actor, "task.update", f"task:{task_id}", f"ok: fields={','.join(changed)}")
-        self._run("task.update", actor, f"task:{task_id}", fn)
+        self._run("task.update", actor, f"task:{task_id}", fn, principal)
         return self.get_task(task_id)  # type: ignore[return-value]
 
     def change_status(self, task_id: str, new_status: str, actor: str, expected_version: int | None = None) -> Task:
+        principal = self._auth.require(actor, "editor")
+        actor = principal.identity_id
         def fn(tx, now):
             task = self._load(tx, task_id, self._lock())
             if expected_version is not None and task.version != expected_version:
@@ -207,7 +225,7 @@ class TaskService:
             for field, value in cols.items():
                 self._change(tx, task_id, field, getattr(task, field), value, actor, now)
             tx.audit(actor, "task.status", f"task:{task_id}", f"ok: {task.status} -> {new_status}")
-        self._run("task.status", actor, f"task:{task_id}", fn)
+        self._run("task.status", actor, f"task:{task_id}", fn, principal)
         return self.get_task(task_id)  # type: ignore[return-value]
 
     @staticmethod
@@ -218,6 +236,8 @@ class TaskService:
         return [(i, st, bool(rq)) for i, st, rq in rows]
 
     def add_dependency(self, task_id: str, depends_on_id: str, actor: str, required: bool = True) -> Dependency:
+        principal = self._auth.require(actor, "editor")
+        actor = principal.identity_id
         def fn(tx, now):
             if self._repo.dialect == "postgres":
                 # Valida ciclo e insere atomicamente: sem isto, A->B e B->A concorrentes passam as duas.
@@ -248,7 +268,7 @@ class TaskService:
             label = "required" if required else "optional"
             self._change(tx, task_id, "dependency", None, f"{depends_on_id}:{label}", actor, now)
             tx.audit(actor, "task.dependency", f"task:{task_id}", f"ok: depends_on={depends_on_id} {label}")
-        self._run("task.dependency", actor, f"task:{task_id}", fn)
+        self._run("task.dependency", actor, f"task:{task_id}", fn, principal)
         return Dependency(task_id, depends_on_id, required)
 
     def get_task(self, task_id: str) -> Task | None:

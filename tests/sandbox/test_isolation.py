@@ -1,8 +1,13 @@
 """Provas reais de isolamento (FRG-6). Rodam contra o Docker real do runner, com a imagem de teste."""
 import json
+import sys
 import time
+from pathlib import Path
 
-from conftest import leftover_containers
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "core"))
+
+from auth_helpers import actor  # noqa: E402
+from conftest import leftover_containers  # noqa: E402
 from forge_core.agents.sandbox import IsolatedRuntime
 from forge_core.tasks.model import Task
 from forge_test_probe import SECRET_MARKER, ProbeAgent
@@ -13,7 +18,7 @@ def _ctx(mode):
 
     task = Task("t-1", mode, "", "", "", "", "normal", "in_progress", "agent", "probe", None, None, None, None,
                 None, True, 1, "", "")
-    return AgentContext(task=task, actor="pessoa:ana")
+    return AgentContext(task=task, actor="sistema:teste")
 
 
 def _run(sandbox, mode, timeout=None):
@@ -83,8 +88,8 @@ def test_orchestrator_audit_never_contains_secret(sandbox, tmp_path):
     reg = AgentRegistry()
     reg.register(ProbeAgent())
     orch = Orchestrator(repo, reg, tasks=svc, settings=_settings(), runtime=IsolatedRuntime(sandbox, _settings()))
-    t = svc.create_task("raise_secret", "pessoa:ana", assignee_kind="agent", assignee_id="probe")
-    orch.dispatch(t.id)
+    t = svc.create_task("raise_secret", actor(svc, "ana"), assignee_kind="agent", assignee_id="probe")
+    orch.dispatch(t.id, actor(svc, "ana"))
     dump = repr(repo.list_audit()) + repr(repo.fetch("SELECT * FROM agent_runs")) + repr(
         repo.fetch("SELECT * FROM task_changes"))
     assert SECRET_MARKER not in dump
@@ -99,8 +104,8 @@ def test_public_default_dispatch_runs_echo_in_container(tmp_path):
 
     repo = open_repository(f"sqlite:///{tmp_path / 'p.db'}")
     svc = TaskService(repo)
-    t = svc.create_task("tarefa real", "pessoa:ana", objective="objetivo", assignee_kind="agent", assignee_id="echo")
-    res = Orchestrator(repo, default_registry(), tasks=svc, settings=_settings()).dispatch(t.id)
+    t = svc.create_task("tarefa real", actor(svc, "ana"), objective="objetivo", assignee_kind="agent", assignee_id="echo")
+    res = Orchestrator(repo, default_registry(), tasks=svc, settings=_settings()).dispatch(t.id, actor(svc, "ana"))
     assert res.run_status == "success" and res.task_status == "in_validation"
     assert "echo" in res.outcome.summary
     assert leftover_containers() == []
@@ -114,8 +119,8 @@ def test_public_dispatch_with_missing_image_fails_closed(tmp_path, monkeypatch):
     monkeypatch.setenv("FORGE_AGENT_SANDBOX_IMAGE", "forge-agent-sandbox:nao-existe")
     repo = open_repository(f"sqlite:///{tmp_path / 'm.db'}")
     svc = TaskService(repo)
-    t = svc.create_task("tarefa", "pessoa:ana", assignee_kind="agent", assignee_id="echo")
-    res = Orchestrator(repo, default_registry(), tasks=svc, settings=_settings()).dispatch(t.id)
+    t = svc.create_task("tarefa", actor(svc, "ana"), assignee_kind="agent", assignee_id="echo")
+    res = Orchestrator(repo, default_registry(), tasks=svc, settings=_settings()).dispatch(t.id, actor(svc, "ana"))
     assert res.run_status == "error" and res.error == "sandbox_unavailable"
     assert res.task_status != "in_validation"
     assert leftover_containers() == []

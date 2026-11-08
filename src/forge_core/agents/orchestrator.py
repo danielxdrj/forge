@@ -13,16 +13,17 @@ import threading
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from typing import Any
+from datetime import datetime, timezone
 
 from ..config import Settings, load_settings, require_automation_enabled
-from ..errors import (AgentError, ApprovalError, DispatchRefusedError, JobFailure, TaskConflictError,
-                      TaskRuleError)
+from ..errors import (AgentError, ApprovalError, AuthenticationError, AuthorizationError, DispatchRefusedError,
+                      JobFailure, TaskConflictError, TaskRuleError)
 from ..logging import redact
 from ..storage.sql import SqlRepository
 from ..tasks import TaskService
 from ..tasks.model import AssigneeKind, Task, TaskStatus as S
+from ..auth.store import AuthStore
 from .approval import DISABLED, NEEDS_APPROVAL, PRIVILEGED_DISABLED_MESSAGE, ApprovalLedger, decide
 from .registry import AgentRegistry
 from .runtime import RunResult
@@ -80,13 +81,11 @@ class Orchestrator:
 
     # --- aprovação (registra o ator informado; NÃO autentica: ADR-011) ---
 
-    def grant_approval(self, task_id: str, approver: str, agent: str | None = None) -> None:
-        """Registra `approval.granted` (uso único por concessão). Só atores `pessoa:*`; agente não aprova.
+    def grant_approval(self, task_id: str, approver, agent: str | None = None) -> None:
+        """Concede aprovação a um Principal com papel `approver` (ADR-014). Texto não concede nada.
 
-        Não libera execução de agente privilegiado: isso segue desligado até existir autenticação.
+        Não libera execução de agente privilegiado por si: `decide` segue fechado (ADR-011).
         """
-        if not approver.startswith("pessoa:"):
-            self.approvals.grant(task_id, approver, agent or "")  # registra a recusa e levanta ApprovalError
         task = self._tasks.get_task(task_id)
         if task is None:
             raise ApprovalError(f"tarefa inexistente: {task_id}")
@@ -94,8 +93,13 @@ class Orchestrator:
 
     # --- despacho ---
 
-    def dispatch(self, task_id: str, requested_by: str = ORCHESTRATOR_ACTOR,
-                 cancel_event: threading.Event | None = None) -> DispatchResult:
+    def dispatch(self, task_id: str, actor, cancel_event: threading.Event | None = None) -> DispatchResult:
+        """Despacha como pessoa autenticada com papel `editor` (ADR-014). Texto e objetos do chamador não valem.
+
+        Sem sessão e papel ativos, nada muda de status e nada é executado.
+        """
+        principal = AuthStore(self._repo).require(actor, "editor")
+        requested_by = principal.identity_id
         settings = self._effective_settings()
         require_automation_enabled(settings)
         task = self._tasks.get_task(task_id)
@@ -124,8 +128,8 @@ class Orchestrator:
             self._refuse(requested_by, task_id, "agent.dispatch", str(exc))
 
         try:  # a mudança de status é o desempate entre despachos concorrentes
-            self._tasks.change_status(task_id, S.IN_PROGRESS, ORCHESTRATOR_ACTOR, expected_version=task.version)
-        except (TaskRuleError, TaskConflictError) as exc:
+            self._tasks.change_status(task_id, S.IN_PROGRESS, principal, expected_version=task.version)
+        except (TaskRuleError, TaskConflictError, AuthorizationError, AuthenticationError) as exc:
             self._refuse(requested_by, task_id, "agent.dispatch", f"não foi possível iniciar: {exc}")
         self._repo.record_audit(requested_by, "agent.dispatch", f"task:{task_id}", f"ok: agent={name}")
 
@@ -136,8 +140,8 @@ class Orchestrator:
 
         target = S.IN_VALIDATION if run.status == "success" else S.BLOCKED
         try:
-            self._tasks.change_status(task_id, target, ORCHESTRATOR_ACTOR)
-        except (TaskRuleError, TaskConflictError) as exc:  # ex.: a tarefa foi cancelada durante a execução
+            self._tasks.change_status(task_id, target, principal)
+        except (TaskRuleError, TaskConflictError, AuthorizationError, AuthenticationError) as exc:  # ex.: a tarefa foi cancelada durante a execução
             self._repo.record_audit(ORCHESTRATOR_ACTOR, "agent.result", f"task:{task_id}",
                                     f"error: status não atualizado ({type(exc).__name__}) run={run_id}")
         final = self._tasks.get_task(task_id)
@@ -176,29 +180,71 @@ class Orchestrator:
         self._repo.record_audit(requested_by, "orchestrator.split_proposed", f"task:{task_id}", f"ok: n={len(titles)}")
         return titles
 
-    def apply_split(self, task_id: str, titles: list[str], approver: str) -> list[Task]:
-        if not approver.startswith("pessoa:"):
-            self._repo.record_audit(approver, "orchestrator.split_applied", f"task:{task_id}", "error: aprovador não é pessoa")
-            raise ApprovalError("aplicar a divisão exige um ator pessoa:*")
-        created = [self._tasks.create_task(t, approver, parent_id=task_id) for t in titles]
-        self._repo.record_audit(approver, "orchestrator.split_applied", f"task:{task_id}", f"ok: n={len(created)}")
+    def apply_split(self, task_id: str, titles: list[str], actor) -> list[Task]:
+        """Aplica a divisão como uma pessoa autenticada com papel `editor` (o TaskService confere)."""
+        principal = AuthStore(self._repo).require(actor, "editor")
+        created = [self._tasks.create_task(t, principal, parent_id=task_id) for t in titles]
+        self._repo.record_audit(principal.identity_id, "orchestrator.split_applied",
+                                f"task:{task_id}", f"ok: n={len(created)}")
         return created
 
-    # --- adaptador para a fila (FRG-40) ---
+    def enqueue(self, queue, task_id: str, actor):
+        """Enfileira um despacho autorizado. O job guarda só o id do pedido, nunca token ou OAuth.
 
-    def enqueue(self, queue, task_id: str, actor: str):
-        """Enfileira o despacho. A chave inclui a version: repetir é idempotente até a tarefa mudar."""
+        A pessoa precisa ser `editor` na seção serializada. A execução revalida papel, sessão e versão.
+        """
+        auth = AuthStore(self._repo)
+        principal = auth.require(actor, "editor")
+        requested_by = principal.identity_id
         task = self._tasks.get_task(task_id)
         if task is None:
-            raise KeyError(task_id)
-        return queue.enqueue(JOB_KIND, {"task_id": task_id}, actor,
-                             idempotency_key=f"{JOB_KIND}:{task_id}:{task.version}")
+            self._refuse(requested_by, task_id, "agent.enqueue", "tarefa inexistente")
+        dispatch_id = uuid.uuid4().hex
+        lock = " FOR UPDATE" if self._repo.dialect != "sqlite" else ""
+        version = None
+        with auth.authorized(principal, "editor") as tx:
+            rows = tx.execute(f"SELECT version FROM tasks WHERE id = ?{lock}", (task_id,)).fetchall()
+            if rows:
+                version = rows[0][0]
+                tx.execute(
+                    "INSERT INTO dispatch_requests (id, task_id, task_version, identity_id, requested_at) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    (dispatch_id, task_id, version, requested_by, self._clock().isoformat()))
+                tx.audit(requested_by, "agent.enqueue", f"task:{task_id}", f"ok: version={version}")
+        if version is None:
+            self._refuse(requested_by, task_id, "agent.enqueue", "tarefa inexistente")
+        return queue.enqueue(
+            JOB_KIND, {"dispatch_id": dispatch_id, "task_id": task_id},
+            requested_by, idempotency_key=f"orchestrate:{task_id}:{version}")
 
-    def job_handler(self) -> Callable[[Any], None]:
-        """Handler para `JobQueue.run_once`. Recusa vira falha definitiva (reenfileire após resolver)."""
+    def job_handler(self):
+        """Handler da fila: revalida o vínculo e o papel vivo, despacha, revoga a sessão temporária."""
         def handle(job) -> None:
+            payload = job.payload if isinstance(job.payload, dict) else {}
+            dispatch_id, task_id = payload.get("dispatch_id"), payload.get("task_id")
+            if not isinstance(dispatch_id, str) or not isinstance(task_id, str) or not dispatch_id or not task_id:
+                raise JobFailure("despacho recusado: payload", retryable=False)
+            rows = self._repo.fetch(
+                "SELECT task_id, task_version FROM dispatch_requests WHERE id = ?", (dispatch_id,))
+            if len(rows) != 1 or rows[0][0] != task_id:
+                raise JobFailure("despacho recusado: vinculo", retryable=False)
+            expected_version = rows[0][1]
+            task = self._tasks.get_task(task_id)
+            if task is None or task.version != expected_version:
+                raise JobFailure("despacho recusado: versao", retryable=False)
+            auth = AuthStore(self._repo)
+            principal = None
             try:
-                self.dispatch(job.payload["task_id"])
-            except DispatchRefusedError as exc:
-                raise JobFailure(str(exc), retryable=False) from None
+                principal = auth.principal_for_dispatch(dispatch_id)
+                self.dispatch(task_id, principal)
+            except (AuthenticationError, AuthorizationError, DispatchRefusedError, ApprovalError) as exc:
+                raise JobFailure(f"despacho recusado: {exc}", retryable=False) from None
+            finally:
+                if principal is not None:
+                    try:
+                        auth.revoke_session(principal)
+                    except AuthenticationError:
+                        pass
         return handle
+
+    handler = job_handler  # nome antigo da FRG-24; mesmo contrato
