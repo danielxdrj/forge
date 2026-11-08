@@ -8,11 +8,11 @@ Este documento descreve a automação de releases do Forge: como ela decide a ve
 | --- | --- | --- |
 | Workflow de release | `.github/workflows/release.yml` | A cada push na `main`, roda o [release-please](https://github.com/googleapis/release-please-action) com o `GITHUB_TOKEN`. |
 | Configuração | `release-please-config.json` | Tipos de commit, seções do CHANGELOG, formato da tag (`vX.Y.Z`). |
-| Versão atual | `.release-please-manifest.json` | Última versão lançada (`0.16.0`). Atualizado pelo próprio PR de release. |
+| Versão atual | `.release-please-manifest.json` | Última versão **publicada** (`0.15.0`, tag `v0.15.0` em `6f853f6`). Atualizado pelo próprio PR de release. |
 | Check do título do PR | `.github/workflows/pr-title.yml` | Falha se o título do PR não seguir Conventional Commits. |
 | Saídas | `CHANGELOG.md`, `version.txt`, tag `vX.Y.Z`, GitHub Release | Criados quando o PR de release é mergeado. |
 
-> **Enquanto a automação não estiver ativa:** cada PR ganha uma release manual (tag e GitHub Release, como no procedimento manual abaixo), e o `.release-please-manifest.json` e a `version` do `pyproject.toml` precisam ser atualizados junto com ela. O próprio PR que leva a release manual atualiza o manifesto para a versão que vai receber, da mesma forma que um PR de release do release-please já sai com a versão que publica.
+> **Regra vigente (substitui qualquer procedimento anterior):** PRs de feature e fix **não alteram** `.release-please-manifest.json`, `pyproject.toml` nem `version` em lugar nenhum. Quem sobe a versão é o release-please, no PR `chore(main): release X.Y.Z`. O `pyproject.toml` entra como `extra-files` em `release-please-config.json` para ser atualizado junto. O manifesto só é corrigido à mão em caso excepcional de estado inconsistente, como a correção de 0.16.0 para 0.15.0 feita no PR de autenticação humana, porque o manifesto precisa apontar para a última versão publicada. Não usar `release-as` permanente.
 
 Só o `GITHUB_TOKEN` é usado. Não há segredo pessoal, token de acesso pessoal nem GitHub App.
 
