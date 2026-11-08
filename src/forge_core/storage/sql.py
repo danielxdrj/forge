@@ -94,7 +94,15 @@ class SqlRepository:
     _LEGACY_STATUS = {"created": "pending", "running": "in_progress"}
     _STATUSES = ("planned", "pending", "in_progress", "blocked", "in_validation", "done", "cancelled")
 
+    @staticmethod
+    def _legacy_actor(actor) -> str:
+        """API antiga não autentica: autoria humana (`pessoa:*`) e objetos que não são texto são recusados."""
+        if not isinstance(actor, str) or actor.startswith("pessoa:") or actor.startswith("gh:"):
+            raise ConfigError("autoria humana exige TaskService com Principal autenticado")
+        return actor
+
     def create_task(self, title: str, actor: str) -> Task:
+        actor = self._legacy_actor(actor)
         task_id, now, title = str(uuid.uuid4()), _now(), redact(title)
         self._run(
             [
@@ -110,6 +118,7 @@ class SqlRepository:
         return Task(task_id, title, "pending", now, now)
 
     def set_task_status(self, task_id: str, status: str, actor: str) -> Task:
+        actor = self._legacy_actor(actor)
         current = self.get_task(task_id)
         if current is None:
             self.record_audit(actor, "task.status", f"task:{task_id}", "error: tarefa inexistente")

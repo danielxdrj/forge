@@ -1,6 +1,7 @@
 # ADR-011: Orquestrador, Agent Runtime e aprovação
 
 - **Status:** Aprovado (06/11/2026). Atualizado pela ADR-013: o runtime público passou a ser isolado em container; a execução em thread não é mais caminho público.
+- **Atualização (ADR-014):** a aprovação agora exige um `Principal` autenticado com papel `approver`, nunca texto `pessoa:*`. Onde este ADR diz que o registro é texto, vale o ADR-014. A regra de que agentes privilegiados não executam continua valendo.
 - **Data:** 2026-11-06
 - **Revisar quando:** existir a tarefa de autenticação de aprovadores, a FRG-6 (isolamento) ou a FRG-46 (revisão do ADR-003)
 

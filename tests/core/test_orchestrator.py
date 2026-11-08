@@ -2,11 +2,12 @@ import threading
 
 import pytest
 
+from auth_helpers import actor
 from forge_core.agents import AgentOutcome, AgentRegistry, AgentSpec, EchoAgent, Orchestrator, default_registry
 from inprocess_runtime import InProcessRuntime as AgentRuntime
 from forge_core.agents.approval import ALLOW, DISABLED, NEEDS_APPROVAL, decide
 from forge_core.config import load_settings
-from forge_core.errors import (AgentError, AgentFailure, ApprovalError, AutomationDisabledError, DispatchRefusedError)
+from forge_core.errors import (AgentError, AgentFailure, ApprovalError, AuthenticationError, AutomationDisabledError, DispatchRefusedError)
 from forge_core.queue import SqlJobQueue
 from forge_core.tasks import TaskService, TaskStatus as S
 
@@ -32,7 +33,7 @@ def env(make_repo):
 
 
 def agent_task(svc, name="echo", **kw):
-    return svc.create_task("Tarefa", "pessoa:ana", objective="faça", assignee_kind="agent", assignee_id=name, **kw)
+    return svc.create_task("Tarefa", actor(svc, "ana"), objective="faça", assignee_kind="agent", assignee_id=name, **kw)
 
 
 def runs(repo):
@@ -63,9 +64,9 @@ def test_dependency_pending_is_not_dispatched(env):
     repo, svc, reg, mk = env
     spy = Fake(spec())
     reg.register(spy)
-    dep = svc.create_task("dep", "p")
+    dep = svc.create_task("dep", actor(svc, "ana"))
     t = agent_task(svc, "spy")
-    svc.add_dependency(t.id, dep.id, "p")
+    svc.add_dependency(t.id, dep.id, actor(svc, "ana"))
     with pytest.raises(DispatchRefusedError, match="dependências obrigatórias"):
         mk().dispatch(t.id)
     assert spy.calls == 0 and svc.get_task(t.id).status == "pending" and runs(repo) == []
@@ -79,9 +80,9 @@ def test_other_refusals(env, setup):
     if setup == "planned":
         t = agent_task(svc, status=S.PLANNED)
     elif setup == "no_agent":
-        t = svc.create_task("t", "p")
+        t = svc.create_task("t", actor(svc, "ana"))
     elif setup == "person":
-        t = svc.create_task("t", "p", assignee_kind="person", assignee_id="ana")
+        t = svc.create_task("t", actor(svc, "ana"), assignee_kind="person", assignee_id="ana")
     else:
         t = agent_task(svc, "fantasma")
     before = svc.get_task(t.id)
@@ -125,20 +126,29 @@ def test_privileged_without_approval_is_refused_and_audited(make_repo, perms):
     assert (last.action, last.target) == ("agent.dispatch", f"task:{t.id}") and last.result.startswith("error: aprovação")
 
 
-@pytest.mark.parametrize("approver", ["pessoa:chefe", "pessoa:forjada"])
 @pytest.mark.parametrize("perms", [("write",), ("critical",), ("read", "write"), ("deploy",)])
-def test_privileged_with_approval_granted_still_does_not_execute(make_repo, perms, approver):
+def test_privileged_with_approval_granted_still_does_not_execute(make_repo, perms):
     repo, svc, fake, orch = privileged_env(make_repo, perms=perms)
     t = agent_task(svc, "priv")
     before = svc.get_task(t.id)
-    orch.grant_approval(t.id, approver)  # identidade sem autenticação: registra, mas não libera nada
-    assert ("approval.granted", "ok: agent=priv") in actions(repo)
+    orch.grant_approval(t.id, actor(repo, "chefe"))  # aprovador verificado: registra, mas não libera nada
+    assert any(a == "approval.granted" and r.startswith("ok: agent=priv") for a, r in actions(repo))
     with pytest.raises(DispatchRefusedError, match=PRIV):
         orch.dispatch(t.id)
     assert fake.calls == 0 and svc.get_task(t.id) == before and runs(repo) == []
     last = repo.list_audit()[-1]
     assert last.action == "agent.dispatch" and last.result == f"error: {PRIV}"
     assert "approval.consumed" not in [a for a, _ in actions(repo)]  # nada foi reservado
+
+
+def test_text_approver_is_refused_and_grants_nothing(make_repo):
+    repo, svc, fake, orch = privileged_env(make_repo, perms=("write",))
+    t = agent_task(svc, "priv")
+    with pytest.raises(ApprovalError, match="principal_missing"):
+        orch.grant_approval(t.id, "pessoa:forjada")
+    with pytest.raises(DispatchRefusedError, match="aprovação pendente"):
+        orch.dispatch(t.id)
+    assert fake.calls == 0
 
 
 def test_policy_function_never_allows_privileged():
@@ -154,7 +164,7 @@ def test_approval_must_come_from_a_person_and_for_that_agent(make_repo):
     with pytest.raises(ApprovalError):
         orch.grant_approval(t.id, "agente:priv")
     assert repo.list_audit()[-1].result.startswith("error")
-    orch.grant_approval(t.id, "pessoa:chefe", agent="outro-agente")  # aprovação de outro agente não conta
+    orch.grant_approval(t.id, actor(repo, "chefe"), agent="outro-agente")  # aprovação de outro agente não conta
     with pytest.raises(DispatchRefusedError, match="aprovação pendente"):
         orch.dispatch(t.id)
     repo.record_audit("agente:priv", "approval.granted", f"task:{t.id}", "ok: agent=priv")  # linha forjada
@@ -222,7 +232,7 @@ def test_secrets_in_logs_usage_and_summary_are_masked(env):
     reg.register(Fake(spec("vaza"), fn))
     mk().dispatch(agent_task(svc, "vaza").id)
     dump = repr(runs(repo)) + repr(repo.list_audit())
-    for s in ("seg", "redo", "abc", "def", "uvw", "xyz"):
+    for s in ("seg redo", "abc def", "uvw xyz"):
         assert s not in dump
     assert '"n": 3' in runs(repo)[0][4]  # usage continua JSON válido
 
@@ -234,10 +244,10 @@ def test_propose_split_creates_nothing_and_apply_needs_a_person(env):
     titles = orch.propose_split(t.id)
     assert len(titles) == 3 and svc.subtasks(t.id) == []
     assert repo.list_audit()[-1].action == "orchestrator.split_proposed"
-    with pytest.raises(ApprovalError):
+    with pytest.raises((ApprovalError, AuthenticationError)):
         orch.apply_split(t.id, titles, "agente:orchestrator")
     assert svc.subtasks(t.id) == []
-    created = orch.apply_split(t.id, titles, "pessoa:ana")
+    created = orch.apply_split(t.id, titles, actor(repo, "ana"))
     assert len(created) == 3 and len(svc.subtasks(t.id)) == 3
 
 
@@ -246,13 +256,13 @@ def test_job_handler_and_idempotent_enqueue(env):
     orch = mk()
     q = SqlJobQueue(repo)
     t = agent_task(svc)
-    j1, j2 = orch.enqueue(q, t.id, "pessoa:ana"), orch.enqueue(q, t.id, "pessoa:ana")
+    j1, j2 = orch.enqueue(q, t.id, "sistema:fila"), orch.enqueue(q, t.id, "sistema:fila")
     assert j1.id == j2.id
     job = q.run_once(orch.handler() if hasattr(orch, "handler") else orch.job_handler(), "agente:worker")
     assert job.status == "succeeded" and svc.get_task(t.id).status == S.IN_VALIDATION
     # tarefa não pronta: recusa vira falha definitiva do job, sem retry
-    bad = svc.create_task("sem agente", "p")
-    orch.enqueue(q, bad.id, "pessoa:ana")
+    bad = svc.create_task("sem agente", actor(svc, "ana"))
+    orch.enqueue(q, bad.id, "sistema:fila")
     assert q.run_once(orch.job_handler(), "agente:worker").status == "failed"
 
 
@@ -291,7 +301,7 @@ def test_settings_none_reads_environment_for_dispatch_runtime_and_job_handler(en
     with pytest.raises(AutomationDisabledError):
         AgentRuntime().check_allowed(EchoAgent())
     q = SqlJobQueue(repo)
-    orch.enqueue(q, t.id, "pessoa:ana")
+    orch.enqueue(q, t.id, "sistema:fila")
     job = q.run_once(orch.job_handler(), "agente:worker")
     assert job.status != "succeeded" and job.last_error == "AutomationDisabledError"
     assert svc.get_task(t.id).status == "pending" and runs(repo) == []

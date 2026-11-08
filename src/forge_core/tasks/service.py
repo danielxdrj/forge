@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 
 from ..errors import TaskConflictError, TaskRuleError
 from ..logging import redact
+from ..auth.store import AuthStore
 from ..storage.sql import SqlRepository
 from . import rules
 from .model import Dependency, Project, Stage, Task, TaskChange, TaskStatus as S
@@ -52,6 +53,7 @@ class TaskService:
     def __init__(self, repo: SqlRepository, clock: Callable[[], datetime] | None = None):
         self._repo = repo
         self._clock = clock or (lambda: datetime.now(timezone.utc))
+        self._auth = AuthStore(repo)
         self._after_edges_read: Callable[[], None] | None = None  # gancho de teste (corridas determinísticas)
 
     def _now(self) -> str:
@@ -89,6 +91,7 @@ class TaskService:
         return _task(rows[0])
 
     def create_project(self, title: str, actor: str) -> Project:
+        actor = self._auth.human_id(actor, "editor")
         def fn(tx, now):
             if not title.strip():
                 raise TaskRuleError("título do projeto é obrigatório")
@@ -100,6 +103,7 @@ class TaskService:
         return self._run("project.create", actor, "project:new", fn)
 
     def create_stage(self, project_id: str, title: str, actor: str) -> Stage:
+        actor = self._auth.human_id(actor, "editor")
         def fn(tx, now):
             if not title.strip():
                 raise TaskRuleError("título da etapa é obrigatório")
@@ -126,6 +130,7 @@ class TaskService:
                     assignee_kind: str | None = None, assignee_id: str | None = None,
                     start_date: str | None = None, due_date: str | None = None,
                     stage_id: str | None = None, parent_id: str | None = None, required: bool = True) -> Task:
+        actor = self._auth.human_id(actor, "editor")
         task_id = str(uuid.uuid4())
 
         def fn(tx, now):
@@ -155,6 +160,7 @@ class TaskService:
 
     def update_task(self, task_id: str, actor: str, expected_version: int, **fields) -> Task:
         """Edita campos (não o status). `expected_version` evita sobrescrever mudança de outra pessoa."""
+        actor = self._auth.human_id(actor, "editor")
         def fn(tx, now):
             unknown = set(fields) - set(_EDITABLE)
             if unknown:
@@ -183,6 +189,7 @@ class TaskService:
         return self.get_task(task_id)  # type: ignore[return-value]
 
     def change_status(self, task_id: str, new_status: str, actor: str, expected_version: int | None = None) -> Task:
+        actor = self._auth.transition_actor(actor)
         def fn(tx, now):
             task = self._load(tx, task_id, self._lock())
             if expected_version is not None and task.version != expected_version:
@@ -218,6 +225,7 @@ class TaskService:
         return [(i, st, bool(rq)) for i, st, rq in rows]
 
     def add_dependency(self, task_id: str, depends_on_id: str, actor: str, required: bool = True) -> Dependency:
+        actor = self._auth.human_id(actor, "editor")
         def fn(tx, now):
             if self._repo.dialect == "postgres":
                 # Valida ciclo e insere atomicamente: sem isto, A->B e B->A concorrentes passam as duas.

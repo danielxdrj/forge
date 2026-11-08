@@ -23,6 +23,7 @@ from ..logging import redact
 from ..storage.sql import SqlRepository
 from ..tasks import TaskService
 from ..tasks.model import AssigneeKind, Task, TaskStatus as S
+from ..auth.store import ORCHESTRATOR_SYSTEM, AuthStore
 from .approval import DISABLED, NEEDS_APPROVAL, PRIVILEGED_DISABLED_MESSAGE, ApprovalLedger, decide
 from .registry import AgentRegistry
 from .runtime import RunResult
@@ -80,13 +81,11 @@ class Orchestrator:
 
     # --- aprovação (registra o ator informado; NÃO autentica: ADR-011) ---
 
-    def grant_approval(self, task_id: str, approver: str, agent: str | None = None) -> None:
-        """Registra `approval.granted` (uso único por concessão). Só atores `pessoa:*`; agente não aprova.
+    def grant_approval(self, task_id: str, approver, agent: str | None = None) -> None:
+        """Concede aprovação a um Principal com papel `approver` (ADR-014). Texto não concede nada.
 
-        Não libera execução de agente privilegiado: isso segue desligado até existir autenticação.
+        Não libera execução de agente privilegiado por si: `decide` segue fechado (ADR-011).
         """
-        if not approver.startswith("pessoa:"):
-            self.approvals.grant(task_id, approver, agent or "")  # registra a recusa e levanta ApprovalError
         task = self._tasks.get_task(task_id)
         if task is None:
             raise ApprovalError(f"tarefa inexistente: {task_id}")
@@ -124,7 +123,7 @@ class Orchestrator:
             self._refuse(requested_by, task_id, "agent.dispatch", str(exc))
 
         try:  # a mudança de status é o desempate entre despachos concorrentes
-            self._tasks.change_status(task_id, S.IN_PROGRESS, ORCHESTRATOR_ACTOR, expected_version=task.version)
+            self._tasks.change_status(task_id, S.IN_PROGRESS, ORCHESTRATOR_SYSTEM, expected_version=task.version)
         except (TaskRuleError, TaskConflictError) as exc:
             self._refuse(requested_by, task_id, "agent.dispatch", f"não foi possível iniciar: {exc}")
         self._repo.record_audit(requested_by, "agent.dispatch", f"task:{task_id}", f"ok: agent={name}")
@@ -136,7 +135,7 @@ class Orchestrator:
 
         target = S.IN_VALIDATION if run.status == "success" else S.BLOCKED
         try:
-            self._tasks.change_status(task_id, target, ORCHESTRATOR_ACTOR)
+            self._tasks.change_status(task_id, target, ORCHESTRATOR_SYSTEM)
         except (TaskRuleError, TaskConflictError) as exc:  # ex.: a tarefa foi cancelada durante a execução
             self._repo.record_audit(ORCHESTRATOR_ACTOR, "agent.result", f"task:{task_id}",
                                     f"error: status não atualizado ({type(exc).__name__}) run={run_id}")
@@ -176,12 +175,12 @@ class Orchestrator:
         self._repo.record_audit(requested_by, "orchestrator.split_proposed", f"task:{task_id}", f"ok: n={len(titles)}")
         return titles
 
-    def apply_split(self, task_id: str, titles: list[str], approver: str) -> list[Task]:
-        if not approver.startswith("pessoa:"):
-            self._repo.record_audit(approver, "orchestrator.split_applied", f"task:{task_id}", "error: aprovador não é pessoa")
-            raise ApprovalError("aplicar a divisão exige um ator pessoa:*")
-        created = [self._tasks.create_task(t, approver, parent_id=task_id) for t in titles]
-        self._repo.record_audit(approver, "orchestrator.split_applied", f"task:{task_id}", f"ok: n={len(created)}")
+    def apply_split(self, task_id: str, titles: list[str], actor) -> list[Task]:
+        """Aplica a divisão como uma pessoa autenticada com papel `editor` (o TaskService confere)."""
+        principal = AuthStore(self._repo).require(actor, "editor")
+        created = [self._tasks.create_task(t, principal, parent_id=task_id) for t in titles]
+        self._repo.record_audit(principal.identity_id, "orchestrator.split_applied",
+                                f"task:{task_id}", f"ok: n={len(created)}")
         return created
 
     # --- adaptador para a fila (FRG-40) ---

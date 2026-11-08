@@ -4,6 +4,7 @@ import json
 
 import pytest
 
+from auth_helpers import actor
 from forge_core.agents import AgentOutcome, AgentSpec, Permission
 from forge_core.agents.sandbox import IsolatedRuntime, validate_output
 from forge_core.agents.spec import AgentContext
@@ -38,7 +39,7 @@ class Agent:
 def _ctx():
     t = Task("t", "titulo", "obj", "", "", "", "normal", "in_progress", None, None, None, None, None, None, None,
              True, 1, "", "")
-    return AgentContext(task=t, actor="pessoa:ana")
+    return AgentContext(task=t, actor="sistema:teste")
 
 
 @pytest.mark.parametrize("raw", [
@@ -146,7 +147,7 @@ def test_public_dispatch_without_docker_fails_closed_and_never_runs_in_thread(tm
     monkeypatch.setenv("PATH", "")  # sem docker
     repo = open_repository(f"sqlite:///{tmp_path / 'd.db'}")
     svc = TaskService(repo)
-    t = svc.create_task("tarefa", "pessoa:ana", assignee_kind="agent", assignee_id="echo")
+    t = svc.create_task("tarefa", actor(svc, "ana"), assignee_kind="agent", assignee_id="echo")
     res = Orchestrator(repo, default_registry(), tasks=svc, settings=_settings()).dispatch(t.id)
     assert res.run_status == "error" and res.error == "docker_unavailable"
     assert res.outcome is None and res.task_status != "in_validation"

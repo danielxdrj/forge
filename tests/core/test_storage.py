@@ -25,26 +25,26 @@ def test_migrations_apply_once(tmp_path):
 def test_task_history_and_audit(tmp_path):
     repo = open_repository(sqlite_url(tmp_path))
     t = repo.create_task("investigar", "agente:triagem")
-    repo.set_task_status(t.id, "running", "pessoa:ana")
+    repo.set_task_status(t.id, "running", "sistema:teste")
     assert [e.status for e in repo.task_history(t.id)] == ["pending", "in_progress"]
     audit = repo.list_audit()
     assert [(a.actor, a.action, a.target, a.result) for a in audit] == [
         ("agente:triagem", "task.create", f"task:{t.id}", "ok"),
-        ("pessoa:ana", "task.status", f"task:{t.id}", "ok: in_progress"),
+        ("sistema:teste", "task.status", f"task:{t.id}", "ok: in_progress"),
     ]
 
 
 def test_unknown_task_is_audited_and_raises(tmp_path):
     repo = open_repository(sqlite_url(tmp_path))
     with pytest.raises(KeyError):
-        repo.set_task_status("nao-existe", "x", "pessoa:ana")
+        repo.set_task_status("nao-existe", "x", "sistema:teste")
     assert repo.list_audit()[-1].result.startswith("error")
 
 
 def test_data_survives_restart(tmp_path):
     url = sqlite_url(tmp_path)
     r1 = open_repository(url)
-    t = r1.create_task("persistir", "pessoa:ana")
+    t = r1.create_task("persistir", "sistema:teste")
     r1.close()
     r2 = open_repository(url)
     assert r2.get_task(t.id).title == "persistir"
@@ -53,7 +53,7 @@ def test_data_survives_restart(tmp_path):
 
 def test_audit_is_append_only(tmp_path):
     repo = open_repository(sqlite_url(tmp_path))
-    repo.record_audit("pessoa:ana", "x", "y", "ok")
+    repo.record_audit("sistema:teste", "x", "y", "ok")
     with pytest.raises(sqlite3.DatabaseError):
         repo._conn.execute("UPDATE audit_log SET result = 'z'")
     with pytest.raises(sqlite3.DatabaseError):
@@ -62,8 +62,8 @@ def test_audit_is_append_only(tmp_path):
 
 def test_secrets_are_masked_in_storage(tmp_path):
     repo = open_repository(sqlite_url(tmp_path))
-    t = repo.create_task("usar token=abc123 e Bearer seg redo", "pessoa:ana")
-    repo.record_audit("pessoa:ana", "call", "api", "Authorization: Bearer seg redo")
+    t = repo.create_task("usar token=abc123 e Bearer seg redo", "sistema:teste")
+    repo.record_audit("sistema:teste", "call", "api", "Authorization: Bearer seg redo")
     dump = repr(repo.get_task(t.id)) + repr(repo.list_audit())
     for s in ("abc123", "seg", "redo"):
         assert s not in dump
@@ -72,7 +72,7 @@ def test_secrets_are_masked_in_storage(tmp_path):
 def test_backup_and_restore_roundtrip(tmp_path):
     url = sqlite_url(tmp_path)
     repo = open_repository(url)
-    t = repo.create_task("importante", "pessoa:ana")
+    t = repo.create_task("importante", "sistema:teste")
     repo.close()
     backup_sqlite(tmp_path / "forge.db", tmp_path / "bkp.db")
     (tmp_path / "forge.db").unlink()
@@ -92,7 +92,7 @@ def test_database_url_validation_and_not_in_repr():
 def test_sqlite_foreign_keys_on_blocks_orphan_history(tmp_path):
     repo = open_repository(sqlite_url(tmp_path))
     assert repo._conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1
-    t = repo.create_task("com histórico", "pessoa:ana")
+    t = repo.create_task("com histórico", "sistema:teste")
     with pytest.raises(sqlite3.IntegrityError):
         repo._conn.execute("DELETE FROM tasks WHERE id = ?", (t.id,))
     assert repo.get_task(t.id) is not None and len(repo.task_history(t.id)) == 1
@@ -117,8 +117,8 @@ pg = pytest.mark.skipif(not PG_URL, reason="FORGE_DATABASE_URL não definida")
 @pg
 def test_postgres_task_flow_with_writer_role(pg_env):
     writer, _, _ = pg_env
-    t = writer.create_task("pg", "pessoa:ana")
-    writer.set_task_status(t.id, "done", "pessoa:ana")
+    t = writer.create_task("pg", "sistema:teste")
+    writer.set_task_status(t.id, "done", "sistema:teste")
     assert [e.status for e in writer.task_history(t.id)] == ["pending", "done"]
     assert len(writer.list_audit()) == 3
 

@@ -20,7 +20,7 @@ A FRG-15 criou `projects` e `stages` mínimas (id, título, data). A FRG-5 preci
 `ProjectService.resolve_target(repository_id)` devolve `(provider, owner, repo_name, base_branch, settings)` e recusa repositório ou projeto inativo/inexistente (`ProjectRuleError`). `base_branch` é `settings.base_branch_override` se existir, senão `default_branch`. Na criação da issue e da branch, a FRG-21 usa `settings.branch_prefix` para nomear a branch e `settings.issue_labels` para as labels. Ela só lê: o Core não faz nenhuma chamada ao GitHub, não guarda token, e se a FRG-21 precisar de nova convenção, a chave entra na lista permitida por ADR/PR. O token virá do cofre de segredos, fora deste modelo.
 
 ## Limitações (aceitas pelo gestor de projetos)
-- O editor é o ator informado, sem autenticação nem permissões por pessoa ou cliente.
+- O editor é o ator informado, sem autenticação nem permissões por pessoa ou cliente. **Superado pelo ADR-014:** a escrita de projeto exige um Principal autenticado com papel `editor`.
 - A existência do repositório no GitHub não é verificada (FRG-21).
 - Os bancos já provisionados precisam reexecutar `postgres_roles.sql` para o GRANT de UPDATE em `projects` e SELECT/INSERT/UPDATE em `repositories`.
 - A visão `tasks.Project` não mostra `active`.
