@@ -34,7 +34,17 @@ A API cria e consulta uma investigação e anexa o texto de um log local. O banc
 - Rotas: `POST /investigations` e `GET /investigations/{investigation_id}`.
 - Ficam fora: LLM, integrações externas, interface web, upload e análise de log.
 
-## Execução local
+## Painel local do Core (atual)
+
+A instalação local vigente é o Compose [`docker-compose.forge.yml`](docker-compose.forge.yml) (`name: forge`): Postgres 16 interno e API FastAPI de login. Runbook (Windows incluído): [docs/operacao/container-local.md](docs/operacao/container-local.md). Decisão: [ADR-017](docs/arquitetura/adr/ADR-017-painel-web-local-container.md).
+
+```powershell
+docker compose -f docker-compose.forge.yml up -d --build
+```
+
+O [`docker-compose.yml`](docker-compose.yml) da primeira implementação é **legado** e não é este painel. O [`docker-compose.dev.yml`](docker-compose.dev.yml) sobe só um Postgres de teste na mesma porta padrão `5433` — não rode os dois ao mesmo tempo nessa porta.
+
+## Execução local (legado)
 
 O conjunto se chama `forge_system`. Os serviços têm nomes diretos:
 

@@ -67,6 +67,14 @@ class GitHubIdentity:
     login: str
 
 
+@dataclass(frozen=True)
+class PollAttempt:
+    """Resultado de uma tentativa de polling. `token` preenchido encerra o fluxo."""
+    token: str | None = None
+    pending: bool = False
+    slow_down: bool = False
+
+
 class UrllibTransport:
     """Transporte real: HTTPS, host na allowlist, timeout curto e nenhum redirecionamento."""
 
@@ -137,27 +145,34 @@ class DeviceFlow:
             raise DeviceFlowError("malformed_response")
         return dc
 
+    def poll_once(self, dc: DeviceCode) -> PollAttempt:
+        """Uma tentativa de troca do device code. Não bloqueia (painel web). Erros terminais levantam."""
+        data = self._t.post_form(TOKEN_URL, {"client_id": self._client_id, "device_code": dc.device_code,
+                                             "grant_type": GRANT_TYPE})
+        token = data.get("access_token")
+        if isinstance(token, str) and token:
+            return PollAttempt(token=token)
+        error = data.get("error")
+        if error == "authorization_pending":
+            return PollAttempt(pending=True)
+        if error == "slow_down":
+            return PollAttempt(slow_down=True)
+        if isinstance(error, str) and error in _TERMINAL_CODES:
+            raise DeviceFlowError(_TERMINAL_CODES[error])
+        raise DeviceFlowError("device_flow_failed")
+
     def poll_token(self, dc: DeviceCode) -> str:
         deadline = self._clock() + dc.expires_in
         interval = float(dc.interval)
         while True:
             if self._clock() >= deadline:
                 raise DeviceFlowError("expired")
-            data = self._t.post_form(TOKEN_URL, {"client_id": self._client_id, "device_code": dc.device_code,
-                                                 "grant_type": GRANT_TYPE})
-            token = data.get("access_token")
-            if isinstance(token, str) and token:
-                return token
-            error = data.get("error")
-            if error == "authorization_pending":
-                self._sleep(interval)
-            elif error == "slow_down":
+            attempt = self.poll_once(dc)
+            if attempt.token:
+                return attempt.token
+            if attempt.slow_down:
                 interval += _SLOW_DOWN_STEP
-                self._sleep(interval)
-            elif isinstance(error, str) and error in _TERMINAL_CODES:
-                raise DeviceFlowError(_TERMINAL_CODES[error])
-            else:
-                raise DeviceFlowError("device_flow_failed")
+            self._sleep(interval)
 
     def identity(self, token: str) -> GitHubIdentity:
         data = self._t.get_json(USER_URL, token)

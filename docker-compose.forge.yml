@@ -1,0 +1,83 @@
+# Painel local do Forge Core (ADR-017). Um comando: docker compose -f docker-compose.forge.yml up -d --build
+# Grupo no Docker Desktop: `forge`.
+#
+# Serviços deste PR (A): forge_postgres, forge_backend.
+# forge_frontend (PR B, NÃO neste arquivo): nginx em 127.0.0.1:8090, UI estática e
+# reverse-proxy de /api/ para forge_backend, origem única no navegador.
+#
+# Conflito de porta: o padrão 127.0.0.1:5433 coincide com docker-compose.dev.yml (projeto forge_dev,
+# ADR-004). Os dois NÃO podem estar no ar na 5433. Pare o compose de dev ou use FORGE_PG_HOST_PORT.
+name: forge
+
+services:
+  forge_postgres:
+    container_name: forge_postgres
+    image: postgres:16-bookworm
+    environment:
+      POSTGRES_USER: forge_owner
+      POSTGRES_DB: forge
+      POSTGRES_PASSWORD_FILE: /run/secrets/forge_pg_owner_password
+    secrets:
+      - forge_pg_owner_password
+      - forge_pg_app_password
+      - forge_pg_readonly_password
+    volumes:
+      - forge_pgdata:/var/lib/postgresql/data
+      - ./deploy/web/initdb:/docker-entrypoint-initdb.d:ro
+    ports:
+      - "127.0.0.1:${FORGE_PG_HOST_PORT:-5433}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U forge_owner -d forge"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  forge_backend:
+    container_name: forge_backend
+    build:
+      context: .
+      dockerfile: deploy/web/Dockerfile
+    read_only: true
+    tmpfs:
+      - /tmp
+    depends_on:
+      forge_postgres:
+        condition: service_healthy
+    environment:
+      FORGE_CONFIG_DIR: /etc/forge/config
+      FORGE_GITHUB_CLIENT_ID: ${FORGE_GITHUB_CLIENT_ID:?defina FORGE_GITHUB_CLIENT_ID}
+      FORGE_PG_HOST: forge_postgres
+      FORGE_PG_PORT: "5432"
+      FORGE_PG_DB: forge
+      FORGE_PG_OWNER_USER: forge_owner
+      FORGE_PG_APP_USER: forge_app
+      FORGE_PG_READONLY_USER: forge_readonly
+      FORGE_SECRET_OWNER_PASSWORD_FILE: /run/secrets/forge_pg_owner_password
+      FORGE_SECRET_APP_PASSWORD_FILE: /run/secrets/forge_pg_app_password
+      HOME: /home/forge
+      XDG_CONFIG_HOME: /home/forge/.config
+      XDG_DATA_HOME: /home/forge/.local/share
+    secrets:
+      - forge_pg_owner_password
+      - forge_pg_app_password
+    volumes:
+      - forge_cli_home:/home/forge
+    # Publicação loopback só para testar o login ANTES do frontend (PR B). Não é a origem final.
+    ports:
+      - "127.0.0.1:${FORGE_BACKEND_HOST_PORT:-8091}:8091"
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+
+secrets:
+  forge_pg_owner_password:
+    environment: FORGE_PG_OWNER_PASSWORD
+  forge_pg_app_password:
+    environment: FORGE_PG_APP_PASSWORD
+  forge_pg_readonly_password:
+    environment: FORGE_PG_READONLY_PASSWORD
+
+volumes:
+  forge_pgdata:
+  forge_cli_home:

@@ -7,6 +7,13 @@ dependencies = []
 
 [project.optional-dependencies]
 postgres = ["psycopg[binary]>=3.1"]
+web = [
+    "fastapi>=0.115",
+    "jinja2>=3.1",
+    "uvicorn[standard]>=0.32",
+    "python-multipart>=0.0.9",
+    "httpx>=0.27",
+]
 dev = ["pytest>=8"]
 
 [build-system]
@@ -21,7 +28,11 @@ forge-resolver = "forge_core.resolver.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-forge_core = ["storage/migrations/*/*.sql"]
+forge_core = [
+    "storage/migrations/*/*.sql",
+    "storage/provisioning/*.sql",
+    "web/templates/*.html",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests/core"]

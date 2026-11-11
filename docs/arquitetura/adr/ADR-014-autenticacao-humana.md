@@ -39,7 +39,7 @@ Até aqui o ator era texto livre. `TaskService`, `ProjectService` e a aprovaçã
 
 1. Criar o OAuth App com Device Flow habilitado e informar o client id público (passo humano; o agente não cria nem faz login real).
 2. Custo de UX do login por comando (D10): aceitar pedir login a cada invocação, ou abrir uma sessão de processo mais longa sem arquivo.
-3. Expiração de sessão: hoje não há prazo. Se for exigido, é nova decisão. Concessões de papel continuam sem prazo (decisão do usuário).
+3. Expiração de sessão: a CLI continua sem prazo (`expires_at` NULL). O painel web (ADR-017) grava `expires_at` (padrão 8 h, configurável). Concessões de papel continuam sem prazo.
 4. Identidade de serviço para despacho sem pessoa no enqueue: não foi criada. A fila reutiliza o `editor` humano do momento do enqueue, revalidado na execução.
 5. Raiz de confiança do bootstrap: o operador informa o id GitHub esperado (`--expect-github-id`). Isso é o procedimento desta entrega; quem controla o OS ou o banco ainda pode gravar o singleton.
 6. Fronteira OS/banco: quem controla o processo, o banco ou o sistema operacional contorna a biblioteca. Separação real de processos ou de papel de banco é decisão de implantação. Esta entrega não promete proteção contra esse controle.
