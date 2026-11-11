@@ -11,6 +11,8 @@ Fase 0, Análise. Estudo sem implementação. Nenhum código foi alterado, nenhu
 
 Convenção: **[Fato]** foi verificado em arquivo do repositório. **[Inferência]** é interpretação e precisa de confirmação. **[Informado]** veio do responsável e não pode ser verificado no repositório.
 
+**Atualização (2026-11-11):** a automação release-please foi removida. Releases são manuais; a versão fica em `pyproject.toml`. Ver [`docs/RELEASES.md`](../RELEASES.md).
+
 ## 1. Contexto
 
 - **[Informado]** O código atual pertence a outra ideia de projeto, um "copiloto local de investigação técnica" de uso individual. Não é a base do Forge, que é uma ferramenta interna de agentes.
@@ -31,7 +33,7 @@ Convenção: **[Fato]** foi verificado em arquivo do repositório. **[Inferênci
 | Imagem do frontend | `frontend/Dockerfile` | Build em Node 22 e publicação com nginx 1.27. |
 | Variáveis | `.env.example` | Somente placeholders. |
 | Regras e processo | `AGENTS.md`, `.specs/`, `docs/` | Regras para agentes, protocolo por etapa e documentos do projeto anterior. |
-| CI e releases | `.github/workflows/`, `release-please-config.json`, `docs/RELEASES.md` | Validação de título de PR e automação de releases (opcional e desativável). |
+| CI e releases | `.github/workflows/`, `docs/RELEASES.md` | Validação de título de PR; releases manuais (a automação release-please foi removida). |
 
 ## 3. Fluxo principal
 
@@ -86,7 +88,7 @@ Pré-requisitos: Python 3.12 (testado em 3.12.3), Node 22 (testado em 22.23.4), 
 
 ## 6. Integrações existentes
 
-Nenhuma integração funcional. O repositório não tem integração com GitHub API, GHCR, Portainer, n8n nem IA. A automação de releases usa só o `GITHUB_TOKEN` do próprio GitHub Actions.
+Nenhuma integração funcional. O repositório não tem integração com GitHub API, GHCR, Portainer, n8n nem IA.
 
 ## 7. Reaproveitamento para o novo Forge
 
@@ -94,7 +96,7 @@ Classificação **[Inferência]**, para ser usada como insumo da FRG-9. Não é 
 
 | Item | Classificação | Motivo |
 | --- | --- | --- |
-| Automação de releases (`release.yml`, `release-please-config.json`, `docs/RELEASES.md`) | **Reaproveitar** | Opcional e desativável por variável (`RELEASE_AUTOMATION_ENABLED`), com procedimento manual documentado. Não depende do código legado. Depende de decisão sobre a versão inicial (pergunta 3). |
+| Automação de releases (`release.yml`, `release-please-config.json`, `docs/RELEASES.md`) | **Arquivar / removida** | A automação release-please foi removida (2026-11-11). Convenção de Conventional Commits e o procedimento manual em `docs/RELEASES.md` permanecem. |
 | Validação de título de PR (`pr-title.yml`) | **Reaproveitar** | Só checa o formato de Conventional Commits. Não depende de stack. |
 | Convenções: Conventional Commits, PRs e tags semver | **Reaproveitar** | **[Fato]** Já adotadas no histórico. |
 | Regras de segurança em `AGENTS.md` (leitura somente, segredo fora do Git, parar e perguntar) | **Adaptar** | Princípios úteis. O texto está acoplado ao projeto anterior. |
