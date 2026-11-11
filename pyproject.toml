@@ -13,6 +13,9 @@ dev = ["pytest>=8"]
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
+[project.scripts]
+forge-tasks = "forge_core.draft.cli:main"
+
 [tool.setuptools.packages.find]
 where = ["src"]
 
