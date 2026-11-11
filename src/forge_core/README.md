@@ -38,7 +38,7 @@ docker-compose.dev.yml  Postgres de dev/teste (127.0.0.1:5433)
 | `FORGE_AGENTS_DISABLED` | não | agentes desativados, separados por vírgula (ex.: `echo`) |
 | `FORGE_PG_USER`/`FORGE_PG_PASSWORD`/`FORGE_PG_DB` | só para o compose de dev | credenciais do Postgres local; use valores fora do Git |
 | `FORGE_GITHUB_CLIENT_ID` | para login | client id público do OAuth App (device flow) |
-| `FORGE_CURSOR_AGENT` / `FORGE_CURSOR_MODEL` / `FORGE_GH_BIN` | não | caminhos/opções do rascunho de issue; não são segredos |
+| `FORGE_CURSOR_AGENT` / `FORGE_CURSOR_MODEL` / `FORGE_GH_BIN` | não | caminhos/opções do rascunho; `FORGE_CURSOR_AGENT` é opcional (PATH/`agent.cmd`) |
 
 Com `FORGE_AUTOMATION_ENABLED=false`, `start()` levanta `AutomationDisabledError` e `main()` sai com código 2. Ausente = ligado.
 

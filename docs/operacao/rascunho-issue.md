@@ -11,7 +11,8 @@ python -m pip install -e ".[dev]"
 $env:FORGE_CONFIG_DIR = "<CAMINHO>"
 $env:FORGE_DATABASE_URL = "sqlite:///<CAMINHO>\forge.db"
 $env:FORGE_GITHUB_CLIENT_ID = "<CLIENT_ID_PUBLICO>"   # só nesta sessão
-$env:FORGE_CURSOR_AGENT = "agent"
+# FORGE_CURSOR_AGENT só se `agent`/`agent.cmd` não estiver no PATH nem em
+# %LOCALAPPDATA%\cursor-agent\agent.cmd. Na maioria dos installs Windows isso não é preciso.
 # Modelo explícito da SUA assinatura Cursor. Confira em `agent models` o que o plano cobre.
 # Não há garantia de custo zero. Não ligue on-demand / yolo / force.
 $env:FORGE_CURSOR_MODEL = "<MODELO_DA_ASSINATURA>"
@@ -59,7 +60,8 @@ Print/anexo de imagem, OCR, Gmail e n8n: nova implementação de `ContextSource`
 
 ## Limites
 
-- Isolamento Cursor: pasta vazia + deny documentado. **Não é garantia total** (ADR-015).
+- Isolamento Cursor: pasta vazia + deny documentado + `--mode ask`. `--trust` **só** nesse diretório temporário (Workspace Trust headless). **Não é garantia total** (ADR-015).
+- Prompt da CLI vai no stdin (`-p` sem prompt posicional), não no argv — evita `cmd.exe` / limite de ~8191 caracteres no Windows.
 - Sprint vem de GraphQL (`gh api graphql` com sessão nativa), não de `gh project field-list`.
 - `gh issue create` imprime URL; não usamos `--json` nesse comando.
 - Testes não criam issue da empresa.

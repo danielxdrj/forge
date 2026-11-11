@@ -73,7 +73,6 @@ def run(argv: list[str], env: Mapping[str, str] | None = None, transport: Transp
         store = AuthStore(repo_db, verify=flow.identity)
         tasks = TaskService(repo_db)
         adapter = provider or CursorCliAdapter(
-            agent_bin=env.get("FORGE_CURSOR_AGENT", "agent").strip() or "agent",
             model=model or None,
             timeout=int(env.get("FORGE_CURSOR_TIMEOUT", "120") or 120),
             env=env,

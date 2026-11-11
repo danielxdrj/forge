@@ -13,7 +13,15 @@ from auth_helpers import FakeGitHub, TEST_CLIENT_ID, bootstrap, person
 from forge_core.agents.provider import ProviderResponse
 from forge_core.draft.cli import run as draft_run
 from forge_core.draft.context import MAX_CONTEXT_BYTES, FileContext, TextContext, resolve_source
-from forge_core.draft.cursor_cli import DOCUMENTED_DENY, FORBIDDEN_FLAGS, CursorCliAdapter
+from forge_core.draft.cursor_cli import (
+    DOCUMENTED_DENY,
+    FORBIDDEN_FLAGS,
+    STDERR_SNIPPET,
+    TRUST_FLAG,
+    CursorCliAdapter,
+    format_cursor_cli_error,
+    resolve_agent_executable,
+)
 from forge_core.draft.envfilter import GH_ENV_ALLOW, filter_env
 from forge_core.draft.github_gh import GhCli
 from forge_core.draft.service import DraftService, parse_remote, sidecar_path
@@ -47,7 +55,7 @@ GRAPHQL_FIELDS = {
                         "configuration": {
                             "iterations": [
                                 {"id": "it-now", "title": "Semana 45",
-                                 "startDate": "2026-11-03", "duration": 7},
+                                 "startDate": "2026-11-03", "duration": 21},
                             ],
                             "completedIterations": [],
                         },
@@ -158,6 +166,8 @@ def test_cursor_temp_cwd_deny_allowlist_payload_and_cleanup(tmp_path):
         seen["cwd"] = cwd
         seen["argv"] = argv
         seen["env"] = env
+        seen["input"] = kwargs.get("input")
+        seen["shell"] = kwargs.get("shell")
         seen["names"] = sorted(p.name for p in Path(cwd).iterdir())
         deny = json.loads((Path(cwd) / ".cursor" / "cli.json").read_text())["permissions"]["deny"]
         seen["deny"] = deny
@@ -170,13 +180,17 @@ def test_cursor_temp_cwd_deny_allowlist_payload_and_cleanup(tmp_path):
         "DATABASE_URL": "postgresql://x", "CURSOR_API_KEY": "cursor-session",
         "FORGE_GITHUB_CLIENT_ID": "abc",
     }
-    adapter = CursorCliAdapter(runner=runner, env=host, model="test-model")
+    adapter = CursorCliAdapter(runner=runner, env=host, model="test-model", agent_bin="agent")
     prompt = "CONTEXTO_DO_USUARIO:\nfalha no login\n"
     adapter.complete(prompt)
     assert seen["names"] == [".cursor"]
     assert seen["deny"] == list(DOCUMENTED_DENY)
     assert not any(f in seen["argv"] for f in FORBIDDEN_FLAGS)
+    assert TRUST_FLAG in seen["argv"]
     assert "--mode" in seen["argv"] and "ask" in seen["argv"]
+    assert prompt not in seen["argv"]
+    assert seen["input"] == prompt.encode("utf-8")
+    assert seen["shell"] is False
     assert "GH_TOKEN" not in seen["env"]
     assert not Path(adapter.last_workspace).exists()
     assert "Shell()" not in seen["deny"] and "Read()" not in seen["deny"]
@@ -186,11 +200,102 @@ def test_cursor_timeout_no_persist(tmp_path):
     def runner(*a, **k):
         raise subprocess.TimeoutExpired("agent", 1)
 
-    adapter = CursorCliAdapter(runner=runner, env={"PATH": "/bin"})
+    adapter = CursorCliAdapter(runner=runner, env={"PATH": "/bin"}, agent_bin="agent")
     with pytest.raises(DraftError) as ei:
         adapter.complete("x")
     assert ei.value.code == "timeout"
     assert not Path(adapter.last_workspace).exists()
+
+
+def test_trust_only_on_owned_forge_temp():
+    adapter = CursorCliAdapter(agent_bin="agent")
+    owned = "/tmp/forge-cursor-owned"
+    adapter.last_workspace = owned
+    with_trust = adapter._argv_for(owned, "agent")
+    without = adapter._argv_for("/tmp/some-other-dir", "agent")
+    assert TRUST_FLAG in with_trust
+    assert TRUST_FLAG not in without
+    assert TRUST_FLAG not in FORBIDDEN_FLAGS
+    assert "--force" in FORBIDDEN_FLAGS and "--yolo" in FORBIDDEN_FLAGS
+    assert "-f" in FORBIDDEN_FLAGS and "--approve-mcps" in FORBIDDEN_FLAGS
+
+
+def test_resolve_agent_which_pathext_then_localappdata_then_missing():
+    win_cmd = r"C:\Users\me\AppData\Local\cursor-agent\agent.cmd"
+    env = {"PATH": r"C:\Users\me\AppData\Local\cursor-agent", "PATHEXT": ".COM;.EXE;.BAT;.CMD;.VBS;.JS;.WS;.MSC"}
+    assert resolve_agent_executable(env, which=lambda name: win_cmd if name == "agent" else None, platform="win32") == win_cmd
+
+    fallback = r"C:\Users\me\AppData\Local\cursor-agent\agent.cmd"
+    env2 = {"LOCALAPPDATA": r"C:\Users\me\AppData\Local"}
+    assert resolve_agent_executable(
+        env2, which=lambda name: None, path_exists=lambda p: p == fallback, platform="win32",
+    ) == fallback
+
+    with pytest.raises(DraftError) as ei:
+        resolve_agent_executable(
+            {"LOCALAPPDATA": r"C:\empty"}, which=lambda name: None,
+            path_exists=lambda p: False, platform="win32",
+        )
+    assert ei.value.code == "cursor_cli_missing"
+
+    env3 = {"FORGE_CURSOR_AGENT": r"D:\custom\agent.exe", "LOCALAPPDATA": r"C:\Users\me\AppData\Local"}
+    assert resolve_agent_executable(
+        env3, which=lambda name: win_cmd, path_exists=lambda p: True, platform="win32",
+    ) == r"D:\custom\agent.exe"
+
+
+def test_prompt_goes_to_stdin_not_argv_multiline_long_cmd_chars():
+    seen = {}
+
+    def runner(argv, cwd=None, env=None, **kwargs):
+        seen["argv"] = argv
+        seen["input"] = kwargs.get("input")
+        return subprocess.CompletedProcess(argv, 0, stdout=b"ok", stderr=b"")
+
+    special = "line1\nline2 & echo pwned | more ^ %PATH% \"quoted\" <file>\n"
+    huge = special + ("x" * 9000)
+    adapter = CursorCliAdapter(runner=runner, env={"PATH": "/bin"}, agent_bin="agent")
+    adapter.complete(huge)
+    assert seen["input"] == huge.encode("utf-8")
+    assert huge not in seen["argv"]
+    assert special not in seen["argv"]
+    assert not any("&" in a or "|" in a or "^" in a for a in seen["argv"])
+    joined = " ".join(seen["argv"])
+    assert "pwned" not in joined
+    assert TRUST_FLAG in seen["argv"]
+
+
+def test_cursor_cli_error_redacts_and_truncates_stderr():
+    token = "gho_" + ("a" * 20)
+    pat = "github_pat_" + ("b" * 20)
+    bearer = "Bearer super-secret-session"
+    api_key = "cursor-live-key-xyz"
+    long_tail = "Z" * 800
+    stderr = f"fail {token} {pat} {bearer} CURSOR_API_KEY={api_key} {long_tail}"
+    hint = format_cursor_cli_error(7, stderr.encode(), {"CURSOR_API_KEY": api_key})
+    assert "exit=7" in hint
+    assert token not in hint and pat not in hint
+    assert "super-secret-session" not in hint
+    assert api_key not in hint
+    assert "***" in hint
+    body = hint.split("stderr=", 1)[1]
+    assert len(body) <= STDERR_SNIPPET
+
+    seen = {}
+
+    def runner(argv, cwd=None, env=None, **kwargs):
+        seen["ok"] = True
+        return subprocess.CompletedProcess(argv, 3, stdout=b"", stderr=stderr.encode())
+
+    adapter = CursorCliAdapter(
+        runner=runner, env={"PATH": "/bin", "CURSOR_API_KEY": api_key}, agent_bin="agent",
+    )
+    with pytest.raises(DraftError) as ei:
+        adapter.complete("prompt")
+    assert ei.value.code == "cursor_cli_error"
+    assert "exit=3" in ei.value.hint
+    assert token not in ei.value.hint
+    assert api_key not in str(ei.value)
 
 
 def test_env_filter_drops_forge_and_gh_tokens():
