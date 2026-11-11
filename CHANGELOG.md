@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.18.0](https://github.com/danielxdrj/forge/compare/v0.17.0...v0.18.0) (2026-11-11)
+
+
+### Features
+
+* **core:** resolver de issue via Cursor CLI no clone temporário ([#29](https://github.com/danielxdrj/forge/issues/29)) ([2b65a2b](https://github.com/danielxdrj/forge/commit/2b65a2b1eeaa13ac30b648e17f19b1990f4a5266))
+
 ## [0.17.0](https://github.com/danielxdrj/forge/compare/v0.16.0...v0.17.0) (2026-11-11)
 
 
