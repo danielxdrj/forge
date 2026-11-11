@@ -166,6 +166,8 @@ class WebTaskService:
             raise DraftError("draft_missing")
         if draft.status == "publicado":
             raise DraftError("draft_published")
+        if draft.status == "cancelado":
+            raise DraftError("draft_cancelled")
         next_body = draft.body_md
         if body_md is not None:
             next_body = decode_utf8(body_md.encode("utf-8"), origin="rascunho")
@@ -214,6 +216,8 @@ class WebTaskService:
             raise DraftError("diff_changed")
         if draft.status == "publicado":
             return self._payload_from_links(task_id, draft, status="publicado")
+        if draft.status == "cancelado":
+            raise DraftError("draft_cancelled")
         meta = {
             "tipo": draft.tipo, "prioridade": draft.prioridade, "size": draft.size,
             "sprint": "", "escopo": "",
@@ -240,14 +244,45 @@ class WebTaskService:
         )
         return self._payload_from_links(task_id, draft, status="publicado")
 
-    def list_tasks(self, principal: Principal) -> list[dict]:
+    def discard(self, principal: Principal, task_id: str) -> dict:
+        """Marca o rascunho como cancelado. Não apaga linhas. Idempotente se já cancelado."""
+        self.tasks._auth.require(principal, "editor")
+        draft = latest_draft_for_task(self.repo, task_id)
+        if draft is None:
+            raise DraftError("draft_missing")
+        if draft.status == "cancelado":
+            return {
+                "task_id": task_id,
+                "draft_id": draft.id,
+                "status": "cancelado",
+            }
+        if draft.status == "publicado":
+            raise DraftError("draft_published")
+        links = list_task_links(self.repo, task_id)
+        if link_of_kind(links, "issue"):
+            raise DraftError("draft_published")
+        rec = update_draft(self.repo, draft.id, status="cancelado")
+        self.repo.record_audit(
+            principal.identity_id, "draft.discard", f"task:{task_id}",
+            f"ok: repo={draft.repo} status=cancelado",
+        )
+        return {
+            "task_id": task_id,
+            "draft_id": rec.id,
+            "status": rec.status,
+        }
+
+    def list_tasks(self, principal: Principal) -> dict:
         self.tasks._auth.require(principal, "editor")
         seen: set[str] = set()
-        out = []
+        published: list[dict] = []
+        drafts: list[dict] = []
         for draft in reversed(list_all_drafts(self.repo)):
             if draft.task_id in seen:
                 continue
             seen.add(draft.task_id)
+            if draft.status == "cancelado":
+                continue
             task = self.tasks.get_task(draft.task_id)
             if task is None:
                 continue
@@ -256,7 +291,7 @@ class WebTaskService:
             issue = link_of_kind(links, "issue")
             pr = link_of_kind(links, "pr")
             branch = link_of_kind(links, "branch")
-            out.append({
+            item = {
                 "id": task.id,
                 "repo": draft.repo,
                 "title": task.title,
@@ -266,8 +301,16 @@ class WebTaskService:
                 "pr_url": pr.url if pr else None,
                 "branch": _branch_from_link(branch),
                 "board_item_id": issue.board_item_id if issue else None,
-            })
-        return out
+            }
+            if item["issue_url"]:
+                published.append(item)
+            else:
+                drafts.append(item)
+        return {
+            "published": published,
+            "drafts": drafts,
+            "tasks": published + drafts,
+        }
 
     def _board_or_empty(self) -> dict:
         try:

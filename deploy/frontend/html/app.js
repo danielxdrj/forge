@@ -26,6 +26,8 @@
     fieldsError: "",
     draft: null,
     tasks: [],
+    published: [],
+    drafts: [],
     form: { repo: "", context: "", tipo: "", prioridade: "", size: "" },
     error: "",
     errorDetail: null,
@@ -89,6 +91,14 @@
       return el("span", { class: "muted", text: "—" });
     }
     return el("a", { href: href, rel: "noopener noreferrer", text: label || href });
+  }
+
+  function publishedIssueLink(url) {
+    const node = safeLink(url, "issue");
+    if (node.tagName === "A") {
+      node.setAttribute("target", "_blank");
+    }
+    return node;
   }
 
   async function api(path, options) {
@@ -208,7 +218,9 @@
     }
     const tasks = await api("/api/tasks");
     if (tasks.ok) {
-      state.tasks = tasks.data.tasks || [];
+      state.published = tasks.data.published || [];
+      state.drafts = tasks.data.drafts || [];
+      state.tasks = tasks.data.tasks || state.published.concat(state.drafts);
     }
   }
 
@@ -219,6 +231,8 @@
     state.pending = null;
     state.draft = null;
     state.tasks = [];
+    state.published = [];
+    state.drafts = [];
     render();
   }
 
@@ -324,6 +338,28 @@
     render();
   }
 
+  async function discardDraft(taskId) {
+    state.busy = true;
+    state.error = "";
+    state.errorDetail = null;
+    render();
+    const res = await api("/api/tasks/" + encodeURIComponent(taskId) + "/discard", {
+      method: "POST",
+      body: {},
+    });
+    state.busy = false;
+    if (!res.ok) {
+      setErrorFromResponse(res.data);
+      return;
+    }
+    if (state.draft && state.draft.task_id === taskId) {
+      state.draft = null;
+    }
+    state.notice = "Rascunho descartado.";
+    await loadEditorData();
+    render();
+  }
+
   function fieldLabel(name) {
     return FIELD_LABELS[name] || name;
   }
@@ -339,6 +375,8 @@
       invalid_repo: "Repositório inválido.",
       pending_required: "Preencha tipo, prioridade e size (sem [PENDENTE]).",
       pending_fields: "Ainda há [PENDENTE] no rascunho.",
+      draft_cancelled: "Este rascunho foi descartado.",
+      draft_published: "Tarefa já publicada; não dá para descartar.",
       invalid_board_option: "Tipo, prioridade ou size não existe no board.",
       diff_changed: "A pré-visualização mudou. Atualize os campos e confirme de novo.",
       denied: "Autorização negada no GitHub.",
@@ -501,32 +539,55 @@
       root.appendChild(preview);
     }
 
-    const list = el("section", null, [el("h2", { text: "Tarefas" })]);
-    if (!state.tasks.length) {
-      list.appendChild(el("p", { class: "muted", text: "Nenhuma tarefa ainda." }));
-    } else {
-      const table = el("table");
-      table.appendChild(el("thead", null, [el("tr", null, [
-        el("th", { text: "Repositório" }),
-        el("th", { text: "Título" }),
-        el("th", { text: "Status" }),
-        el("th", { text: "Issue" }),
-        el("th", { text: "PR" }),
-      ])]));
-      const tbody = el("tbody");
-      state.tasks.forEach(function (task) {
-        tbody.appendChild(el("tr", null, [
-          el("td", { text: task.repo || "" }),
-          el("td", { text: task.title || "" }),
-          el("td", { text: (task.draft_status || "") + " / " + (task.status || "") }),
-          el("td", null, [safeLink(task.issue_url, "issue")]),
-          el("td", null, [safeLink(task.pr_url, "PR")]),
-        ]));
-      });
-      table.appendChild(tbody);
-      list.appendChild(table);
+    root.appendChild(renderTaskView("Publicadas", state.published, "published"));
+    root.appendChild(renderTaskView("Rascunhos", state.drafts, "drafts"));
+  }
+
+  function renderTaskView(title, tasks, kind) {
+    const list = el("section", { class: "task-view" }, [el("h2", { text: title })]);
+    if (!tasks.length) {
+      list.appendChild(el("p", {
+        class: "muted",
+        text: kind === "published" ? "Nenhuma tarefa publicada." : "Nenhum rascunho.",
+      }));
+      return list;
     }
-    root.appendChild(list);
+    const cols = [
+      el("th", { text: "Repositório" }),
+      el("th", { text: "Título" }),
+      el("th", { text: "Status" }),
+    ];
+    if (kind === "published") {
+      cols.push(el("th", { text: "Issue" }), el("th", { text: "PR" }));
+    } else {
+      cols.push(el("th", { text: "" }));
+    }
+    const table = el("table");
+    table.appendChild(el("thead", null, [el("tr", null, cols)]));
+    const tbody = el("tbody");
+    tasks.forEach(function (task) {
+      const cells = [
+        el("td", { text: task.repo || "" }),
+        el("td", { text: task.title || "" }),
+        el("td", { text: (task.draft_status || "") + " / " + (task.status || "") }),
+      ];
+      if (kind === "published") {
+        cells.push(el("td", null, [publishedIssueLink(task.issue_url)]));
+        cells.push(el("td", null, [safeLink(task.pr_url, "PR")]));
+      } else {
+        cells.push(el("td", null, [el("button", {
+          type: "button",
+          class: "danger",
+          text: "Descartar",
+          disabled: state.busy ? "disabled" : null,
+          onClick: function () { discardDraft(task.id); },
+        })]));
+      }
+      tbody.appendChild(el("tr", null, cells));
+    });
+    table.appendChild(tbody);
+    list.appendChild(table);
+    return list;
   }
 
   function render() {

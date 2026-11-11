@@ -46,6 +46,7 @@ button {
 }
 button:hover { border-color: var(--accent); }
 button.primary { background: #1f4b8a; }
+button.danger { background: #5a2a2a; }
 .muted { color: var(--muted); }
 .error { color: var(--danger); }
 .ok { color: var(--ok); }

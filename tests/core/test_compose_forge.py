@@ -127,3 +127,8 @@ def test_nginx_proxies_api_sets_forwarded_headers_and_csp():
     assert "pending_fields" in js
     assert "fieldsError" in js
     assert "Gerar de novo" in js
+    assert "Publicadas" in js
+    assert "Rascunhos" in js
+    assert "/discard" in js
+    assert "publishedIssueLink" in js
+    assert 'setAttribute("target", "_blank")' in js

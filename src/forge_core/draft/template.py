@@ -9,6 +9,7 @@ from ..errors import DraftError
 from ..logging import redact
 
 PENDING = "[PENDENTE]"
+SUGGESTION_PREFIX = "_Sugestão (revise):_"
 ASSIGNEE = "danielxdrj"
 PROJECT_OWNER = "ferreiraeborzone"
 PROJECT_NUMBER = 13
@@ -48,8 +49,12 @@ novos_problemas (string, vazia se não houver), situacao_atual, comportamento_es
 criterios (1 a 6), observacoes (lista de 1 a 3 strings).
 Chaves opcionais de sugestão do board: tipo, prioridade, size (strings).
 Não invente fatos.
-Use o marcador [PENDENTE] SOMENTE se um destes campos obrigatórios estiver ausente do contexto
-do usuário: solicitado_por, objetivo, comportamento_esperado, criterios.
+SEMPRE preencha comportamento_esperado e criterios com a melhor inferência possível a partir
+do contexto, mesmo que o pedido seja curto. Cada item inferido DEVE começar exatamente com
+_Sugestão (revise):_ (incluindo os underscores). Nunca use [PENDENTE] nessas duas listas.
+Use [PENDENTE] em objetivo SOMENTE se o contexto do usuário estiver vazio. Com contexto
+não vazio, infira o objetivo; não deixe [PENDENTE].
+Use [PENDENTE] em solicitado_por só se o contexto não indicar quem pediu.
 Sugira tipo, prioridade e size a partir das opções do board listadas no prompt, quando houver.
 Use [PENDENTE] nesses três SOMENTE se o contexto não permitir decidir.
 Nunca invente uma opção que não esteja na lista do board.
@@ -162,6 +167,7 @@ def parse_model_json(raw: str) -> dict:
         "prioridade": _suggestion(data.get("prioridade")),
         "size": _suggestion(data.get("size")),
     }
+    parsed = fill_inferred_sections(parsed)
     rendered = render(parsed)
     _reject_scope(rendered)
     return parsed
@@ -204,21 +210,125 @@ def _has_pending(value) -> bool:
     return PENDING.lower() in text.lower()
 
 
+def _is_suggestion_item(text: str) -> bool:
+    return str(text or "").strip().lower().startswith(SUGGESTION_PREFIX.lower())
+
+
+def _blocking_pending(value) -> bool:
+    """[PENDENTE] real bloqueia; item prefixado como sugestão não bloqueia, salvo se a lacuna for só o marcador."""
+    if isinstance(value, list):
+        return any(_blocking_pending(v) for v in value)
+    text = str(value or "").strip()
+    if _is_suggestion_item(text):
+        rest = text[len(SUGGESTION_PREFIX):].strip()
+        return rest == PENDING or rest.lower() == PENDING.lower()
+    return _has_pending(text)
+
+
+def _usable_text(value: str | None) -> str:
+    text = (value or "").strip()
+    if not text or _has_pending(text):
+        return ""
+    return text
+
+
+def _clip(text: str, limit: int = 180) -> str:
+    compact = " ".join((text or "").split())
+    if len(compact) <= limit:
+        return compact
+    return compact[: limit - 1].rstrip() + "…"
+
+
+def _as_suggestion(text: str) -> str:
+    compact = " ".join((text or "").split())
+    if _is_suggestion_item(compact):
+        return compact
+    return f"{SUGGESTION_PREFIX} {compact}"
+
+
+def _infer_expected(data: dict, ctx: str) -> str:
+    problems = [p for p in (data.get("problemas") or []) if _usable_text(p)]
+    if problems:
+        return f"O sistema deixa de apresentar o problema: {problems[0]}."
+    situacao = _usable_text(data.get("situacao_atual"))
+    if situacao:
+        return f"Em lugar da situação atual ({_clip(situacao, 80)}), a solicitação descrita passa a ser atendida."
+    if ctx:
+        return f"A solicitação é atendida ponta a ponta: {_clip(ctx)}."
+    who = _usable_text(data.get("solicitado_por"))
+    if who:
+        return f"A solicitação feita por {who} é atendida e pode ser verificada."
+    title = _usable_text(data.get("title"))
+    if title:
+        bare = re.sub(r"^[^:]+:\s*", "", title).strip() or title
+        return f"A solicitação «{bare}» é atendida de ponta a ponta."
+    return "A solicitação descrita neste rascunho é atendida de ponta a ponta."
+
+
+def _infer_acceptance(data: dict, ctx: str) -> str:
+    expected = [e for e in (data.get("comportamento_esperado") or []) if _usable_text(e)]
+    if expected:
+        item = expected[0]
+        if _is_suggestion_item(item):
+            item = item[len(SUGGESTION_PREFIX):].strip()
+        return f"Há verificação observável de que {item.rstrip('.')}."
+    if ctx:
+        return f"Há um teste ou checagem manual que cobre: {_clip(ctx)}."
+    return "Há um teste ou checagem manual que demonstra o resultado descrito."
+
+
+def _infer_objetivo(data: dict, ctx: str) -> str:
+    title = _usable_text(data.get("title"))
+    if title and not _has_pending(title):
+        bare = re.sub(r"^[^:]+:\s*", "", title).strip()
+        if bare:
+            return f"Atender a solicitação: {bare}."
+    if ctx:
+        return f"Atender a solicitação: {_clip(ctx)}."
+    return PENDING
+
+
+def _fill_inferred_list(items, infer) -> list[str]:
+    kept = [item for item in (items or []) if not _has_pending(item)]
+    if kept:
+        return kept
+    return [_as_suggestion(infer())]
+
+
+def fill_inferred_sections(data: dict, user_context: str = "") -> dict:
+    """Garante Comportamento esperado e Critérios de aceite inferidos; Objetivo só fica [PENDENTE] sem contexto."""
+    data = dict(data)
+    ctx = _usable_text(user_context) or _usable_text(data.get("contexto"))
+    if _has_pending(data.get("contexto")) and _usable_text(user_context):
+        data["contexto"] = user_context.strip()
+        ctx = ctx or user_context.strip()
+    if _has_pending(data.get("objetivo")):
+        if ctx:
+            data["objetivo"] = _infer_objetivo(data, ctx)
+    data["comportamento_esperado"] = _fill_inferred_list(
+        data.get("comportamento_esperado"), lambda: _infer_expected(data, ctx),
+    )
+    data["criterios"] = _fill_inferred_list(
+        data.get("criterios"), lambda: _infer_acceptance(data, ctx),
+    )
+    return data
+
+
 def required_pending(data: dict, meta: dict) -> list[str]:
-    """Qualquer [PENDENTE] em seção (inclui Observações e título) bloqueia o remoto."""
+    """Só [PENDENTE] real bloqueia o remoto; itens _Sugestão (revise):_ não bloqueiam."""
     blocked: list[str] = []
-    if _has_pending(data["title"]) or not TITLE_RE.match(data["title"]):
+    if _blocking_pending(data["title"]) or not TITLE_RE.match(data["title"]):
         blocked.append("title")
     for key in ("solicitado_por", "objetivo", "contexto", "situacao_atual"):
-        if _has_pending(data.get(key)):
+        if _blocking_pending(data.get(key)):
             blocked.append(key)
-    if data.get("novos_problemas") and _has_pending(data.get("novos_problemas")):
+    if data.get("novos_problemas") and _blocking_pending(data.get("novos_problemas")):
         blocked.append("novos_problemas")
     for key in ("problemas", "comportamento_esperado", "criterios", "observacoes"):
-        if _has_pending(data.get(key)):
+        if _blocking_pending(data.get(key)):
             blocked.append(key)
     for key in ("tipo", "prioridade", "size"):
-        if not (meta.get(key) or "").strip() or _has_pending(meta.get(key)):
+        if not (meta.get(key) or "").strip() or _blocking_pending(meta.get(key)):
             blocked.append(key)
     return blocked
 

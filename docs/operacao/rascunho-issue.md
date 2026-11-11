@@ -89,7 +89,7 @@ A CLI mostra a issue, destino, board e pergunta `s/N` (default N). Confirmação
 
 Se o markdown de `--output` já existir, o comando recusa `file_exists` **antes** de login, rede ou LLM. Quando houver sidecar `*.forge-draft.json`, a mensagem inclui `use --retomar <uuid>`.
 
-`--yes` **não** ignora `[PENDENTE]` (em qualquer campo obrigatório), papel `editor` nem escopo `project`.
+`--yes` **não** ignora `[PENDENTE]` real (sugestões `_Sugestão (revise):_` não bloqueiam), papel `editor` nem escopo `project`. Comportamento esperado e Critérios de aceite são sempre inferidos; só Objetivo pode ficar `[PENDENTE]`, e só com contexto vazio.
 
 ## Retomar após falha parcial (mesmo markdown, sem novo LLM)
 

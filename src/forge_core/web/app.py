@@ -118,6 +118,7 @@ def create_app(
         status = {
             "diff_changed": 409,
             "draft_published": 409,
+            "draft_cancelled": 409,
             "draft_missing": 404,
             "task_missing": 404,
             "provider_missing": 503,
@@ -368,13 +369,23 @@ def create_app(
         except DraftError as exc:
             return _draft_error(exc)
 
+    @app.post("/api/tasks/{task_id}/discard")
+    def api_discard(request: Request, task_id: str):
+        principal = _need_editor(request)
+        if isinstance(principal, JSONResponse):
+            return principal
+        try:
+            return panel.discard(principal, task_id)
+        except DraftError as exc:
+            return _draft_error(exc)
+
     @app.get("/api/tasks")
     def api_list_tasks(request: Request):
         principal = _need_editor(request)
         if isinstance(principal, JSONResponse):
             return principal
         try:
-            return {"tasks": panel.list_tasks(principal)}
+            return panel.list_tasks(principal)
         except DraftError as exc:
             return _draft_error(exc)
 
