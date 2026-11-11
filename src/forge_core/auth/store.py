@@ -63,9 +63,11 @@ def _is_integrity_error(exc: Exception) -> bool:
 
 
 class AuthStore:
-    def __init__(self, repo: SqlRepository, verify: Callable[[str], "GitHubIdentity"] | None = None):
+    def __init__(self, repo: SqlRepository, verify: Callable[[str], "GitHubIdentity"] | None = None,
+                 clock: Callable[[], str] | None = None):
         self._repo = repo
         self._verify = verify
+        self._clock = clock or _now
 
     # --- identidade e bootstrap ---
 
@@ -125,18 +127,24 @@ class AuthStore:
 
     # --- sessão ---
 
-    def open_session(self, access_token: str) -> tuple[Principal, str]:
-        """Sessão para a identidade verificada pelo GitHub. Devolve (Principal, token); no banco fica só o hash."""
-        github_id, login = self._verified(access_token)
-        return self._open(github_id, login)
+    def open_session(self, access_token: str, *, expires_at: str | None = None) -> tuple[Principal, str]:
+        """Sessão para a identidade verificada pelo GitHub. Devolve (Principal, token); no banco fica só o hash.
 
-    def _open(self, github_id: int, login: str) -> tuple[Principal, str]:
+        `expires_at` ISO-8601: sessões web sempre enviam prazo. CLI legado omite (NULL = sem expiração).
+        """
+        github_id, login = self._verified(access_token)
+        return self._open(github_id, login, expires_at=expires_at)
+
+    def _open(self, github_id: int, login: str, expires_at: str | None = None) -> tuple[Principal, str]:
         token = secrets.token_urlsafe(32)
         sid = uuid.uuid4().hex
         with self._repo.transaction() as tx:
             iid = self._upsert_identity(tx, github_id, login)
-            tx.execute("INSERT INTO sessions (id, identity_id, token_hash, login, created_at) VALUES (?, ?, ?, ?, ?)",
-                       (sid, iid, _digest(token), login, _now()))
+            tx.execute(
+                "INSERT INTO sessions (id, identity_id, token_hash, login, created_at, expires_at) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (sid, iid, _digest(token), login, self._clock(), expires_at),
+            )
             tx.audit(iid, "auth.session_open", f"session:{sid}", "ok")
         return Principal(iid, login, sid, _issued=_ISSUED), token
 
@@ -146,8 +154,9 @@ class AuthStore:
             raise AuthenticationError("invalid_session")
         rows = self._repo.fetch(
             "SELECT s.id, s.identity_id, s.login FROM sessions s WHERE s.token_hash = ? "
-            "AND NOT EXISTS (SELECT 1 FROM session_revocations r WHERE r.session_id = s.id)",
-            (_digest(token),))
+            "AND NOT EXISTS (SELECT 1 FROM session_revocations r WHERE r.session_id = s.id) "
+            "AND (s.expires_at IS NULL OR s.expires_at > ?)",
+            (_digest(token), self._clock()))
         if len(rows) != 1:
             raise AuthenticationError("invalid_session")
         sid, iid, login = rows[0]
@@ -182,8 +191,9 @@ class AuthStore:
             raise AuthenticationError("principal_missing")
         rows = tx.execute(
             "SELECT 1 FROM sessions s WHERE s.id = ? AND s.identity_id = ? "
-            "AND NOT EXISTS (SELECT 1 FROM session_revocations r WHERE r.session_id = s.id)",
-            (principal.session_id, principal.identity_id)).fetchall()
+            "AND NOT EXISTS (SELECT 1 FROM session_revocations r WHERE r.session_id = s.id) "
+            "AND (s.expires_at IS NULL OR s.expires_at > ?)",
+            (principal.session_id, principal.identity_id, self._clock())).fetchall()
         if not rows:
             raise AuthenticationError("invalid_session")
         if role is not None and not self._has_role_in_tx(tx, principal.identity_id, role):
@@ -215,8 +225,9 @@ class AuthStore:
             raise AuthenticationError("principal_missing")
         rows = self._repo.fetch(
             "SELECT 1 FROM sessions s WHERE s.id = ? AND s.identity_id = ? "
-            "AND NOT EXISTS (SELECT 1 FROM session_revocations r WHERE r.session_id = s.id)",
-            (principal.session_id, principal.identity_id))
+            "AND NOT EXISTS (SELECT 1 FROM session_revocations r WHERE r.session_id = s.id) "
+            "AND (s.expires_at IS NULL OR s.expires_at > ?)",
+            (principal.session_id, principal.identity_id, self._clock()))
         if not rows:
             raise AuthenticationError("invalid_session")
 

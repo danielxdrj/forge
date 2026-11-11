@@ -1,5 +1,7 @@
 # Postgres de desenvolvimento/teste do Forge novo. Não reaproveita o compose do legado.
 # Uso: cp .env.example .env (preencha <SEGREDO> fora do Git) e docker compose -f docker-compose.dev.yml up -d
+# Conflito: publica 127.0.0.1:5433, o mesmo padrão de docker-compose.forge.yml (FORGE_PG_HOST_PORT).
+# Não suba os dois ao mesmo tempo nessa porta; pare este compose ou mude FORGE_PG_HOST_PORT.
 name: forge_dev
 
 services:

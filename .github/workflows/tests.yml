@@ -33,7 +33,14 @@ jobs:
         with:
           python-version: "3.12"
       - name: Instalar dependências de teste
-        run: python -m pip install -e ".[postgres,dev]"
+        run: python -m pip install -e ".[postgres,dev,web]"
+      - name: Validar compose do painel (sem subir serviços)
+        run: docker compose -f docker-compose.forge.yml config -q
+        env:
+          FORGE_PG_OWNER_PASSWORD: fake-ci-owner
+          FORGE_PG_APP_PASSWORD: fake-ci-app
+          FORGE_PG_READONLY_PASSWORD: fake-ci-ro
+          FORGE_GITHUB_CLIENT_ID: Iv1.exampleinvalid
       - name: pytest sem banco
         run: python -m pytest tests/core -q -p no:cacheprovider
         env:

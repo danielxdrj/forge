@@ -23,9 +23,13 @@ src/forge_core/
     sql.py          SqlRepository (SQLite e PostgreSQL) e open_repository()
     migrate.py      runner de migrações
     migrations/     SQL numerado por dialeto (sqlite/, postgres/)
+    drafts.py       helpers de rascunho e task_links (ADR-017; sem UI de tarefas)
+    seed.py         semente idempotente dos repos permitidos
+  web/            painel FastAPI (extra `[web]`, ADR-017): login device flow, whoami, logout
   extension/      interfaces: Integration, Agent, contrato de agente (reexporta agents/spec), JobQueue (Job, JobStatus) (implementações: FRG-40 e outras)
 tests/core/  conftest (Postgres efêmero), test_projects, test_agents, test_orchestrator, test_task_rules, test_task_service, test_queue, test_core, test_start_automation, test_redact, test_storage
-docker-compose.dev.yml  Postgres de dev/teste (127.0.0.1:5433)
+docker-compose.forge.yml  painel local (Postgres 16 + backend; ADR-017)
+docker-compose.dev.yml  Postgres de dev/teste (127.0.0.1:5433; conflita com o padrão do compose.forge)
 ```
 
 ## Variáveis de ambiente
@@ -38,7 +42,9 @@ docker-compose.dev.yml  Postgres de dev/teste (127.0.0.1:5433)
 | `FORGE_DATABASE_MIGRATION_URL` | não | URL do papel dono/migrador. Se definida, `open_repository` migra com ela e a aplicação conecta só com `FORGE_DATABASE_URL` (papel escritor). Nunca logada |
 | `FORGE_AGENTS_DISABLED` | não | agentes desativados, separados por vírgula (ex.: `echo`) |
 | `FORGE_PG_USER`/`FORGE_PG_PASSWORD`/`FORGE_PG_DB` | só para o compose de dev | credenciais do Postgres local; use valores fora do Git |
+| `FORGE_PG_OWNER_PASSWORD` / `FORGE_PG_APP_PASSWORD` / `FORGE_PG_READONLY_PASSWORD` | compose.forge (secrets) | senhas dos três papéis; nunca no Git |
 | `FORGE_GITHUB_CLIENT_ID` | para login | client id público do OAuth App (device flow) |
+| `FORGE_SESSION_TTL_SECONDS` / `FORGE_COOKIE_SECURE` / `FORGE_WEB_HOSTS` | painel web | prazo da sessão (8 h), flag Secure, allowlist de Host |
 | `FORGE_CURSOR_AGENT` / `FORGE_CURSOR_MODEL` / `FORGE_GH_BIN` | não | caminhos/opções do rascunho e do resolver; `FORGE_CURSOR_AGENT` é opcional (PATH/`agent.cmd`) |
 | `FORGE_RESOLVER_ATTEMPTS` | não | teto de tentativas do motor implementador (1–3, padrão 1) |
 
@@ -48,9 +54,10 @@ Nunca coloque segredos aqui; use cofre institucional.
 
 ## Executar e testar
 ```
-pip install -e ".[dev]"
+pip install -e ".[dev,postgres,web]"
 FORGE_CONFIG_DIR=<CAMINHO> python -m forge_core.app
 pytest
+# painel local: docs/operacao/container-local.md — docker compose -f docker-compose.forge.yml up -d --build
 ```
 
 ## Persistência, auditoria e histórico
@@ -79,7 +86,7 @@ Rodam automaticamente em `open_repository`. Para criar uma: adicione `NNNN_descr
 
 ### Backup e restauração
 - **SQLite:** `backup_sqlite(db, destino)` e `restore_sqlite(backup, db)` (pare o Forge antes de restaurar). Testado em `test_storage.py`.
-- **PostgreSQL (manual, não automatizado):** `pg_dump -Fc -h 127.0.0.1 -p 5433 -U <USUARIO> <BANCO> > forge.dump` e `pg_restore --clean -d <BANCO> forge.dump` num banco vazio ou de teste. Guarde o dump em local institucional e restaure em ambiente de teste periodicamente.
+- **PostgreSQL (manual, não automatizado):** no compose do painel, `docker compose -f docker-compose.forge.yml exec forge_postgres pg_dump -U forge_owner -d forge -Fc`. Fora dele: `pg_dump -Fc -h 127.0.0.1 -p 5433 -U <USUARIO> <BANCO> > forge.dump` (a 5433 é compartilhada com `docker-compose.dev.yml`). Guarde o dump em local institucional.
 
 ## Projetos e repositórios (FRG-5, ADR-012)
 `ProjectService` cadastra, lista, edita e desativa projetos e repositórios (migração `0008`, nunca apaga, `settings` validadas) e expõe `resolve_target` para a FRG-21. Veja `projects/README.md`.

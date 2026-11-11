@@ -1,3 +1,5 @@
+# LEGADO: frontend/backend da primeira implementação. Não é o painel do Core.
+# Uso atual: docker-compose.forge.yml (ADR-017, docs/operacao/container-local.md).
 name: forge_system
 
 services:

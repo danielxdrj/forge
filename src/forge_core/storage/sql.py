@@ -127,7 +127,7 @@ class SqlRepository:
 
 def _connect(url: str):
     if url.startswith("sqlite:///"):
-        return sqlite3.connect(url[len("sqlite:///"):]), "sqlite"
+        return sqlite3.connect(url[len("sqlite:///"):], check_same_thread=False), "sqlite"
     if url.startswith(("postgresql://", "postgres://")):
         try:
             import psycopg
