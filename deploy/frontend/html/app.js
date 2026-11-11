@@ -90,7 +90,7 @@
     if (!href) {
       return el("span", { class: "muted", text: "—" });
     }
-    return el("a", { href: href, rel: "noopener noreferrer", text: label || href });
+    return el("a", { href: href, target: "_blank", rel: "noopener noreferrer", text: label || href });
   }
 
   function publishedIssueLink(url) {
@@ -412,10 +412,7 @@
     const box = el("section", null, [el("h2", { text: "Entrar" })]);
     if (state.pending && state.pending.user_code) {
       box.appendChild(el("p", { text: "Abra o GitHub e informe o código:" }));
-      const href = githubHref(state.pending.verification_uri);
-      if (href) {
-        box.appendChild(el("p", null, [el("a", { href: href, rel: "noopener noreferrer", text: href })]));
-      }
+      box.appendChild(el("p", null, [safeLink(state.pending.verification_uri)]));
       box.appendChild(el("p", { class: "code", text: state.pending.user_code }));
       box.appendChild(el("p", { class: "muted", text: "Aguardando autorização no GitHub…" }));
     } else {
