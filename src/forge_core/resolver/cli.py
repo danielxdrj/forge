@@ -32,7 +32,6 @@ def add_parser(sub) -> None:
     r.add_argument("issue", nargs="?", default="", help="owner/repo#n")
     r.add_argument("--retomar", default="", help="id da tarefa Forge (recupera parâmetros; flags só sobrescrevem)")
     r.add_argument("--model", default="", help="mesmo que FORGE_CURSOR_MODEL (precedência: flag > env)")
-    r.add_argument("--yes", action="store_true", help="pula só a confirmação s/N")
     r.add_argument("--manter-clone", action="store_true", help="não apaga o clone temporário")
     r.add_argument("--attempts", type=int, default=0, help="teto de tentativas do motor (1-3)")
 
@@ -126,9 +125,9 @@ def _execute(args, argv, env, transport, provider, gh, git, out, err, stdin) -> 
             print(f"PR {result.state.pr_url}\ntarefa {result.task_id}", file=out)
             return 0
         try:
-            ok = ask_confirm(result.preview, yes=args.yes, stdin=stdin, out=out, question=QUESTION)
+            ok = ask_confirm(result.preview, yes=False, stdin=stdin, out=out, question=QUESTION)
         except DraftError:
-            print("Publicação recusada (sem --yes e sem TTY). Clone local mantido só com --manter-clone.", file=out)
+            print("Publicação recusada (sem TTY). Confirme com s/N no terminal. Clone local mantido só com --manter-clone.", file=out)
             print(f"tarefa {result.task_id}", file=out)
             if not result.state.keep_clone:
                 service.cleanup(result.state)

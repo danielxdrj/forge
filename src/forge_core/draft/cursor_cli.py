@@ -17,7 +17,7 @@ from pathlib import Path, PureWindowsPath
 from ..agents.provider import ProviderResponse
 from ..errors import DraftError
 from ..logging import redact
-from .envfilter import assert_no_host_secrets, cursor_env_allow, filter_env
+from .envfilter import assert_no_host_secrets, cursor_env_allow, filter_env, harden_implementer_env
 from .template import INSTRUCTION
 
 # https://cursor.com/docs/cli/reference/permissions
@@ -156,6 +156,7 @@ def build_cursor_child_env(
     *,
     platform: str,
     scratch_tmp: str | None = None,
+    isolate_git: bool = False,
 ) -> dict[str, str]:
     child = filter_env(src, cursor_env_allow(platform))
     child["NODE_OPTIONS"] = forge_node_options(src)
@@ -167,6 +168,11 @@ def build_cursor_child_env(
     assert_no_host_secrets(child)
     if any(k.upper().startswith("FORGE_") for k in child):
         raise DraftError("unsafe_flags")
+    if isolate_git:
+        if not scratch_tmp:
+            raise DraftError("unsafe_flags")
+        harden_implementer_env(child, scratch_tmp)
+        assert_no_host_secrets(child)
     return child
 
 
@@ -192,7 +198,8 @@ class CursorCliAdapter:
                  runner: Runner | None = None, which: WhichFn | None = None,
                  path_exists: ExistsFn | None = None, platform: str | None = None,
                  workspace: str | None = None, mode: str = "ask",
-                 deny: tuple[str, ...] | None = None, cleanup_workspace: bool = True):
+                 deny: tuple[str, ...] | None = None, cleanup_workspace: bool = True,
+                 isolate_git: bool = False):
         self.agent_bin = agent_bin
         self.model = model
         self.timeout = timeout
@@ -205,6 +212,7 @@ class CursorCliAdapter:
         self.mode = mode
         self.deny = deny if deny is not None else DOCUMENTED_DENY
         self.cleanup_workspace = cleanup_workspace
+        self.isolate_git = isolate_git
         self.last_workspace: str | None = None
         self.last_scratch: str | None = None
         self.last_argv: list[str] | None = None
@@ -237,7 +245,9 @@ class CursorCliAdapter:
                 raise DraftError("unsafe_flags")
             if TRUST_FLAG in argv and not is_owned_forge_workspace(workspace, self.last_workspace):
                 raise DraftError("unsafe_flags")
-            child_env = build_cursor_child_env(env, platform=platform, scratch_tmp=scratch)
+            child_env = build_cursor_child_env(
+                env, platform=platform, scratch_tmp=scratch, isolate_git=self.isolate_git,
+            )
             if Path(child_env.get("TMP", scratch)).resolve() == Path(workspace).resolve():
                 raise DraftError("unsafe_flags")
             self.last_child_env = child_env
@@ -298,6 +308,7 @@ def implementer_adapter(**kwargs) -> CursorCliAdapter:
     kwargs.setdefault("mode", IMPLEMENTER_MODE)
     kwargs.setdefault("deny", IMPLEMENTER_DENY)
     kwargs.setdefault("cleanup_workspace", False)
+    kwargs.setdefault("isolate_git", True)
     return CursorCliAdapter(**kwargs)
 
 

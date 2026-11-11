@@ -16,7 +16,7 @@ from ..errors import DraftError
 from ..logging import redact
 from ..tasks.service import TaskService
 from .context_pack import build_pack
-from .gitops import GitCli
+from .gitops import GitCli, exclude_cursor_cli
 from .prompt import build_implementer_prompt
 from .validate import assert_git_meta_unchanged, snapshot_git_meta, validate_diff
 
@@ -41,6 +41,8 @@ class ResolveState:
     diff_hash: str = ""
     pr_url: str = ""
     tests: str = ""
+    origin_url: str = ""
+    git_meta: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -81,6 +83,7 @@ def state_to_dict(state: ResolveState) -> dict:
         "clone": state.clone, "phase": state.phase, "keep_clone": state.keep_clone,
         "model": state.model, "report": state.report, "diff_hash": state.diff_hash,
         "pr_url": state.pr_url, "tests": state.tests,
+        "origin_url": state.origin_url, "git_meta": state.git_meta,
     }
 
 
@@ -97,6 +100,8 @@ def state_from_dict(data: dict) -> ResolveState:
         diff_hash=str(data.get("diff_hash") or ""),
         pr_url=str(data.get("pr_url") or ""),
         tests=str(data.get("tests") or ""),
+        origin_url=str(data.get("origin_url") or ""),
+        git_meta=data.get("git_meta") if isinstance(data.get("git_meta"), dict) else {},
     )
 
 
@@ -223,6 +228,8 @@ class ResolverService:
                 state.phase = "validated"
                 write_checkpoint(state)
                 self._save_params(result, principal)
+            if state.phase == "validated":
+                result.diff = self._reverify_hash(state)
             result.preview = self._preview(state, result.diff)
             result.title = result.title or f"{state.repo}#{state.issue}"
             return result
@@ -236,9 +243,12 @@ class ResolverService:
         state = result.state
         if state.phase != "validated":
             raise DraftError("phase_invalid")
-        if not result.diff:
-            result.diff = self.git.diff(state.clone)
-        self._ensure_commit(state, result.diff)
+        result.diff = self._reverify_hash(state)
+        self._ensure_commit(state)
+        assert_git_meta_unchanged(Path(state.clone), state.git_meta)
+        if not state.origin_url:
+            raise DraftError("git_error")
+        self.git.remote_add(state.clone, state.origin_url)
         self.git.push(state.clone, state.branch)
         if any("push" in " ".join(c) and "gh" == c[0] for c in self.gh.calls):
             raise DraftError("unsafe_flags")
@@ -278,11 +288,19 @@ class ResolverService:
         if not linked:
             branch = f"{state.issue}-{slug(title)}"
         state.branch = branch
+        if linked:
+            self.git.fetch_branch(dest, branch)
         self.git.checkout_or_create(dest, branch, existing=bool(linked))
+        state.origin_url = self.git.remote_url(dest)
+        self.git.remote_remove(dest)
+        exclude_cursor_cli(Path(dest))
+        state.git_meta = snapshot_git_meta(Path(dest))
 
     def _implement(self, state: ResolveState) -> None:
         if hasattr(self.provider, "workspace"):
             self.provider.workspace = state.clone
+        if self.git.remotes(state.clone):
+            raise DraftError("unsafe_flags")
         detail = self.gh.view_issue_detail(state.issue, state.repo)
         tracked = []
         try:
@@ -306,22 +324,30 @@ class ResolverService:
             raise last_err
         state.report = redact(text)
         state.tests = tests_line(state.report)
+        assert_git_meta_unchanged(Path(state.clone), state.git_meta)
 
     def _validate(self, state: ResolveState) -> str:
         root = Path(state.clone)
-        before = snapshot_git_meta(root)
-        diff = self.git.diff(state.clone)
+        assert_git_meta_unchanged(root, state.git_meta)
+        diff = self.git.working_tree_diff(state.clone)
         info = validate_diff(diff, root)
-        assert_git_meta_unchanged(root, before)
         state.diff_hash = info["hash"]
-        self._ensure_commit(state, diff)
         return diff
 
-    def _ensure_commit(self, state: ResolveState, diff: str) -> None:
+    def _reverify_hash(self, state: ResolveState) -> str:
+        if not state.git_meta:
+            raise DraftError("git_meta_tampered")
+        assert_git_meta_unchanged(Path(state.clone), state.git_meta)
+        diff = self.git.working_tree_diff(state.clone)
+        info = validate_diff(diff, Path(state.clone))
+        if info["hash"] != state.diff_hash:
+            raise DraftError("diff_changed")
+        return diff
+
+    def _ensure_commit(self, state: ResolveState) -> None:
         if self.git.status(state.clone).strip():
             self.git.add_all(state.clone)
-            msg = f"fix: resolve #{state.issue}"
-            self.git.commit(state.clone, msg)
+            self.git.commit(state.clone, f"fix: resolve #{state.issue}")
 
     def _preview(self, state: ResolveState, diff: str) -> str:
         return "\n".join([

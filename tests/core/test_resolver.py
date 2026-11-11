@@ -197,7 +197,7 @@ def test_implementer_env_and_argv_no_push(tmp_path):
         "PATH": "/bin", "HOME": str(tmp_path), "GH_TOKEN": "gho_secreto",
         "GITHUB_TOKEN": "ghs_secreto", "FORGE_DATABASE_URL": "sqlite:///x",
         "DATABASE_URL": "postgresql://x", "CURSOR_API_KEY": "cursor-session",
-        "FORGE_CURSOR_MODEL": "m",
+        "FORGE_CURSOR_MODEL": "m", "SSH_AUTH_SOCK": "/tmp/ssh-agent.sock",
     }
     adapter = implementer_adapter(
         runner=runner, env=host, model="test-model", agent_bin="agent",
@@ -214,6 +214,13 @@ def test_implementer_env_and_argv_no_push(tmp_path):
     assert_no_host_secrets(seen["env"])
     assert list(IMPLEMENTER_DENY) == seen["deny"] or set(IMPLEMENTER_DENY) <= set(seen["deny"])
     assert "push" not in seen["argv"] and "gh" not in seen["argv"]
+    scratch = adapter.last_scratch
+    assert scratch
+    assert str(Path(seen["env"]["GIT_CONFIG_GLOBAL"])).startswith(scratch)
+    assert str(Path(seen["env"]["GH_CONFIG_DIR"])).startswith(scratch)
+    assert "SSH_AUTH_SOCK" not in seen["env"]
+    assert seen["env"].get("GIT_CONFIG_NOSYSTEM") == "1"
+    assert seen["env"].get("GCM_INTERACTIVE") == "never"
 
 
 def test_validate_sensitive_limit_and_outside(tmp_path):
@@ -229,6 +236,12 @@ def test_validate_sensitive_limit_and_outside(tmp_path):
     with pytest.raises(DraftError) as ei:
         validate_diff("diff --git a/../../etc/passwd b/../../etc/passwd\n+x\n", clone)
     assert ei.value.code == "diff_outside_clone"
+    with pytest.raises(DraftError) as ei:
+        validate_diff("diff --git a/.gitattributes b/.gitattributes\n+* filter=evil\n", clone)
+    assert ei.value.code == "sensitive_diff"
+    with pytest.raises(DraftError) as ei:
+        validate_diff("diff --git a/.gitmodules b/.gitmodules\n+[submodule]\n", clone)
+    assert ei.value.code == "sensitive_diff"
 
 
 def test_confirm_n_does_not_push(tmp_path):
@@ -245,7 +258,7 @@ def test_confirm_n_does_not_push(tmp_path):
     )
     assert code == 0
     assert not any(c[1:3] == ["pr", "create"] for c in gh.calls)
-    assert not any(c[1] == "push" for c in git.calls)
+    assert not any("push" in c for c in git.calls)
 
 
 def test_confirm_s_push_draft_pr_closes(tmp_path):
@@ -257,14 +270,16 @@ def test_confirm_s_push_draft_pr_closes(tmp_path):
     impl = FakeImplementer()
     out = _Buf()
     code = resolver_run(
-        ["resolver", ISSUE_REF, "--yes"], env, transport=login_gh, provider=impl, gh=gh, git=git,
-        out=out, err=_Buf(), stdin=StringIO(""),
+        ["resolver", ISSUE_REF], env, transport=login_gh, provider=impl, gh=gh, git=git,
+        out=out, err=_Buf(), stdin=_TTY("s\n"),
     )
     assert code == 0
     assert PR_URL in out.text
     assert any(c[1:3] == ["pr", "create"] and "--draft" in c for c in gh.calls)
     assert any("Closes #9" in " ".join(c) for c in gh.calls)
-    assert any(c[1] == "push" for c in git.calls)
+    assert any("push" in c and "HEAD:refs/heads/" in " ".join(c) for c in git.calls)
+    assert any("--no-verify" in c for c in git.calls if "commit" in c)
+    assert any("--no-verify" in c for c in git.calls if "push" in c)
     assert not any("merge" in c for c in gh.calls)
     audits = [a for a in repo.list_audit() if a.action == "resolver.approve"]
     assert audits and "hash=" in audits[-1].result
@@ -323,6 +338,92 @@ def test_resume_restores_params(tmp_path):
     svc2.cleanup(resumed.state)
 
 
+def test_motor_sees_no_origin_and_cli_json_excluded(tmp_path):
+    repo, login_gh, owner, editor, viewer = _people(tmp_path)
+    seen = {}
+
+    def extra(root: Path):
+        seen["remotes"] = subprocess.check_output(["git", "remote"], cwd=root, text=True).strip()
+        (root / ".cursor").mkdir(exist_ok=True)
+        (root / ".cursor" / "cli.json").write_text("{}", encoding="utf-8")
+
+    impl = FakeImplementer(extra=extra)
+    svc = ResolverService(TaskService(repo), impl, GhCli(runner=_gh_script()), git=GitCli(env=_env(tmp_path)))
+    result = svc.start(ISSUE_REF, editor, keep_clone=True)
+    assert seen.get("remotes") == ""
+    assert ".cursor" not in result.diff
+    log = subprocess.check_output(["git", "log", "-1", "--oneline"], cwd=result.state.clone, text=True)
+    assert "fix: resolve" not in log
+    svc.cleanup(result.state)
+
+
+def test_git_meta_tampered_hooks_and_config(tmp_path):
+    repo, login_gh, owner, editor, viewer = _people(tmp_path)
+    marker_holder = {}
+
+    def install_hooks(root: Path):
+        hooks = root / ".git" / "hooks"
+        hooks.mkdir(exist_ok=True)
+        marker = root / "HOOK_RAN"
+        marker_holder["path"] = marker
+        for name in ("pre-commit", "post-commit", "pre-push"):
+            path = hooks / name
+            path.write_text(f"#!/bin/sh\necho ran > '{marker}'\n", encoding="utf-8")
+            path.chmod(0o755)
+
+    svc = ResolverService(
+        TaskService(repo), FakeImplementer(extra=install_hooks),
+        GhCli(runner=_gh_script()), git=GitCli(env=_env(tmp_path)),
+    )
+    with pytest.raises(DraftError) as ei:
+        svc.start(ISSUE_REF, editor, keep_clone=True)
+    assert ei.value.code == "git_meta_tampered"
+    assert not marker_holder["path"].exists()
+
+    def tweak_config(root: Path):
+        cfg = root / ".git" / "config"
+        cfg.write_text(cfg.read_text(encoding="utf-8") + "\n[evil]\nfoo = 1\n", encoding="utf-8")
+
+    svc2 = ResolverService(
+        TaskService(repo), FakeImplementer(extra=tweak_config),
+        GhCli(runner=_gh_script()), git=GitCli(env=_env(tmp_path)),
+    )
+    with pytest.raises(DraftError) as ei:
+        svc2.start(ISSUE_REF, editor, keep_clone=True)
+    assert ei.value.code == "git_meta_tampered"
+
+
+def test_gitattributes_in_diff_refused(tmp_path):
+    repo, login_gh, owner, editor, viewer = _people(tmp_path)
+    svc = ResolverService(
+        TaskService(repo), FakeImplementer(write_rel=".gitattributes"),
+        GhCli(runner=_gh_script()), git=GitCli(env=_env(tmp_path)),
+    )
+    with pytest.raises(DraftError) as ei:
+        svc.start(ISSUE_REF, editor, keep_clone=True)
+    assert ei.value.code == "sensitive_diff"
+
+
+def test_diff_changed_between_preview_and_confirm(tmp_path):
+    repo, login_gh, owner, editor, viewer = _people(tmp_path)
+    git = GitCli(env=_env(tmp_path))
+    svc = ResolverService(TaskService(repo), FakeImplementer(), GhCli(runner=_gh_script()), git=git)
+    result = svc.start(ISSUE_REF, editor, keep_clone=True)
+    (Path(result.state.clone) / "src" / "fix.py").write_text("tampered\n", encoding="utf-8")
+    with pytest.raises(DraftError) as ei:
+        svc.confirm_and_publish(result, editor)
+    assert ei.value.code == "diff_changed"
+    assert not any("push" in c for c in git.calls)
+    impl2 = FakeImplementer()
+    svc2 = ResolverService(TaskService(repo), impl2, GhCli(runner=_gh_script()), git=git)
+    with pytest.raises(DraftError) as ei:
+        svc2.load_resume(result.task_id, editor)
+    assert ei.value.code == "diff_changed"
+    assert impl2.prompts == []
+    result.state.keep_clone = False
+    svc.cleanup(result.state)
+
+
 def test_privileged_agents_still_blocked():
     from forge_core.agents.registry import AgentRegistry
     from forge_core.agents.spec import AgentSpec
@@ -349,8 +450,8 @@ def test_draft_cli_resolver_subcommand(tmp_path):
     git = GitCli(env=env)
     out = _Buf()
     code = draft_run(
-        ["resolver", ISSUE_REF, "--yes"], env, transport=login_gh, provider=FakeImplementer(),
-        gh=gh, git=git, out=out, err=_Buf(), stdin=StringIO(""),
+        ["resolver", ISSUE_REF], env, transport=login_gh, provider=FakeImplementer(),
+        gh=gh, git=git, out=out, err=_Buf(), stdin=_TTY("s\n"),
     )
     assert code == 0
     assert PR_URL in out.text

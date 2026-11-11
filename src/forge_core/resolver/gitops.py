@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import os
 import subprocess
+import tempfile
 from collections.abc import Callable, Mapping
+from pathlib import Path
 
 from ..draft.envfilter import filter_env
 from ..errors import DraftError
@@ -14,10 +16,10 @@ GIT_ENV_ALLOW = frozenset({
     "APPDATA", "LOCALAPPDATA", "XDG_CONFIG_HOME",
     "SYSTEMROOT", "SYSTEMDRIVE", "WINDIR", "COMSPEC",
     "USERNAME", "USER", "OS", "LANG", "LC_ALL", "LC_CTYPE",
-    "GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0",
 })
 DEFAULT_TIMEOUT = 60
 MAX_OUTPUT = 256 * 1024
+CURSOR_EXCLUDE = ".cursor/\n.cursor/**\n"
 
 
 class GitCli:
@@ -27,20 +29,31 @@ class GitCli:
         self._runner = runner
         self.timeout = timeout
         self.calls: list[list[str]] = []
+        self._hooks = tempfile.mkdtemp(prefix="forge-git-hooks-")
+        cfg = tempfile.NamedTemporaryFile(prefix="forge-gitconfig-", suffix=".empty", delete=False)
+        cfg.write(b"")
+        cfg.close()
+        self._global_cfg = cfg.name
 
-    def _env_os(self) -> dict[str, str]:
+    def _env_os(self, *, for_push: bool = False) -> dict[str, str]:
         child = filter_env(self._env or os.environ, GIT_ENV_ALLOW)
-        child.setdefault("GIT_TERMINAL_PROMPT", "0")
+        child["GIT_TERMINAL_PROMPT"] = "0"
+        if not for_push:
+            child["GIT_CONFIG_NOSYSTEM"] = "1"
+            child["GIT_CONFIG_GLOBAL"] = self._global_cfg
         return child
 
-    def run(self, args: list[str], *, cwd: str) -> str:
-        argv = ["git", *args]
+    def _prefix(self) -> list[str]:
+        return ["-c", f"core.hooksPath={self._hooks}", "-c", "core.fsmonitor=false"]
+
+    def run(self, args: list[str], *, cwd: str, for_push: bool = False) -> str:
+        argv = ["git", *self._prefix(), *args]
         self.calls.append(argv)
         run = self._runner or subprocess.run
         try:
             proc = run(
-                argv, cwd=cwd, env=self._env_os(), capture_output=True, check=False,
-                shell=False, timeout=self.timeout,
+                argv, cwd=cwd, env=self._env_os(for_push=for_push), capture_output=True,
+                check=False, shell=False, timeout=self.timeout,
             )
         except FileNotFoundError as exc:
             raise DraftError("git_missing") from exc
@@ -63,46 +76,66 @@ class GitCli:
                 return
         self.run(["checkout", "-B", branch], cwd=cwd)
 
+    def fetch_branch(self, cwd: str, branch: str) -> None:
+        try:
+            self.run(["fetch", "origin", branch], cwd=cwd)
+        except DraftError:
+            return
+
     def status(self, cwd: str) -> str:
         return self.run(["status", "--porcelain"], cwd=cwd)
 
-    def diff(self, cwd: str) -> str:
-        staged = self.run(["diff", "--cached"], cwd=cwd)
-        work = self.run(["diff"], cwd=cwd)
-        if not staged.strip() and not work.strip() and self.status(cwd).strip():
-            self.run(["add", "-A"], cwd=cwd)
-            return self.run(["diff", "--cached"], cwd=cwd)
-        return work or staged
-
-    def diff_stat(self, cwd: str) -> str:
-        text = self.run(["diff", "--stat", "HEAD"], cwd=cwd)
-        if not text.strip():
-            text = self.run(["diff", "--stat", "--cached"], cwd=cwd)
-        return text
-
-    def log_one(self, cwd: str) -> str:
-        return self.run(["log", "-1", "--oneline"], cwd=cwd)
+    def working_tree_diff(self, cwd: str) -> str:
+        """Diff do working tree incluindo arquivos novos, sem commit. Respeita exclude."""
+        self.run(["add", "-A"], cwd=cwd)
+        diff = self.run(["diff", "--cached"], cwd=cwd)
+        self.run(["reset", "HEAD"], cwd=cwd)
+        return diff
 
     def add_all(self, cwd: str) -> None:
         self.run(["add", "-A"], cwd=cwd)
-
-    def has_head(self, cwd: str) -> bool:
-        try:
-            self.run(["rev-parse", "--verify", "HEAD"], cwd=cwd)
-            return True
-        except DraftError:
-            return False
 
     def commit(self, cwd: str, message: str) -> None:
         self.run([
             "-c", "user.email=forge@example.invalid",
             "-c", "user.name=Forge",
-            "commit", "-m", message,
+            "commit", "--no-verify", "-m", message,
         ], cwd=cwd)
 
     def push(self, cwd: str, branch: str) -> None:
-        self.run(["push", "-u", "origin", branch], cwd=cwd)
+        self.run(
+            ["push", "--no-verify", "origin", f"HEAD:refs/heads/{branch}"],
+            cwd=cwd, for_push=True,
+        )
 
     def ls_files(self, cwd: str) -> list[str]:
         text = self.run(["ls-files"], cwd=cwd)
         return [ln.strip() for ln in text.splitlines() if ln.strip()]
+
+    def remote_url(self, cwd: str, name: str = "origin") -> str:
+        return self.run(["remote", "get-url", name], cwd=cwd).strip()
+
+    def remote_remove(self, cwd: str, name: str = "origin") -> None:
+        self.run(["remote", "remove", name], cwd=cwd)
+
+    def remote_add(self, cwd: str, url: str, name: str = "origin") -> None:
+        try:
+            self.run(["remote", "remove", name], cwd=cwd)
+        except DraftError:
+            pass
+        self.run(["remote", "add", name, url], cwd=cwd)
+
+    def remotes(self, cwd: str) -> str:
+        try:
+            return self.run(["remote"], cwd=cwd).strip()
+        except DraftError:
+            return ""
+
+
+def exclude_cursor_cli(clone: Path) -> None:
+    info = clone / ".git" / "info"
+    info.mkdir(parents=True, exist_ok=True)
+    path = info / "exclude"
+    text = path.read_text(encoding="utf-8") if path.is_file() else ""
+    if ".cursor/" not in text:
+        path.write_text(text.rstrip() + "\n" + CURSOR_EXCLUDE, encoding="utf-8")
