@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.20.0](https://github.com/danielxdrj/forge/compare/v0.19.0...v0.20.0) (2026-11-11)
+
+
+### Features
+
+* **web:** forge_frontend com tela de criação de tarefas (ADR-017) ([#33](https://github.com/danielxdrj/forge/issues/33)) ([d6e6d7f](https://github.com/danielxdrj/forge/commit/d6e6d7fc8587491ea14e570c13cc8c775b27e26c))
+
 ## [0.19.0](https://github.com/danielxdrj/forge/compare/v0.18.0...v0.19.0) (2026-11-11)
 
 
