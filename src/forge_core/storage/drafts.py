@@ -1,4 +1,4 @@
-"""Helpers de persistência de rascunhos e vínculos de tarefa (ADR-017). Sem UI nesta entrega."""
+"""Helpers de persistência de rascunhos e vínculos de tarefa (ADR-017)."""
 from __future__ import annotations
 
 import uuid
@@ -108,6 +108,51 @@ def list_drafts_for_task(repo: SqlRepository, task_id: str) -> list[DraftRecord]
     return [_row_draft(r) for r in rows]
 
 
+def latest_draft_for_task(repo: SqlRepository, task_id: str) -> DraftRecord | None:
+    rows = list_drafts_for_task(repo, task_id)
+    return rows[-1] if rows else None
+
+
+def list_all_drafts(repo: SqlRepository) -> list[DraftRecord]:
+    rows = repo.fetch(
+        "SELECT id, task_id, repo, body_md, tipo, prioridade, size, preview_hash, status, created_by, "
+        "created_at, updated_at FROM drafts ORDER BY created_at, id",
+    )
+    return [_row_draft(r) for r in rows]
+
+
+def update_draft(
+    repo: SqlRepository,
+    draft_id: str,
+    *,
+    tipo: str | None = None,
+    prioridade: str | None = None,
+    size: str | None = None,
+    preview_hash: str | None = None,
+    status: str | None = None,
+    now: str | None = None,
+) -> DraftRecord:
+    rec = get_draft(repo, draft_id)
+    if status is not None and status not in DRAFT_STATUSES:
+        raise DraftStorageError("invalid_draft_status")
+    ts = now or _now()
+    next_tipo = rec.tipo if tipo is None else tipo
+    next_pri = rec.prioridade if prioridade is None else prioridade
+    next_size = rec.size if size is None else size
+    next_hash = rec.preview_hash if preview_hash is None else preview_hash
+    next_status = rec.status if status is None else status
+    repo._run(
+        [
+            (
+                "UPDATE drafts SET tipo = ?, prioridade = ?, size = ?, preview_hash = ?, status = ?, "
+                "updated_at = ? WHERE id = ?",
+                (next_tipo, next_pri, next_size, next_hash, next_status, ts, draft_id),
+            )
+        ]
+    )
+    return get_draft(repo, draft_id)
+
+
 def insert_task_link(
     repo: SqlRepository,
     *,
@@ -153,3 +198,35 @@ def list_task_links(repo: SqlRepository, task_id: str) -> list[TaskLinkRecord]:
         (task_id,),
     )
     return [_row_link(r) for r in rows]
+
+
+def link_of_kind(links: list[TaskLinkRecord], kind: str) -> TaskLinkRecord | None:
+    for link in links:
+        if link.kind == kind:
+            return link
+    return None
+
+
+def ensure_task_link(
+    repo: SqlRepository,
+    *,
+    task_id: str,
+    kind: str,
+    repo_name: str,
+    url: str,
+    number: int | None = None,
+    board_item_id: str | None = None,
+) -> TaskLinkRecord:
+    """INSERT se ainda não houver o mesmo (task_id, kind, url). Sem UPDATE (papel escritor)."""
+    for existing in list_task_links(repo, task_id):
+        if existing.kind == kind and existing.url == url:
+            return existing
+    return insert_task_link(
+        repo,
+        task_id=task_id,
+        kind=kind,
+        repo_name=repo_name,
+        url=url,
+        number=number,
+        board_item_id=board_item_id,
+    )

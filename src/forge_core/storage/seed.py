@@ -1,7 +1,7 @@
 """Semente idempotente dos repositórios permitidos da org ferreiraeborzone (ADR-017).
 
 `default_branch` é o placeholder `main`: o Core não consulta o GitHub para conferir a branch real.
-O projeto cadastro chama-se FORGE. PR B usa `list_active_allowed_repos` para a tela de tarefas.
+O projeto cadastro chama-se FORGE. A tela de tarefas usa `list_active_allowed_repos` (só a allowlist).
 """
 from __future__ import annotations
 
@@ -67,10 +67,14 @@ def seed_allowed_repos(repo: SqlRepository, now: str | None = None) -> str:
 
 
 def list_active_allowed_repos(repo: SqlRepository) -> list[RepositoryInfo]:
-    """Repositórios ativos cujo projeto também está ativo. Sem chamada ao GitHub."""
+    """Repositórios ativos da allowlist (github / ferreiraeborzone / ALLOWED_REPOS). Sem chamada ao GitHub."""
+    placeholders = ",".join("?" for _ in ALLOWED_REPOS)
     rows = repo.fetch(
         f"SELECT {_RCOLS} FROM repositories r JOIN projects p ON p.id = r.project_id "
-        "WHERE r.active = 1 AND p.active = 1 ORDER BY r.owner, r.repo_name, r.id"
+        "WHERE r.active = 1 AND p.active = 1 AND r.provider = ? AND lower(r.owner) = lower(?) "
+        f"AND lower(r.repo_name) IN ({placeholders}) "
+        "ORDER BY r.owner, r.repo_name, r.id",
+        (PROVIDER, ORG, *[name.lower() for name in ALLOWED_REPOS]),
     )
     out = []
     for r in rows:

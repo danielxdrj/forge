@@ -60,4 +60,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PATH=/usr/local/bin:/home/forge/.local/bin:/usr/sbin:/usr/bin:/bin
 
 EXPOSE 8091
+# Processo padrão: uid 1000. O entrypoint ainda tem o ramo root+chown para volume antigo
+# se alguém subir com -u 0. Volume novo forge_cli_home herda o dono de /home/forge.
+USER forge
 ENTRYPOINT ["/entrypoint.sh"]

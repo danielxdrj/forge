@@ -128,6 +128,45 @@ def test_csrf_rejection_on_post(tmp_path):
     assert r.json()["error"] == "csrf"
 
 
+def test_first_request_csrf_token_matches_set_cookie_and_post_passes(tmp_path):
+    client, _repo = _client(tmp_path, Scripted())
+    r = client.get("/api/health", headers=HOST)
+    cookies = r.headers.get_list("set-cookie") if hasattr(r.headers, "get_list") else [r.headers.get("set-cookie")]
+    csrf_headers = [c for c in cookies if c and "forge_csrf=" in c.lower()]
+    tokens = set()
+    for header in csrf_headers:
+        piece = [p for p in header.split(";") if p.strip().lower().startswith("forge_csrf=")][0]
+        tokens.add(piece.split("=", 1)[1].strip())
+    assert len(tokens) == 1
+    token = tokens.pop()
+    assert client.cookies.get(CSRF_COOKIE) == token
+    start = client.post("/api/auth/login/start", headers={**HOST, CSRF_HEADER: token})
+    assert start.status_code == 200
+    assert start.json()["user_code"] == "ABCD-1234"
+
+
+def test_effective_host_trusts_only_listed_proxy(monkeypatch):
+    from forge_core.web.security import effective_host, peer_is_trusted
+
+    assert effective_host(
+        "backend:8091", "127.0.0.1:8090", "172.18.0.5",
+        trust_forwarded=True, trusted_proxies=("172.18.0.5",),
+    ) == "127.0.0.1:8090"
+    assert effective_host(
+        "backend:8091", "evil.example", "1.2.3.4",
+        trust_forwarded=True, trusted_proxies=("172.18.0.5",),
+    ) == "backend:8091"
+    monkeypatch.setattr(
+        "forge_core.web.security.socket.getaddrinfo",
+        lambda host, *a, **k: [(0, 0, 0, "", ("172.18.0.9", 0))],
+    )
+    assert peer_is_trusted("172.18.0.9", ("forge_frontend",))
+    assert effective_host(
+        "backend:8091", "127.0.0.1:8090", "172.18.0.9",
+        trust_forwarded=True, trusted_proxies=("forge_frontend",),
+    ) == "127.0.0.1:8090"
+
+
 def test_cookie_not_secure_by_default_and_no_cors(tmp_path):
     client, _repo = _client(tmp_path, Scripted())
     r = client.get("/api/health", headers={**HOST, "Origin": "https://evil.example"})
@@ -151,6 +190,15 @@ def test_logout_revokes_and_owner_is_not_editor(tmp_path):
     csrf = client.cookies.get(CSRF_COOKIE) or _csrf(client)
     out = client.post("/api/auth/logout", headers={**HOST, CSRF_HEADER: csrf})
     assert out.status_code == 200
+    set_cookie = "\n".join(
+        out.headers.get_list("set-cookie") if hasattr(out.headers, "get_list") else [out.headers.get("set-cookie", "")]
+    ).lower()
+    session_bits = [line for line in set_cookie.split("\n") if "forge_session=" in line]
+    assert session_bits
+    blob = session_bits[0]
+    assert "path=/" in blob
+    assert "samesite=strict" in blob
+    assert "httponly" in blob
     assert client.get("/api/auth/whoami", headers=HOST).status_code == 401
     actions = [a.action for a in repo.list_audit()]
     assert "auth.web_login_ok" in actions

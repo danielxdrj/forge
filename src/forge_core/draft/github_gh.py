@@ -295,6 +295,23 @@ class GhCli:
         self._run(["issue", "develop", str(number), "--repo", repo, "--name", name])
         return name
 
+    def find_pr(self, repo: str, head: str) -> str | None:
+        """Procura PR existente pela branch. Somente leitura; não cria PR."""
+        if not (repo or "").strip() or not (head or "").strip():
+            return None
+        try:
+            text = self._run([
+                "pr", "list", "--repo", repo, "--head", head, "--state", "all",
+                "--json", "url,number", "--limit", "1",
+            ])
+            data = _json(text)
+        except DraftError:
+            return None
+        if not isinstance(data, list) or not data:
+            return None
+        url = str((data[0] or {}).get("url") or "").strip()
+        return url or None
+
 
 def _json(text: str):
     try:

@@ -1,9 +1,9 @@
 # Painel local do Forge Core (ADR-017). Um comando: docker compose -f docker-compose.forge.yml up -d --build
 # Grupo no Docker Desktop: `forge`.
 #
-# Serviços deste PR (A): forge_postgres, forge_backend.
-# forge_frontend (PR B, NÃO neste arquivo): nginx em 127.0.0.1:8090, UI estática e
-# reverse-proxy de /api/ para forge_backend, origem única no navegador.
+# Serviços: forge_postgres, forge_backend, forge_frontend.
+# Origem do navegador: http://127.0.0.1:8090 (nginx serve a UI e faz proxy de /api/).
+# O backend NÃO publica 8091 no host: é só o hop interno na rede compose.
 #
 # Conflito de porta: o padrão 127.0.0.1:5433 coincide com docker-compose.dev.yml (projeto forge_dev,
 # ADR-004). Os dois NÃO podem estar no ar na 5433. Pare o compose de dev ou use FORGE_PG_HOST_PORT.
@@ -12,7 +12,7 @@ name: forge
 services:
   forge_postgres:
     container_name: forge_postgres
-    image: postgres:16-bookworm
+    image: postgres:16-bookworm@sha256:5264710be20f409750ac6dc4e5706dcef929c87e241605463f0f9aefa932a8d9
     environment:
       POSTGRES_USER: forge_owner
       POSTGRES_DB: forge
@@ -55,6 +55,8 @@ services:
       FORGE_PG_READONLY_USER: forge_readonly
       FORGE_SECRET_OWNER_PASSWORD_FILE: /run/secrets/forge_pg_owner_password
       FORGE_SECRET_APP_PASSWORD_FILE: /run/secrets/forge_pg_app_password
+      FORGE_TRUST_FORWARDED: "true"
+      FORGE_TRUSTED_PROXIES: forge_frontend
       HOME: /home/forge
       XDG_CONFIG_HOME: /home/forge/.config
       XDG_DATA_HOME: /home/forge/.local/share
@@ -63,9 +65,24 @@ services:
       - forge_pg_app_password
     volumes:
       - forge_cli_home:/home/forge
-    # Publicação loopback só para testar o login ANTES do frontend (PR B). Não é a origem final.
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+
+  forge_frontend:
+    container_name: forge_frontend
+    build:
+      context: .
+      dockerfile: deploy/frontend/Dockerfile
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /var/cache/nginx
+      - /var/run
+    depends_on:
+      - forge_backend
     ports:
-      - "127.0.0.1:${FORGE_BACKEND_HOST_PORT:-8091}:8091"
+      - "127.0.0.1:${FORGE_FRONTEND_HOST_PORT:-8090}:8080"
     security_opt:
       - no-new-privileges:true
     restart: unless-stopped

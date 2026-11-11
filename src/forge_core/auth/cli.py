@@ -16,9 +16,24 @@ from collections.abc import Callable, Mapping
 
 from ..config import load_settings
 from ..errors import AuthenticationError, AuthorizationError, ConfigError, ForgeError
+from ..storage.secrets import SecretMissingError, apply_database_urls_from_secret_files
 from ..storage.sql import open_repository
 from .github import DeviceFlow, DeviceFlowError, Transport, UrllibTransport
 from .store import AuthStore, Principal
+
+
+def _env_with_database_urls(env: Mapping[str, str]) -> Mapping[str, str]:
+    """No container, monta as URLs a partir dos arquivos de segredo. Fora, exige FORGE_DATABASE_URL.
+
+    Não imprime URL nem senha. Falha fechado se um arquivo de segredo estiver configurado e faltar.
+    """
+    owner = (env.get("FORGE_SECRET_OWNER_PASSWORD_FILE") or "").strip()
+    app = (env.get("FORGE_SECRET_APP_PASSWORD_FILE") or "").strip()
+    if not owner and not app:
+        return env
+    mutable = dict(env)
+    apply_database_urls_from_secret_files(mutable)
+    return mutable
 
 
 def _announce(flow: DeviceFlow, out) -> str:
@@ -65,12 +80,17 @@ def run(argv: list[str], env: Mapping[str, str] | None = None, transport: Transp
     args = parser.parse_args(argv)
 
     try:
+        env = _env_with_database_urls(env)
         settings = load_settings(env)
         if not settings.database_url:
             raise ConfigError("FORGE_DATABASE_URL é obrigatória")
         if not settings.github_client_id:
             raise ConfigError("FORGE_GITHUB_CLIENT_ID é obrigatória para entrar")
-        repo = open_repository(settings.database_url, settings.database_migration_url)
+        try:
+            repo = open_repository(settings.database_url, settings.database_migration_url)
+        except Exception:
+            print("forge-auth: erro (database)", file=err)
+            return 1
         flow = DeviceFlow(settings.github_client_id, transport or UrllibTransport())
         store = AuthStore(repo, verify=flow.identity)
 
@@ -93,6 +113,8 @@ def run(argv: list[str], env: Mapping[str, str] | None = None, transport: Transp
         return _with_login(store, flow, out, operation)
     except DeviceFlowError as exc:
         print(f"forge-auth: falha no login ({exc.code})", file=err)
+    except SecretMissingError as exc:
+        print(f"forge-auth: {exc}", file=err)
     except (AuthenticationError, AuthorizationError, ConfigError) as exc:
         print(f"forge-auth: {exc}", file=err)
     except ForgeError as exc:

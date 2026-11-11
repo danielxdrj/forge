@@ -42,6 +42,15 @@ def test_readonly_selects_tasks_but_not_token_hash_or_insert(pg_env):
         with pytest.raises(psycopg.errors.InsufficientPrivilege):
             conn.execute("INSERT INTO tasks (id, title, status, created_at, updated_at) VALUES ('x', 'y', 'pending', 't', 't')")
         conn.rollback()
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            conn.execute("UPDATE tasks SET title = 'x'")
+        conn.rollback()
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            conn.execute("DELETE FROM tasks")
+        conn.rollback()
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            conn.execute("CREATE TABLE forge_ro_probe (id int)")
+        conn.rollback()
     finally:
         conn.close()
         owner.execute(f"DROP OWNED BY {role}")

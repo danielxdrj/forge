@@ -25,10 +25,10 @@ src/forge_core/
     migrations/     SQL numerado por dialeto (sqlite/, postgres/)
     drafts.py       helpers de rascunho e task_links (ADR-017; sem UI de tarefas)
     seed.py         semente idempotente dos repos permitidos
-  web/            painel FastAPI (extra `[web]`, ADR-017): login device flow, whoami, logout
+  web/            painel FastAPI (extra `[web]`, ADR-017): API JSON de login e tarefas; UI no forge_frontend
   extension/      interfaces: Integration, Agent, contrato de agente (reexporta agents/spec), JobQueue (Job, JobStatus) (implementações: FRG-40 e outras)
 tests/core/  conftest (Postgres efêmero), test_projects, test_agents, test_orchestrator, test_task_rules, test_task_service, test_queue, test_core, test_start_automation, test_redact, test_storage
-docker-compose.forge.yml  painel local (Postgres 16 + backend; ADR-017)
+docker-compose.forge.yml  painel local (Postgres 16 + backend JSON + frontend nginx; ADR-017)
 docker-compose.dev.yml  Postgres de dev/teste (127.0.0.1:5433; conflita com o padrão do compose.forge)
 ```
 
@@ -45,6 +45,7 @@ docker-compose.dev.yml  Postgres de dev/teste (127.0.0.1:5433; conflita com o pa
 | `FORGE_PG_OWNER_PASSWORD` / `FORGE_PG_APP_PASSWORD` / `FORGE_PG_READONLY_PASSWORD` | compose.forge (secrets) | senhas dos três papéis; nunca no Git |
 | `FORGE_GITHUB_CLIENT_ID` | para login | client id público do OAuth App (device flow) |
 | `FORGE_SESSION_TTL_SECONDS` / `FORGE_COOKIE_SECURE` / `FORGE_WEB_HOSTS` | painel web | prazo da sessão (8 h), flag Secure, allowlist de Host |
+| `FORGE_TRUST_FORWARDED` / `FORGE_TRUSTED_PROXIES` | painel web | `X-Forwarded-*` só do proxy listado (compose: `forge_frontend`) |
 | `FORGE_CURSOR_AGENT` / `FORGE_CURSOR_MODEL` / `FORGE_GH_BIN` | não | caminhos/opções do rascunho e do resolver; `FORGE_CURSOR_AGENT` é opcional (PATH/`agent.cmd`) |
 | `FORGE_RESOLVER_ATTEMPTS` | não | teto de tentativas do motor implementador (1–3, padrão 1) |
 
