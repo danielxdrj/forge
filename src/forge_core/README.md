@@ -16,6 +16,7 @@ src/forge_core/
   projects/       projetos e repositórios gerenciáveis (FRG-5; veja projects/README.md)
   tasks/          gerenciamento de tarefas (FRG-15): model, rules (puras), service (TaskService)
   draft/          rascunho de issue (Cursor CLI + gh local; ADR-015)
+  resolver/       implementador local no clone temporário (ADR-016); push/PR só após s/N
   queue/          fila de jobs persistida (SqlJobQueue)
   storage/        persistência (FRG-42)
     repository.py   interface Repository e entidades
@@ -38,7 +39,8 @@ docker-compose.dev.yml  Postgres de dev/teste (127.0.0.1:5433)
 | `FORGE_AGENTS_DISABLED` | não | agentes desativados, separados por vírgula (ex.: `echo`) |
 | `FORGE_PG_USER`/`FORGE_PG_PASSWORD`/`FORGE_PG_DB` | só para o compose de dev | credenciais do Postgres local; use valores fora do Git |
 | `FORGE_GITHUB_CLIENT_ID` | para login | client id público do OAuth App (device flow) |
-| `FORGE_CURSOR_AGENT` / `FORGE_CURSOR_MODEL` / `FORGE_GH_BIN` | não | caminhos/opções do rascunho; `FORGE_CURSOR_AGENT` é opcional (PATH/`agent.cmd`) |
+| `FORGE_CURSOR_AGENT` / `FORGE_CURSOR_MODEL` / `FORGE_GH_BIN` | não | caminhos/opções do rascunho e do resolver; `FORGE_CURSOR_AGENT` é opcional (PATH/`agent.cmd`) |
+| `FORGE_RESOLVER_ATTEMPTS` | não | teto de tentativas do motor implementador (1–3, padrão 1) |
 
 Com `FORGE_AUTOMATION_ENABLED=false`, `start()` levanta `AutomationDisabledError` e `main()` sai com código 2. Ausente = ligado.
 
@@ -152,3 +154,5 @@ Limitações: a fila é por polling (sem push), sem ordem garantida além de `ru
 
 ## Isolamento de agentes e reprovisionamento (FRG-6, ADR-013)
 O Orchestrator só usa runtime isolado (Docker). Sem Docker, o despacho falha fechado. O reprovisionamento de grants em bancos existentes é manual: `docs/operacao/reprovisionamento-postgres.md`.
+
+O comando `resolver` (ADR-016) **não** passa pelo Orchestrator: é CLI local, escrita só no clone temporário, push/PR pelo Forge após `s`/`N`. Agentes privilegiados do registro continuam bloqueados.

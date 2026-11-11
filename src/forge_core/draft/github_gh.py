@@ -180,6 +180,50 @@ class GhCli:
         except (KeyError, TypeError, ValueError) as exc:
             raise DraftError("gh_error") from exc
 
+    def view_issue_detail(self, number: int, repo: str) -> dict:
+        text = self._run([
+            "issue", "view", str(number), "--repo", repo,
+            "--json", "number,url,title,body,comments,state",
+        ])
+        data = _json(text)
+        if not isinstance(data, dict) or "number" not in data:
+            raise DraftError("gh_error")
+        return data
+
+    def clone_repo(self, repo: str, dest: str) -> None:
+        self._run(["repo", "clone", repo, dest])
+
+    def list_issue_branches(self, repo: str, number: int) -> list[str]:
+        text = self._run(["issue", "develop", str(number), "--repo", repo, "--list"])
+        names = []
+        for line in text.splitlines():
+            line = line.strip()
+            if not line or line.lower().startswith("showing"):
+                continue
+            token = line.split()[0].strip()
+            if token.startswith("http") or "#" in token:
+                continue
+            if token and token not in names:
+                names.append(token)
+        return names
+
+    def create_draft_pr(self, repo: str, title: str, body: str, head: str) -> str:
+        args = [
+            "pr", "create", "--repo", repo, "--title", title, "--body", body,
+            "--head", head, "--draft",
+        ]
+        if any(f in args for f in ("merge", "--merge", "--squash", "--rebase")):
+            raise DraftError("unsafe_flags")
+        text = self._run(args)
+        url = ""
+        for token in text.split():
+            if "github.com" in token and "/pull/" in token:
+                url = token.strip()
+                break
+        if not url:
+            raise DraftError("gh_error")
+        return url
+
     def add_to_project(self, url: str) -> str:
         text = self._run([
             "project", "item-add", str(PROJECT_NUMBER), "--owner", PROJECT_OWNER,

@@ -2,7 +2,7 @@
 
 - **Status:** Aprovado (08/11/2026), por decisão do gestor de projetos (aprovação de container por execução com o perfil restrito abaixo)
 - **Data:** 2026-11-08
-- **Revisar quando:** for aprovado um agente real (FRG-43+), houver autenticação de aprovadores (ADR-011), ou o kernel compartilhado virar requisito de isolamento mais forte
+- **Revisar quando:** for aprovado um agente real no orquestrador (FRG-43+), houver autenticação de aprovadores (ADR-011), ou o kernel compartilhado virar requisito de isolamento mais forte. O CLI `resolver` (ADR-016) é uma exceção **fora** deste runtime: não altera o bloqueio de privilegiados aqui.
 
 ## Contexto
 A FRG-24 (ADR-011) executava agentes em thread. A FRG-6 exige execução isolada: filesystem, rede, credenciais e recursos limitados. A aprovação do gestor cobre um container por execução, com o perfil restrito abaixo, e apenas para agentes `read` de teste. Agentes reais e privilegiados continuam bloqueados.
