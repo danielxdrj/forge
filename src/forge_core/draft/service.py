@@ -26,6 +26,8 @@ from .template import (
 
 REMOTE_START = "\n<!-- forge-remote "
 REMOTE_END = " -->"
+DRAFT_START = "\n<!-- forge-draft "
+DRAFT_END = " -->"
 
 
 @dataclass
@@ -36,10 +38,53 @@ class DraftResult:
     path: str
     remote: RemoteState
     published: bool
+    meta: dict | None = None
+    branch_prefix: str = ""
 
 
 def sidecar_path(output: Path) -> Path:
     return output.with_name(output.name + ".forge-remote.json")
+
+
+def draft_sidecar_path(output: Path) -> Path:
+    return output.with_name(output.name + ".forge-draft.json")
+
+
+def write_draft_sidecar(output: Path, data: dict) -> None:
+    draft_sidecar_path(output).write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+
+
+def read_draft_sidecar(output: Path) -> dict:
+    path = draft_sidecar_path(output)
+    if not path.is_file():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+
+def parse_draft_params(context: str) -> dict:
+    if DRAFT_START not in context:
+        return {}
+    raw = context.split(DRAFT_START, 1)[1].split(DRAFT_END, 1)[0]
+    try:
+        data = json.loads(raw)
+        return data if isinstance(data, dict) else {}
+    except (json.JSONDecodeError, TypeError):
+        return {}
+
+
+def attach_draft(context: str, params: dict) -> str:
+    remote = ""
+    base = context
+    if REMOTE_START in base:
+        base, rest = base.split(REMOTE_START, 1)
+        remote = REMOTE_START + rest
+    base = base.split(DRAFT_START, 1)[0].rstrip()
+    payload = json.dumps(params, ensure_ascii=False)
+    return f"{base}{DRAFT_START}{payload}{DRAFT_END}\n{remote}"
 
 
 def parse_remote(context: str) -> RemoteState:
@@ -152,20 +197,53 @@ class DraftService:
             assignee_kind="person",
             assignee_id=ASSIGNEE,
         )
-        return DraftResult(task.id, data["title"], body, str(output), RemoteState(repo=repo), False)
+        params = {
+            "task_id": task.id, "repo": repo, "output": str(output),
+            "sprint": meta.get("sprint") or "", "tipo": meta.get("tipo") or "",
+            "prioridade": meta.get("prioridade") or "", "size": meta.get("size") or "",
+            "escopo": meta.get("escopo") or "", "branch_prefix": branch_prefix or "",
+        }
+        write_draft_sidecar(output, params)
+        self.tasks.update_task(
+            task.id, principal, task.version, context=attach_draft(context, params),
+        )
+        return DraftResult(
+            task.id, data["title"], body, str(output), RemoteState(repo=repo), False,
+            meta=dict(params), branch_prefix=branch_prefix,
+        )
 
-    def load_resume(self, task_id: str, output: Path, principal: Principal, repo: str) -> DraftResult:
+    def load_resume(self, task_id: str, output: Path | None, principal: Principal,
+                    repo: str = "") -> DraftResult:
         self.tasks._auth.require(principal, "editor")
-        repo = validate_repo(repo)
         task = self.tasks.get_task(task_id)
         if task is None:
             raise DraftError("task_missing")
+        saved = parse_draft_params(task.context)
+        if output is None:
+            raw = saved.get("output") or ""
+            output = Path(raw) if raw else Path("issue-draft.md")
+        sidecar = read_draft_sidecar(output)
+        saved = {**sidecar, **saved}
         if not output.is_file():
             raise DraftError("file_missing")
         body = output.read_text(encoding="utf-8")
         remote = merge_remote(parse_remote(task.context), read_checkpoint(output))
-        remote.repo = remote.repo or repo
-        return DraftResult(task.id, task.title, body, str(output), remote, remote.phase == "done")
+        chosen_repo = repo or remote.repo or saved.get("repo") or ""
+        if not chosen_repo:
+            raise DraftError("invalid_repo")
+        chosen_repo = validate_repo(chosen_repo)
+        if repo and remote.issue and remote.repo and validate_repo(remote.repo) != chosen_repo:
+            raise DraftError("repo_mismatch")
+        remote.repo = remote.repo or chosen_repo
+        meta = {
+            "sprint": saved.get("sprint") or "", "tipo": saved.get("tipo") or "",
+            "prioridade": saved.get("prioridade") or "", "size": saved.get("size") or "",
+            "escopo": saved.get("escopo") or "",
+        }
+        return DraftResult(
+            task.id, task.title, body, str(output), remote, remote.phase == "done",
+            meta=meta, branch_prefix=saved.get("branch_prefix") or "",
+        )
 
     def preview_text(self, result: DraftResult, repo: str, meta: dict, branch_prefix: str) -> str:
         pending = required_pending(parse_model_json_from_body(result.body), meta)
@@ -387,5 +465,11 @@ def ask_confirm(text: str, *, yes: bool, stdin, out) -> bool:
         return True
     if stdin is None or not hasattr(stdin, "isatty") or not stdin.isatty():
         raise DraftError("confirmation_required")
-    line = stdin.readline()
-    return line.strip().lower() in {"s", "sim", "y", "yes"}
+    answer = stdin.readline().strip().lower()
+    if answer in {"s", "sim"}:
+        return True
+    if answer in {"", "n", "nao", "não"}:
+        print("Cancelado.", file=out)
+        return False
+    print("Resposta inválida: responda s ou N. Cancelado.", file=out)
+    return False

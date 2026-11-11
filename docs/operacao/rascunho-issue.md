@@ -85,14 +85,19 @@ Get-Content .\contexto.txt -Raw | python -m forge_core.draft draft --arquivo - -
 forge-tasks draft --contexto "..." --repo ferreiraeborzone/<repo> --output .\rascunho.md --tipo Bug --prioridade Alta --size 3
 ```
 
-A CLI mostra a issue, destino, board e pergunta `s/N` (default N). Sem TTY e sem `--yes`, não publica. Anote o `tarefa <uuid>` impresso.
+A CLI mostra a issue, destino, board e pergunta `s/N` (default N). Confirmação: `s` ou `sim` (trim, sem diferenciar maiúsculas). Vazio, `n`, `nao` e `não` cancelam com `Cancelado.`; qualquer outra resposta (ex.: `ss`) cancela com `Resposta inválida: responda s ou N. Cancelado.`. Sem TTY e sem `--yes`, não publica. Anote o `tarefa <uuid>` impresso.
+
+Se o markdown de `--output` já existir, o comando recusa `file_exists` **antes** de login, rede ou LLM. Quando houver sidecar `*.forge-draft.json`, a mensagem inclui `use --retomar <uuid>`.
 
 `--yes` **não** ignora `[PENDENTE]` (em qualquer campo obrigatório), papel `editor` nem escopo `project`.
 
 ## Retomar após falha parcial (mesmo markdown, sem novo LLM)
 
+`--retomar <uuid>` não exige `--repo`. Repo, tipo, prioridade, size, output, sprint, escopo e prefixo de branch vêm do rascunho (`*.forge-draft.json` e o comentário na tarefa). Flags passadas de novo só sobrescrevem o que você informar. Se a issue já tiver sido criada, `--repo` diferente do checkpoint é recusado (`repo_mismatch`) para não misturar repositórios.
+
 ```powershell
-python -m forge_core.draft draft --retomar <uuid-da-tarefa> --repo ferreiraeborzone/<repo> --output .\rascunho.md --tipo Bug --prioridade Alta --size 3 --yes
+python -m forge_core.draft draft --retomar <uuid-da-tarefa> --yes
+python -m forge_core.draft draft --retomar <uuid-da-tarefa> --tipo Bug --yes
 ```
 
 Não apague a issue no GitHub para “desfazer”. Se o remoto não bater com o checkpoint (`rascunho.md.forge-remote.json`), o comando falha sem criar outra issue.

@@ -32,7 +32,7 @@ from forge_core.draft.envfilter import (
     filter_env,
 )
 from forge_core.draft.github_gh import GhCli, match_option, names_match
-from forge_core.draft.service import DraftService, parse_remote, sidecar_path
+from forge_core.draft.service import DraftService, ask_confirm, parse_remote, sidecar_path
 from forge_core.draft.template import (
     ASSIGNEE, PENDING, parse_model_json, render, required_pending, validate_repo,
 )
@@ -686,6 +686,113 @@ def test_resume_after_partial_does_not_duplicate(tmp_path):
     assert llm2.prompts == []
     assert len([c for c in gh2.calls if c[1:3] == ["issue", "create"]]) == 0
     assert "Issue 9" in out.text
+
+
+class _LoginSpy(FakeGitHub):
+    def __init__(self):
+        super().__init__()
+        self.device_starts = 0
+
+    def post_form(self, url, data):
+        if str(url).endswith("/device/code"):
+            self.device_starts += 1
+        return super().post_form(url, data)
+
+
+class _TTY(StringIO):
+    def isatty(self):
+        return True
+
+
+def test_resume_without_repo_restores_saved_params(tmp_path):
+    repo, login_gh, owner, editor, viewer = _people(tmp_path)
+    env = _env(tmp_path)
+    login_gh.select("ana", 1001)
+    out_path = tmp_path / "retomar.md"
+    svc = DraftService(TaskService(repo), FakeLLM(), GhCli(runner=_gh_script(), today=date(2026, 11, 8)),
+                       today=date(2026, 11, 8))
+    generated = svc.generate("falha", "acme/app", editor, out_path, META)
+    login_gh.select("ana", 1001)
+    gh = GhCli(runner=_gh_script(), today=date(2026, 11, 8))
+    out = _Buf()
+    code = draft_run(
+        ["draft", "--retomar", generated.task_id, "--yes"],
+        env, transport=login_gh, provider=FakeLLM(), gh=gh, out=out, err=_Buf(), stdin=StringIO(""),
+    )
+    assert code == 0
+    assert "Issue 9" in out.text
+    assert any(c[1:3] == ["issue", "create"] for c in gh.calls)
+
+
+def test_resume_repo_override_refused_when_issue_exists(tmp_path):
+    repo, login_gh, owner, editor, viewer = _people(tmp_path)
+    env = _env(tmp_path)
+    login_gh.select("ana", 1001)
+    boom = {"fail_add": True}
+    out_path = tmp_path / "mix.md"
+    code = draft_run(
+        ["draft", "--contexto", "falha", "--repo", "acme/app", "--output", str(out_path),
+         "--tipo", "Bug", "--prioridade", "Alta", "--size", "3", "--yes"],
+        env, transport=login_gh, provider=FakeLLM(), gh=GhCli(runner=_gh_script(boom), today=date(2026, 11, 8)),
+        out=_Buf(), err=_Buf(), stdin=StringIO(""),
+    )
+    assert code == 1
+    tasks = TaskService(repo).list_tasks()
+    login_gh.select("ana", 1001)
+    err = _Buf()
+    code = draft_run(
+        ["draft", "--retomar", tasks[0].id, "--repo", "other/app", "--output", str(out_path), "--yes"],
+        env, transport=login_gh, provider=FakeLLM(),
+        gh=GhCli(runner=_gh_script(boom), today=date(2026, 11, 8)),
+        out=_Buf(), err=err, stdin=StringIO(""),
+    )
+    assert code == 1
+    assert "repo_mismatch" in err.text
+
+
+def test_file_exists_before_login_suggests_retomar(tmp_path):
+    repo, _login_gh, owner, editor, viewer = _people(tmp_path)
+    env = _env(tmp_path)
+    out_path = tmp_path / "existe.md"
+    generated = DraftService(TaskService(repo), FakeLLM()).generate("falha", "acme/app", editor, out_path, META)
+    spy = _LoginSpy()
+    llm = FakeLLM()
+    err = _Buf()
+    code = draft_run(
+        ["draft", "--contexto", "de novo", "--repo", "acme/app", "--output", str(out_path),
+         "--tipo", "Bug", "--prioridade", "Alta", "--size", "3"],
+        env, transport=spy, provider=llm, gh=GhCli(runner=_gh_script(), today=date(2026, 11, 8)),
+        out=_Buf(), err=err, stdin=StringIO(""),
+    )
+    assert code == 1
+    assert spy.device_starts == 0
+    assert llm.prompts == []
+    assert "file_exists" in err.text
+    assert "--retomar" in err.text
+    assert generated.task_id in err.text
+
+
+def test_ask_confirm_s_sim_and_invalid_ss(tmp_path):
+    def _ask(raw):
+        out = _Buf()
+        ok = ask_confirm("prev", yes=False, stdin=_TTY(raw), out=out)
+        return ok, out.text
+
+    assert _ask("s\n")[0] is True
+    assert _ask(" SIM \n")[0] is True
+    ok, text = _ask("ss\n")
+    assert ok is False
+    assert "Resposta inválida: responda s ou N. Cancelado." in text
+    ok, text = _ask("\n")
+    assert ok is False and "Cancelado." in text and "inválida" not in text
+    ok, text = _ask("n\n")
+    assert ok is False and "Resposta inválida" not in text
+    ok, text = _ask("nao\n")
+    assert ok is False and "Resposta inválida" not in text
+    ok, text = _ask("não\n")
+    assert ok is False and "Resposta inválida" not in text
+    ok, text = _ask("yes\n")
+    assert ok is False and "Resposta inválida: responda s ou N. Cancelado." in text
 
 
 def test_checkpoint_survives_local_save_failure(tmp_path):

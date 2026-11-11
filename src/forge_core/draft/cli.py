@@ -17,8 +17,13 @@ from ..tasks.service import TaskService
 from .context import resolve_source
 from .cursor_cli import CursorCliAdapter, diagnose_cursor_cli, resolve_cursor_model
 from .github_gh import GhCli
-from .service import DraftService, ask_confirm
+from .service import DraftService, ask_confirm, read_draft_sidecar
 from .template import validate_repo
+
+
+def _flag_given(argv: list[str], name: str) -> bool:
+    token = f"--{name}"
+    return any(a == token or a.startswith(token + "=") for a in argv)
 
 
 def run(argv: list[str], env: Mapping[str, str] | None = None, transport: Transport | None = None,
@@ -36,10 +41,10 @@ def run(argv: list[str], env: Mapping[str, str] | None = None, transport: Transp
     d.add_argument("--contexto", default="", help="contexto em texto livre")
     d.add_argument("--arquivo", default="", help="arquivo UTF-8 com o contexto, ou - para stdin")
     d.add_argument("--retomar", default="", help="id da tarefa Forge já gerada (não chama o LLM)")
-    d.add_argument("--repo", required=True, help="owner/repo alvo")
-    d.add_argument("--output", default="issue-draft.md", help="markdown de saída (não sobrescreve)")
+    d.add_argument("--repo", default="", help="owner/repo alvo (obrigatório na geração; no --retomar vem do rascunho)")
+    d.add_argument("--output", default=None, help="markdown de saída (não sobrescreve; no --retomar vem do rascunho)")
     d.add_argument("--yes", action="store_true", help="pula só a confirmação s/N")
-    d.add_argument("--sprint", default="", help="título da iteração no board (senão a semana atual do schema)")
+    d.add_argument("--sprint", default="")
     d.add_argument("--tipo", default="")
     d.add_argument("--prioridade", default="")
     d.add_argument("--size", default="")
@@ -59,12 +64,24 @@ def run(argv: list[str], env: Mapping[str, str] | None = None, transport: Transp
     if args.cmd != "draft":
         return 1
     try:
+        out_path = Path(args.output) if args.output else Path("issue-draft.md")
+        if not args.retomar:
+            if out_path.is_file():
+                rec = read_draft_sidecar(out_path)
+                tid = str(rec.get("task_id") or "").strip()
+                hint = f"use --retomar {tid}" if tid else ""
+                raise DraftError("file_exists", hint)
+            if not (args.repo or "").strip():
+                raise DraftError("missing_repo")
+            validate_repo(args.repo)
+        elif _flag_given(argv, "repo") and args.repo:
+            validate_repo(args.repo)
+
         settings = load_settings(env)
         if not settings.database_url:
             raise ConfigError("FORGE_DATABASE_URL é obrigatória")
         if not settings.github_client_id:
             raise ConfigError("FORGE_GITHUB_CLIENT_ID é obrigatória para entrar")
-        validate_repo(args.repo)
         model = resolve_cursor_model(env, flag=args.model)
         if not args.retomar and provider is None and not model:
             raise DraftError("model_required")
@@ -95,18 +112,34 @@ def run(argv: list[str], env: Mapping[str, str] | None = None, transport: Transp
         service = DraftService(tasks, adapter, gh_cli)
 
         def operation(principal):
-            meta = {
+            meta_flags = {
                 "sprint": args.sprint, "tipo": args.tipo, "prioridade": args.prioridade,
                 "size": args.size, "escopo": args.escopo,
             }
-            out_path = Path(args.output)
             if args.retomar:
-                result = service.load_resume(args.retomar, out_path, principal, args.repo)
+                result = service.load_resume(
+                    args.retomar,
+                    Path(args.output) if args.output else None,
+                    principal,
+                    args.repo if _flag_given(argv, "repo") else "",
+                )
+                saved = result.meta or {}
+                meta = {
+                    key: (meta_flags[key] if _flag_given(argv, key) else saved.get(key) or "")
+                    for key in ("sprint", "tipo", "prioridade", "size", "escopo")
+                }
+                repo = args.repo if _flag_given(argv, "repo") else result.remote.repo
+                prefix = (
+                    args.branch_prefix if _flag_given(argv, "branch-prefix") else result.branch_prefix
+                )
             else:
                 result = service.generate(
-                    context, args.repo, principal, out_path, meta, args.branch_prefix,
+                    context, args.repo, principal, out_path, meta_flags, args.branch_prefix,
                 )
-            preview = service.preview_text(result, args.repo, meta, args.branch_prefix)
+                meta = meta_flags
+                repo = args.repo
+                prefix = args.branch_prefix
+            preview = service.preview_text(result, repo, meta, prefix)
             try:
                 ok = ask_confirm(preview, yes=args.yes, stdin=stdin, out=out)
             except DraftError:
@@ -114,10 +147,9 @@ def run(argv: list[str], env: Mapping[str, str] | None = None, transport: Transp
                 print(f"tarefa {result.task_id}", file=out)
                 return 0
             if not ok:
-                print("Publicação cancelada. Rascunho local mantido.", file=out)
                 print(f"tarefa {result.task_id}", file=out)
                 return 0
-            published = service.publish(result, args.repo, principal, meta, args.branch_prefix)
+            published = service.publish(result, repo, principal, meta, prefix)
             print(
                 f"Issue {published.remote.issue} {published.remote.url}\n"
                 f"branch {published.remote.branch}\ntarefa {published.task_id}",
