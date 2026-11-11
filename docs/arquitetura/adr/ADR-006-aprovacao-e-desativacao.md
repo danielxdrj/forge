@@ -15,7 +15,7 @@ Independência operacional exige que tudo seja desativável com procedimento man
 | Sem aprovação | Rápido | Inaceitável para escrita externa |
 
 ## Recomendação
-Leitura sem aprovação; escrita remota, release, deploy e SQL de escrita com aprovação registrada em Audit Logs. Cada agente tem `ativo`; há chave global; cada um aponta para procedimento manual. Padrão já usado: `RELEASE_AUTOMATION_ENABLED`.
+Leitura sem aprovação; escrita remota, release, deploy e SQL de escrita com aprovação registrada em Audit Logs. Cada agente tem `ativo`; há chave global; cada um aponta para procedimento manual. Padrão já usado: `FORGE_AUTOMATION_ENABLED`.
 
 ## Consequências
 Manutenção: precisa manter a lista de operações críticas. Segurança: alta. Custo: tempo humano nas aprovações.

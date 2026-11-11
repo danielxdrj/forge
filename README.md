@@ -73,7 +73,7 @@ Integrações citadas como evolução futura, ainda sem desenho detalhado nem or
 | [.specs/](.specs/IMPLEMENTATION_PLAN.md) | Especificações operacionais para executar cada etapa. |
 | [docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md) | Atalho para o plano em `.specs/`. |
 | [docs/LEARNING_GUIDE.md](docs/LEARNING_GUIDE.md) | Conceitos e o código da etapa 01. |
-| [docs/RELEASES.md](docs/RELEASES.md) | Automação de releases, padrão de título de PR, como desativar e procedimento manual. |
+| [docs/RELEASES.md](docs/RELEASES.md) | Releases manuais (tag e GitHub Release), versão em `pyproject.toml`, padrão de título de PR. |
 
 ## O que ainda não está decidido
 

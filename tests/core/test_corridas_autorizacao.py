@@ -89,7 +89,7 @@ def test_revocation_confirmed_before_section_blocks_the_write(make_repo, monkeyp
     release.set()
     th.join(30)
     assert not th.is_alive()
-    assert isinstance(out.get("error"), AuthorizationError) and "forbidden" in str(out["error"])
+    assert isinstance(out.get("error"), AuthenticationError) and "invalid_session" in str(out["error"])
     assert repo.fetch("SELECT COUNT(*) FROM tasks")[0][0] == 1
     assert repo.fetch("SELECT COUNT(*) FROM projects")[0][0] == 0
     assert svc.get_task(task.id).title == "base" and svc.get_task(task.id).version == 1
@@ -125,7 +125,8 @@ def test_approval_refused_when_approver_role_revoked_before_section(make_repo, m
     AuthStore(repo).revoke_role(dona, _role_grant_id(repo, "gh:1003", "approver"))
     release.set()
     th.join(30)
-    assert isinstance(out.get("error"), ApprovalError) and "forbidden" in str(out["error"])
+    err = out.get("error")
+    assert isinstance(err, ApprovalError) and "invalid_session" in str(err)
     assert repo.fetch("SELECT COUNT(*) FROM approval_grants")[0][0] == 0
 
 
@@ -155,7 +156,7 @@ def test_revocation_waits_for_a_write_inside_the_section_and_the_write_survives(
     rv.join(30)
     assert out.get("error") is None and out.get("value") is not None
     assert "error" not in revoker_out and not rv.is_alive()
-    with pytest.raises(AuthorizationError, match="forbidden"):
+    with pytest.raises(AuthenticationError, match="invalid_session"):
         svc.create_task("depois da revogação", ana)
     titles = [r[0] for r in repo.fetch("SELECT title FROM tasks ORDER BY title")]
     assert "dentro da seção" in titles and "depois da revogação" not in titles

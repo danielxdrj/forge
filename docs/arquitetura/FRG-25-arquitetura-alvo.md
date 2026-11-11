@@ -90,7 +90,7 @@ solicitação → tarefa → investigação → implementação → validação 
 | Implementação | Agente (altera código em branch isolada) | Sim, antes de gravar fora do ambiente isolado |
 | Validação | CI e agente | Revisão da pessoa |
 | PR | Agente abre o PR | Sim, antes de criar branch/PR remoto |
-| Release | Manual, uma por PR (tag e GitHub Release), conforme [`docs/RELEASES.md`](../RELEASES.md). O release-please não está em uso: falha por falta de permissão do Actions | Sim, quem opera cria a release |
+| Release | Manual, uma por PR (tag e GitHub Release), conforme [`docs/RELEASES.md`](../RELEASES.md). Versão em `pyproject.toml`. | Sim, quem opera cria a release |
 | Deploy | Futuro (GitHub Actions/Portainer) | Sim, sempre |
 
 **[Opinião]** Operações críticas (escrita remota, release, deploy, SQL de escrita) sempre exigem aprovação explícita; a política detalhada continua pendente (pergunta 3).
@@ -105,8 +105,8 @@ solicitação → tarefa → investigação → implementação → validação 
 
 ## 8. Desativar agentes e automações
 
-- Cada agente/automação tem `ativo` e uma chave global de desligamento (padrão já existente: `RELEASE_AUTOMATION_ENABLED`, [Fato] em `.github/workflows/release.yml`).
-- Cada um aponta para um procedimento manual em `docs/` (por exemplo, "como abrir release sem o bot").
+- Cada agente/automação tem `ativo` e uma chave global de desligamento (padrão já existente: `FORGE_AUTOMATION_ENABLED` em `src/forge_core/config.py`).
+- Cada um aponta para um procedimento manual em `docs/` (por exemplo, [como abrir release](../RELEASES.md)).
 - Teste de continuidade: com tudo desativado, as etapas do fluxo continuam possíveis à mão, usando GitHub, GitHub Actions e Portainer diretamente.
 
 ## 9. Reaproveitamento do legado

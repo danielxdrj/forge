@@ -10,7 +10,7 @@ import urllib.error
 
 import pytest
 
-from auth_helpers import TEST_CLIENT_ID, FakeGitHub, actor, oauth_token
+from auth_helpers import TEST_CLIENT_ID, FakeGitHub, actor, login, oauth_token
 from forge_core.auth import cli
 from forge_core.auth.github import DeviceFlow, DeviceFlowError, UrllibTransport
 from forge_core.auth.github import GitHubIdentity
@@ -227,8 +227,11 @@ def test_revocation_takes_effect_on_the_next_operation(make_repo):
     t = svc.create_task("antes", ana)
     gid = repo.fetch("SELECT id FROM role_grants WHERE identity_id = 'gh:1001' AND role = 'editor'")[0][0]
     AuthStore(repo).revoke_role(dona, gid)
-    with pytest.raises(AuthorizationError, match="forbidden"):
+    with pytest.raises(AuthenticationError, match="invalid_session"):
         svc.update_task(t.id, ana, 1, title="depois")
+    ana2 = login(repo, FakeGitHub(), "ana", 1001)
+    with pytest.raises(AuthorizationError, match="forbidden"):
+        svc.update_task(t.id, ana2, 1, title="depois")
     assert svc.get_task(t.id).title == "antes"
 
 
@@ -354,34 +357,46 @@ def test_auth_tables_are_append_only_and_writer_cannot_change_them_postgres(pg_e
 
 @pytest.fixture
 def cli_env(tmp_path):
+    home = tmp_path / "home"
+    home.mkdir()
     return {
         "FORGE_CONFIG_DIR": str(tmp_path / "cfg"),
         "FORGE_DATABASE_URL": f"sqlite:///{tmp_path / 'cli.db'}",
         "FORGE_GITHUB_CLIENT_ID": TEST_CLIENT_ID,
+        "HOME": str(home),
+        "XDG_CONFIG_HOME": str(home / ".config"),
     }
 
 
-def _files_under(root):
-    return [p for p in root.rglob("*") if p.is_file() and p.name != "cli.db"]
-
-
-def test_cli_bootstrap_only_for_expected_identity_and_no_session_file(cli_env, tmp_path, caplog):
+def test_cli_bootstrap_persists_session_file_without_github_token(cli_env, tmp_path, caplog):
     caplog.set_level(logging.DEBUG)
     gh = Scripted([], token=SECRET_TOKEN, user=(42, "maria"))
     out, err = _Buf(), _Buf()
     assert cli.run(["bootstrap", "--expect-github-id", "42"], cli_env, transport=gh, out=out, err=err) == 0
     assert "ABCD-1234" in out.text and SECRET_TOKEN not in out.text + err.text
-    assert _files_under(tmp_path) == []
     assert SECRET_TOKEN not in caplog.text
+    from forge_core.auth.session_file import session_file_mode, session_file_path
+
+    path = session_file_path(cli_env)
+    assert path.is_file()
+    assert session_file_mode(path) == 0o600
+    stored = path.read_text(encoding="utf-8")
+    assert SECRET_TOKEN not in stored
+    assert "gho_" not in stored
 
     repo = open_repository(cli_env["FORGE_DATABASE_URL"])
-    assert repo.fetch("SELECT COUNT(*) FROM sessions")[0][0] == repo.fetch(
-        "SELECT COUNT(*) FROM session_revocations")[0][0] == 1
+    assert repo.fetch("SELECT COUNT(*) FROM sessions")[0][0] == 1
+    assert repo.fetch("SELECT COUNT(*) FROM session_revocations")[0][0] == 0
+    dump = json.dumps(repo.fetch("SELECT * FROM sessions"), default=str)
+    assert SECRET_TOKEN not in dump
     assert SECRET_TOKEN not in repr(repo.list_audit())
 
+    class Boom(FakeGitHub):
+        def post_form(self, url, data):
+            raise DeviceFlowError("network")
+
     out2 = _Buf()
-    assert cli.run(["whoami"], cli_env, transport=Scripted([], token="outro-token", user=(42, "maria")),
-                   out=out2) == 0
+    assert cli.run(["whoami"], cli_env, transport=Boom(), out=out2) == 0
     info = json.loads(out2.text.strip().splitlines()[-1])
     assert info["login"] == "maria" and info["identity"] == "gh:42" and info["roles"] == ["owner"]
 
@@ -404,15 +419,64 @@ def test_cli_bootstrap_refused_before_login_when_already_done(cli_env):
     assert "bootstrap_already_done" in err.text
 
 
-def test_cli_whoami_shows_no_roles_and_revokes_its_session(cli_env):
+def test_cli_whoami_shows_no_roles_and_keeps_session(cli_env):
     gh = Scripted([], token=SECRET_TOKEN, user=(7, "joao"))
     out, err = _Buf(), _Buf()
     assert cli.run(["whoami"], cli_env, transport=gh, out=out, err=err) == 0
     assert json.loads(out.text.strip().splitlines()[-1])["roles"] == []
     assert SECRET_TOKEN not in out.text + err.text
     repo = open_repository(cli_env["FORGE_DATABASE_URL"])
-    assert repo.fetch("SELECT COUNT(*) FROM sessions")[0][0] == repo.fetch(
-        "SELECT COUNT(*) FROM session_revocations")[0][0] == 1
+    assert repo.fetch("SELECT COUNT(*) FROM sessions")[0][0] == 1
+    assert repo.fetch("SELECT COUNT(*) FROM session_revocations")[0][0] == 0
+
+
+def test_cli_logout_revokes_and_deletes_file(cli_env):
+    gh = Scripted([], token=SECRET_TOKEN, user=(7, "joao"))
+    assert cli.run(["whoami"], cli_env, transport=gh, out=_Buf(), err=_Buf()) == 0
+    from forge_core.auth.session_file import session_file_path
+
+    path = session_file_path(cli_env)
+    assert path.is_file()
+    out, err = _Buf(), _Buf()
+    assert cli.run(["logout"], cli_env, transport=gh, out=out, err=err) == 0
+    assert "Sessão encerrada" in out.text
+    assert not path.exists()
+    repo = open_repository(cli_env["FORGE_DATABASE_URL"])
+    assert repo.fetch("SELECT COUNT(*) FROM session_revocations")[0][0] == 1
+
+    class Boom(FakeGitHub):
+        def post_form(self, url, data):
+            raise DeviceFlowError("network")
+
+    err2 = _Buf()
+    assert cli.run(["whoami"], cli_env, transport=Boom(), out=_Buf(), err=err2) == 1
+    assert "network" in err2.text
+
+
+def test_cli_expired_session_deletes_file_and_requires_device_flow(cli_env):
+    gh = Scripted([], token=SECRET_TOKEN, user=(7, "joao"))
+    assert cli.run(["whoami"], cli_env, transport=gh, out=_Buf(), err=_Buf()) == 0
+    repo = open_repository(cli_env["FORGE_DATABASE_URL"])
+    sid = repo.fetch("SELECT id FROM sessions")[0][0]
+    repo._run([
+        (
+            "INSERT INTO session_renewals (id, session_id, expires_at, at) VALUES (?, ?, ?, ?)",
+            ("expired1", sid, "2020-01-01T00:00:00+00:00", "2020-01-01T00:00:00+00:00"),
+        ),
+    ])
+    from forge_core.auth.session_file import session_file_path
+
+    path = session_file_path(cli_env)
+    assert path.is_file()
+
+    class Boom(FakeGitHub):
+        def post_form(self, url, data):
+            raise DeviceFlowError("network")
+
+    err = _Buf()
+    assert cli.run(["whoami"], cli_env, transport=Boom(), out=_Buf(), err=err) == 1
+    assert "network" in err.text
+    assert not path.exists()
 
 
 def test_cli_errors_print_codes_only(cli_env, tmp_path):
@@ -457,6 +521,8 @@ def test_cli_applies_secret_files_when_database_url_absent(tmp_path, monkeypatch
         "FORGE_PG_DB": "forge",
         "FORGE_PG_OWNER_USER": "forge_owner",
         "FORGE_PG_APP_USER": "forge_app",
+        "HOME": str(tmp_path / "home"),
+        "XDG_CONFIG_HOME": str(tmp_path / "home" / ".config"),
     }
     out, err = _Buf(), _Buf()
     assert cli.run(["whoami"], env, transport=Scripted([], token="outro-token", user=(7, "joao")),

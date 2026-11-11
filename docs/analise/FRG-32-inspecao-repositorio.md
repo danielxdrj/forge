@@ -14,6 +14,8 @@ Fase 0 — Análise. Estudo sem implementação. Nenhum arquivo do repositório 
 
 Convenção deste relatório: **[Fato]** foi verificado em arquivo, comando ou commit citado. **[Inferência]** é interpretação minha e precisa de confirmação. **[Informado]** veio do responsável pelo projeto e não pode ser verificado no repositório.
 
+**Atualização (2026-11-11):** a automação de release proposta no PR #11 (release-please) foi removida. Releases são manuais; ver [`docs/RELEASES.md`](../RELEASES.md).
+
 ### Contexto informado depois da primeira versão (revisão 2)
 
 **[Informado]** O código que existe hoje no repositório `forge` pertence a **outra ideia de projeto**, não ao Forge atual (ferramenta interna de agentes). Este relatório trata esse conteúdo como **legado de um projeto anterior**. Os fatos levantados (o que existe, se roda, riscos) continuam válidos como descrição do legado. O que mudou foi a leitura: o legado **não representa a direção do Forge** e não deve ser usado para inferir a arquitetura, a stack nem o escopo do Forge atual. A avaliação de reaproveitamento está na seção 10.
@@ -219,7 +221,7 @@ Legenda: **Reaproveitar** (útil quase como está), **Adaptar** (a ideia serve, 
 | Compose do PostgreSQL e do frontend | `docker-compose.yml` | **Descartar / arquivar** | **[Fato]** Sobe `postgres:16` e um frontend do projeto anterior. **[Inferência]** O Forge atual tem banco, linguagem e serviços não decididos; um Compose pronto induziria uma decisão. O padrão de usar `127.0.0.1` nas portas publicadas (**[Fato]**) pode ser lembrado como convenção. |
 | Dockerfile do frontend (build Node e nginx) | `frontend/Dockerfile`, `frontend/.dockerignore` | **Arquivar** | **[Fato]** Específico do frontend legado. O padrão de multi-stage build é genérico, mas não reaproveitável sem a tela. |
 | CI de testes, GitHub Actions, GHCR, Portainer | — | **Nada a reaproveitar** | **[Fato]** Não existem no repositório. O CI e o deploy citados no planejamento precisam ser levantados em outro lugar (pergunta 4). |
-| Automação de release (PR #11, proposta, ainda não mergeada) | `.github/workflows/release.yml` e arquivos relacionados, na branch `ci/release-automation` | **Reaproveitar (independente do legado)** | **[Fato]** Foi criada em tarefa separada e não depende do código legado. A versão inicial do manifesto (`0.9.0`) vem das tags do legado; ver pergunta 7. |
+| Automação de release (PR #11, proposta, ainda não mergeada) | `.github/workflows/release.yml` e arquivos relacionados, na branch `ci/release-automation` | **Removida (2026-11-11)** | Entrou na `main` depois desta inspeção e foi retirada. Releases manuais: `docs/RELEASES.md`. |
 
 ### 10.2 Convenções e processo
 

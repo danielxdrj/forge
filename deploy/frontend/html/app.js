@@ -2,16 +2,33 @@
   "use strict";
 
   const MAX_CONTEXT = 64 * 1024;
+  const FIELD_LABELS = {
+    title: "Título",
+    solicitado_por: "Solicitado por",
+    objetivo: "Objetivo",
+    contexto: "Contexto",
+    problemas: "Problemas",
+    novos_problemas: "Novos problemas",
+    situacao_atual: "Situação atual",
+    comportamento_esperado: "Comportamento esperado",
+    criterios: "Critérios de aceite",
+    observacoes: "Observações",
+    tipo: "Tipo",
+    prioridade: "Prioridade",
+    size: "Size",
+  };
   const state = {
     who: null,
     pending: null,
     pollTimer: null,
     repos: [],
     fields: { tipo: [], prioridade: [], size: [] },
+    fieldsError: "",
     draft: null,
     tasks: [],
     form: { repo: "", context: "", tipo: "", prioridade: "", size: "" },
     error: "",
+    errorDetail: null,
     notice: "",
     busy: false,
   };
@@ -99,9 +116,14 @@
     return { ok: response.ok, status: response.status, data: data };
   }
 
-  function setError(code) {
+  function setError(code, detail) {
     state.error = code || "";
+    state.errorDetail = detail || null;
     render();
+  }
+
+  function setErrorFromResponse(data) {
+    setError((data && data.error) || "error", data);
   }
 
   async function loadWhoami() {
@@ -117,9 +139,10 @@
 
   async function startLogin() {
     state.error = "";
+    state.errorDetail = null;
     const res = await api("/api/auth/login/start", { method: "POST", body: {} });
     if (!res.ok) {
-      setError(res.data.error || "login");
+      setErrorFromResponse(res.data);
       return;
     }
     state.pending = res.data;
@@ -147,7 +170,7 @@
       }
       stopPoll();
       state.pending = null;
-      setError(res.data.status || "login");
+      setError(res.data.status || "login", res.data);
     }, 2000);
   }
 
@@ -178,6 +201,10 @@
     const fields = await api("/api/board/fields");
     if (fields.ok) {
       state.fields = fields.data;
+      state.fieldsError = "";
+    } else {
+      state.fields = { tipo: [], prioridade: [], size: [] };
+      state.fieldsError = errorMessage(fields.data.error || "board_fields", fields.data);
     }
     const tasks = await api("/api/tasks");
     if (tasks.ok) {
@@ -195,6 +222,13 @@
     render();
   }
 
+  function applyDraft(data) {
+    state.draft = data;
+    state.form.tipo = data.tipo || "";
+    state.form.prioridade = data.prioridade || "";
+    state.form.size = data.size || "";
+  }
+
   async function generateDraft() {
     const repo = document.getElementById("repo").value;
     const context = document.getElementById("context").value;
@@ -206,56 +240,74 @@
     }
     state.busy = true;
     state.error = "";
+    state.errorDetail = null;
     render();
     const res = await api("/api/tasks/generate", { method: "POST", body: { repo: repo, context: context } });
     state.busy = false;
     if (!res.ok) {
-      setError(res.data.error || "generate");
+      setErrorFromResponse(res.data);
       return;
     }
-    state.draft = res.data;
-    state.notice = "Rascunho gerado. Escolha tipo, prioridade e size e confirme.";
+    applyDraft(res.data);
+    if (res.data.pending && res.data.pending.length) {
+      state.notice = "Rascunho gerado com seções [PENDENTE]. Edite o corpo ou complemente o contexto e gere de novo.";
+    } else {
+      state.notice = "Rascunho gerado. Tipo, prioridade e size vêm sugeridos; troque só se quiser e confirme.";
+    }
     await loadEditorData();
     render();
   }
 
-  async function saveFields() {
-    if (!state.draft) {
-      return;
-    }
-    const tipo = document.getElementById("tipo").value;
-    const prioridade = document.getElementById("prioridade").value;
-    const size = document.getElementById("size").value;
+  function currentDraftPayload() {
+    const tipoEl = document.getElementById("tipo");
+    const priEl = document.getElementById("prioridade");
+    const sizeEl = document.getElementById("size");
+    const bodyEl = document.getElementById("draft-body");
+    const tipo = tipoEl ? tipoEl.value : (state.form.tipo || "");
+    const prioridade = priEl ? priEl.value : (state.form.prioridade || "");
+    const size = sizeEl ? sizeEl.value : (state.form.size || "");
+    const body_md = bodyEl ? bodyEl.value : (state.draft && state.draft.body) || "";
     state.form.tipo = tipo;
     state.form.prioridade = prioridade;
     state.form.size = size;
-    if (!tipo || !prioridade || !size) {
-      return;
+    return { tipo: tipo, prioridade: prioridade, size: size, body_md: body_md };
+  }
+
+  async function saveDraft() {
+    if (!state.draft) {
+      return false;
     }
+    const payload = currentDraftPayload();
     state.busy = true;
     state.error = "";
+    state.errorDetail = null;
     render();
     const res = await api("/api/tasks/" + encodeURIComponent(state.draft.task_id) + "/draft", {
       method: "POST",
-      body: { tipo: tipo, prioridade: prioridade, size: size },
+      body: payload,
     });
     state.busy = false;
     if (!res.ok) {
-      setError(res.data.error || "pending_required");
-      return;
+      setErrorFromResponse(res.data);
+      return false;
     }
-    state.draft.preview = res.data.preview;
-    state.draft.preview_hash = res.data.preview_hash;
-    state.notice = "Campos atualizados.";
+    applyDraft(Object.assign({}, state.draft, res.data));
+    state.notice = "Rascunho atualizado.";
     render();
+    return true;
   }
 
   async function confirmDraft() {
     if (!state.draft) {
       return;
     }
+    const saved = await saveDraft();
+    if (!saved) {
+      return;
+    }
     state.busy = true;
     state.error = "";
+    state.errorDetail = null;
     render();
     const res = await api("/api/tasks/" + encodeURIComponent(state.draft.task_id) + "/confirm", {
       method: "POST",
@@ -263,7 +315,7 @@
     });
     state.busy = false;
     if (!res.ok) {
-      setError(res.data.error || "confirm");
+      setErrorFromResponse(res.data);
       return;
     }
     state.draft.links = res.data;
@@ -272,7 +324,11 @@
     render();
   }
 
-  function errorMessage(code) {
+  function fieldLabel(name) {
+    return FIELD_LABELS[name] || name;
+  }
+
+  function errorMessage(code, detail) {
     const map = {
       csrf: "CSRF recusado. Recarregue a página.",
       forbidden: "Sem papel editor. O owner não implica editor.",
@@ -282,11 +338,26 @@
       repo_not_allowed: "Repositório fora da allowlist.",
       invalid_repo: "Repositório inválido.",
       pending_required: "Preencha tipo, prioridade e size (sem [PENDENTE]).",
+      pending_fields: "Ainda há [PENDENTE] no rascunho.",
+      invalid_board_option: "Tipo, prioridade ou size não existe no board.",
       diff_changed: "A pré-visualização mudou. Atualize os campos e confirme de novo.",
       denied: "Autorização negada no GitHub.",
       expired: "O código expirou. Comece de novo.",
+      project_scope: "O gh não tem escopo project.",
+      gh_error: "Falha no GitHub CLI (gh).",
+      gh_missing: "gh não está disponível no container.",
+      gh_not_logged: "gh não está autenticado no container.",
+      board_fields: "Não foi possível ler as opções do board.",
     };
-    return map[code] || code;
+    let text = map[code] || code;
+    const fields = detail && Array.isArray(detail.fields) ? detail.fields : [];
+    if (fields.length && (code === "pending_fields" || code === "pending_required" || code === "invalid_board_option")) {
+      text += " Seções: " + fields.map(fieldLabel).join(", ") + ".";
+    }
+    if (detail && detail.hint) {
+      text += " " + detail.hint;
+    }
+    return text;
   }
 
   function renderSession(target) {
@@ -323,13 +394,31 @@
   function fillSelect(select, options, placeholder, selected) {
     select.replaceChildren();
     select.appendChild(el("option", { value: "", text: placeholder }));
-    (options || []).forEach(function (name) {
+    const names = (options || []).slice();
+    if (selected && names.indexOf(selected) === -1) {
+      names.push(selected);
+    }
+    names.forEach(function (name) {
       const opt = el("option", { value: name, text: name });
       if (selected && selected === name) {
         opt.selected = true;
       }
       select.appendChild(opt);
     });
+  }
+
+  function pendingList(keys) {
+    const items = (keys || []).map(function (key) {
+      return el("li", { text: fieldLabel(key) });
+    });
+    if (!items.length) {
+      return null;
+    }
+    return el("div", null, [
+      el("p", { class: "warn", text: "Seções com [PENDENTE]:" }),
+      el("ul", { class: "pending" }, items),
+      el("p", { class: "muted", text: "Edite o corpo abaixo ou complemente o contexto e gere de novo." }),
+    ]);
   }
 
   function renderEditor(root) {
@@ -358,7 +447,7 @@
     form.appendChild(el("button", {
       type: "button",
       class: "primary",
-      text: state.busy ? "Aguarde…" : "Gerar rascunho",
+      text: state.busy ? "Aguarde…" : (state.draft ? "Gerar de novo" : "Gerar rascunho"),
       disabled: state.busy ? "disabled" : null,
       onClick: function () { generateDraft(); },
     }));
@@ -366,13 +455,21 @@
 
     if (state.draft) {
       const preview = el("section", null, [el("h2", { text: "Pré-visualização" })]);
-      const pre = el("pre", { class: "preview" });
-      pre.textContent = state.draft.preview || "";
-      preview.appendChild(pre);
+      const pending = pendingList(state.draft.pending);
+      if (pending) {
+        preview.appendChild(pending);
+      }
+      preview.appendChild(el("label", { text: "Corpo do rascunho", for: "draft-body" }));
+      const body = el("textarea", { id: "draft-body", class: "preview" });
+      body.value = state.draft.body || "";
+      preview.appendChild(body);
+      if (state.fieldsError) {
+        preview.appendChild(el("p", { class: "error", text: state.fieldsError }));
+      }
       const row = el("div", { class: "row" });
-      const tipo = el("select", { id: "tipo", onChange: function () { saveFields(); } });
-      const prioridade = el("select", { id: "prioridade", onChange: function () { saveFields(); } });
-      const size = el("select", { id: "size", onChange: function () { saveFields(); } });
+      const tipo = el("select", { id: "tipo", onChange: function () { saveDraft(); } });
+      const prioridade = el("select", { id: "prioridade", onChange: function () { saveDraft(); } });
+      const size = el("select", { id: "size", onChange: function () { saveDraft(); } });
       fillSelect(tipo, state.fields.tipo, "Tipo", state.form.tipo);
       fillSelect(prioridade, state.fields.prioridade, "Prioridade", state.form.prioridade);
       fillSelect(size, state.fields.size, "Size", state.form.size);
@@ -380,6 +477,12 @@
       row.appendChild(el("div", null, [el("label", { text: "Prioridade", for: "prioridade" }), prioridade]));
       row.appendChild(el("div", null, [el("label", { text: "Size", for: "size" }), size]));
       preview.appendChild(row);
+      preview.appendChild(el("button", {
+        type: "button",
+        text: "Salvar rascunho",
+        disabled: state.busy ? "disabled" : null,
+        onClick: function () { saveDraft(); },
+      }));
       preview.appendChild(el("button", {
         type: "button",
         class: "primary",
@@ -432,7 +535,7 @@
     renderSession(session);
     app.replaceChildren();
     if (state.error) {
-      app.appendChild(el("p", { class: "error", text: errorMessage(state.error) }));
+      app.appendChild(el("p", { class: "error", text: errorMessage(state.error, state.errorDetail) }));
     }
     if (state.notice) {
       app.appendChild(el("p", { class: "ok", text: state.notice }));

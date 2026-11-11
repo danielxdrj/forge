@@ -12,8 +12,8 @@ GRANT SELECT, INSERT, UPDATE ON tasks, jobs, task_dependencies, projects, reposi
 GRANT SELECT ON schema_migrations TO <PAPEL_APP>;
 -- Autenticação humana (0009): só leitura e inserção; revogação é linha nova, nunca UPDATE/DELETE.
 -- drafts: UPDATE para status; task_links: só INSERT (vínculo novo, sem UPDATE).
--- sessions: INSERT com expires_at na criação; expiração não usa UPDATE.
-GRANT SELECT, INSERT ON identities, bootstrap_owner, role_grants, role_revocations, sessions, session_revocations, approval_grants, grant_consumptions, dispatch_requests, task_links TO <PAPEL_APP>;
+-- sessions: INSERT com expires_at na criação; renovação deslizante é INSERT em session_renewals.
+GRANT SELECT, INSERT ON identities, bootstrap_owner, role_grants, role_revocations, sessions, session_revocations, session_renewals, approval_grants, grant_consumptions, dispatch_requests, task_links TO <PAPEL_APP>;
 GRANT USAGE ON SEQUENCE role_grants_id_seq, approval_grants_id_seq TO <PAPEL_APP>;
 -- Sem DELETE em nenhuma tabela: projeto e repositório são desativados (active=0), nunca apagados.
 -- Sem UPDATE/DELETE/TRUNCATE em audit_log e sem ser dono de nenhuma tabela.

@@ -177,6 +177,30 @@ def test_cookie_not_secure_by_default_and_no_cors(tmp_path):
     assert r.headers.get("x-frame-options") == "DENY"
 
 
+def test_web_session_sliding_renewal_survives_original_expiry(tmp_path):
+    now = ["2026-01-01T00:00:00+00:00"]
+    settings = load_settings({
+        "FORGE_CONFIG_DIR": str(tmp_path),
+        "FORGE_GITHUB_CLIENT_ID": TEST_CLIENT_ID,
+        "FORGE_DATABASE_URL": f"sqlite:///{tmp_path / 'slide.db'}",
+        "FORGE_SESSION_TTL_SECONDS": "120",
+    })
+    repo = open_repository(settings.database_url)
+    app = create_app(repo, settings, transport=Scripted(), wall=lambda: now[0])
+    client = TestClient(app, base_url="http://127.0.0.1:8091")
+    csrf = _csrf(client)
+    client.post("/api/auth/login/start", headers={**HOST, CSRF_HEADER: csrf})
+    assert client.get("/api/auth/login/status", headers=HOST).json()["status"] == "authorized"
+    now[0] = "2026-01-01T00:01:10+00:00"
+    assert client.get("/api/auth/whoami", headers=HOST).status_code == 200
+    now[0] = "2026-01-01T00:02:01+00:00"
+    assert client.get("/api/auth/whoami", headers=HOST).status_code == 200
+    dump = repr(repo.fetch("SELECT * FROM sessions")) + repr(repo.fetch("SELECT * FROM session_renewals"))
+    assert "gho_SENTINELA" not in dump
+    now[0] = "2026-01-01T00:03:11+00:00"
+    assert client.get("/api/auth/whoami", headers=HOST).status_code == 401
+
+
 def test_logout_revokes_and_owner_is_not_editor(tmp_path):
     client, repo = _client(tmp_path, Scripted())
     csrf = _csrf(client)

@@ -11,6 +11,8 @@ Fase 0 — Análise. Estudo sem implementação. Nenhum código de produção fo
 
 Convenção: **[Fato]** verificado em arquivo do repositório (com caminho) ou no relatório FRG-32. **[Inferência]** interpretação minha. **[Opinião]** juízo de qualidade ou recomendação, a ser confirmado.
 
+**Atualização (2026-11-11):** a automação release-please foi removida. Releases são manuais; a versão fica em `pyproject.toml`. Ver [`docs/RELEASES.md`](../RELEASES.md). O check de título de PR permanece.
+
 ## 1. Resumo
 
 - **[Fato]** O código existente é legado de outro projeto (copiloto de investigação com FastAPI, PostgreSQL e React). Não há agentes, orquestração, filas, integração com GitHub, GHCR, Portainer ou n8n (FRG-32, seção 9).
@@ -48,7 +50,7 @@ Componentes previstos no planejamento: Forge API, Orchestrator, Agent Runtime, Q
 | Componente/tecnologia existente | Caminho | Componente do Forge onde poderia ser usado | Classificação | Justificativa (evidência) | Esforço | Risco de manter / de substituir |
 | --- | --- | --- | --- | --- | --- | --- |
 | Workflow de título de PR (Conventional Commits) | `.github/workflows/pr-title.yml` | Integração com GitHub (convenção de entrega) | Reaproveitar como está | **[Fato]** Valida o título com regex e comentário explica que o título vira a mensagem do commit. Não depende do legado. | P | Baixo. Manter exige que o padrão seja aceito pela equipe. |
-| Workflow de release (release-please) | `.github/workflows/release.yml`, `release-please-config.json`, `.release-please-manifest.json` | Integração com GitHub (CI/release); Audit Logs (histórico de versões) | Reaproveitar com adaptação | **[Fato]** Ação fixada por SHA e desativável por variável. **[Inferência]** o manifesto parte de `0.9.0`, versão do legado (pergunta 7 do FRG-32). Precisa de decisão de versionamento antes de usar. | P | Médio. Manter cria tags e releases; se o Forge for outro projeto, a numeração herdada é enganosa. Substituir por outra ferramenta de release exige nova convenção. |
+| Workflow de release (release-please) | `.github/workflows/release.yml`, `release-please-config.json`, `.release-please-manifest.json` | Integração com GitHub (CI/release); Audit Logs (histórico de versões) | Removida (2026-11-11) | **[Fato]** Ação existia, fixada por SHA e desativável por variável. A automação foi retirada; releases são manuais (`docs/RELEASES.md`). | P | — |
 | Convenção de Conventional Commits e tags semver | histórico git; `docs/RELEASES.md` | Convenções transversais | Reaproveitar como está | **[Fato]** Mensagens majoritariamente em Conventional Commits (FRG-32, seção 4); documentado em `docs/RELEASES.md`. | P | Baixo. |
 | Protocolo de execução por etapa | `.specs/EXECUTION_PROTOCOL.md` | Processo de desenvolvimento (não é componente de software) | Reaproveitar com adaptação | **[Fato]** Descreve passos pequenos, branch a partir de `main`, teste e revisão de diff. **[Inferência]** referências a etapas do legado (`IMPLEMENTATION_PLAN.md`, `steps/`) precisam ser trocadas. | P | Baixo. |
 | Regras de segurança para agentes | `AGENTS.md` | Plugin Registry e Context Manager (regras de acesso); Audit Logs | Reaproveitar com adaptação | **[Fato]** Regras de leitura, segredo fora do Git, placeholders e parar-e-perguntar. **[Fato]** A regra "integrações somente leitura" é específica do escopo do legado. **[Inferência]** precisa de revisão com o responsável (pergunta 9 do FRG-32). | P | Médio. |
@@ -73,7 +75,7 @@ Itens não encontrados no repositório (sem nada a reaproveitar): agentes, orque
 Mantidas porque não dependem de decisão de stack:
 
 1. Conventional Commits, validados por `.github/workflows/pr-title.yml`.
-2. Release automatizada com release-please, com desativação por variável (`.github/workflows/release.yml`). Condicionada à decisão de versionamento (seção 7).
+2. ~~Release automatizada com release-please~~ **Removida (2026-11-11).** Releases manuais: [`docs/RELEASES.md`](../RELEASES.md).
 3. Ações do GitHub fixadas por SHA (`.github/workflows/release.yml`). Convenção de segurança a manter em novos workflows.
 4. Portas publicadas em `127.0.0.1` (`docker-compose.yml`). Convenção a manter, se houver Compose.
 5. Placeholders em `.env.example`.
@@ -115,7 +117,7 @@ Tecnologias do legado (Python, FastAPI, psycopg, PostgreSQL 16, React 19, Vite, 
 ## 8. Perguntas em aberto
 
 1. Confirmar o destino do legado (decisão 2). Quem aprova?
-2. Confirmar que o PR #11 (automação de release) deve permanecer na `main` enquanto o legado não for tratado. Ele dispara PRs de release a partir de `0.9.0`.
+2. ~~Confirmar que o PR #11 (automação de release) deve permanecer na `main`~~ **Resolvido (2026-11-11):** a automação foi removida; releases são manuais.
 3. Há material fora do repositório (Notion, Drive, diagrama de arquitetura com visão SaaS) que deva ser considerado? Esta análise não o acessou.
 4. n8n: há instância ou fluxo existente? Não há nenhuma referência no repositório.
 

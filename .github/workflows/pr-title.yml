@@ -1,8 +1,8 @@
 name: PR title
 
 # Valida que o título do PR segue Conventional Commits. Com squash merge, o
-# título vira a mensagem do commit na main, e é ela que define a versão da release.
-# Detalhes: docs/RELEASES.md
+# título vira a mensagem do commit na main. As notas de release manuais agrupam
+# por esse tipo (docs/RELEASES.md).
 
 on:
   pull_request:

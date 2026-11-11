@@ -44,7 +44,7 @@ docker-compose.dev.yml  Postgres de dev/teste (127.0.0.1:5433; conflita com o pa
 | `FORGE_PG_USER`/`FORGE_PG_PASSWORD`/`FORGE_PG_DB` | só para o compose de dev | credenciais do Postgres local; use valores fora do Git |
 | `FORGE_PG_OWNER_PASSWORD` / `FORGE_PG_APP_PASSWORD` / `FORGE_PG_READONLY_PASSWORD` | compose.forge (secrets) | senhas dos três papéis; nunca no Git |
 | `FORGE_GITHUB_CLIENT_ID` | para login | client id público do OAuth App (device flow) |
-| `FORGE_SESSION_TTL_SECONDS` / `FORGE_COOKIE_SECURE` / `FORGE_WEB_HOSTS` | painel web | prazo da sessão (8 h), flag Secure, allowlist de Host |
+| `FORGE_SESSION_TTL_SECONDS` / `FORGE_COOKIE_SECURE` / `FORGE_WEB_HOSTS` | painel web / CLI | prazo da sessão (7 dias), flag Secure, allowlist de Host |
 | `FORGE_TRUST_FORWARDED` / `FORGE_TRUSTED_PROXIES` | painel web | `X-Forwarded-*` só do proxy listado (compose: `forge_frontend`) |
 | `FORGE_CURSOR_AGENT` / `FORGE_CURSOR_MODEL` / `FORGE_GH_BIN` | não | caminhos/opções do rascunho e do resolver; `FORGE_CURSOR_AGENT` é opcional (PATH/`agent.cmd`) |
 | `FORGE_RESOLVER_ATTEMPTS` | não | teto de tentativas do motor implementador (1–3, padrão 1) |
@@ -96,7 +96,7 @@ Rodam automaticamente em `open_repository`. Para criar uma: adicione `NNNN_descr
 `Orchestrator.dispatch(task_id, principal)` despacha (exige pessoa com papel `editor`) uma tarefa pronta ao agente designado e grava o resultado em `agent_runs`, `task_changes` e `audit_log`. `enqueue(queue, task_id, principal)` grava `dispatch_requests` (migração `0012`) e um job `{dispatch_id, task_id}` — sem token. `job_handler()` revalida papel, sessão e versão. Contrato, ficha, diagrama, exemplo e como adicionar agente: `agents/README.md`. Fronteira: só agentes `read` executam (registro e runtime recusam o resto; aprovação não é autenticação e não libera nada); só o `echo` existe. Reserva atômica de aprovação em `grant_consumptions` (migração `0010`; `approval_consumptions` da `0007` fica como histórico; `0011` copia só o que bate com `approval_grants`). Papéis: o escritor tem SELECT/INSERT em `agent_runs`, `grant_consumptions`, `dispatch_requests` e `approval_consumptions` (append-only, sem DELETE); reprovisione com `postgres_roles.sql`. Limitações: timeout não mata a thread (FRG-6).
 
 ## Tarefas (FRG-15, ADR-010)
-`TaskService(repo)` gerencia projetos, etapas, tarefas e subtarefas sobre o mesmo banco (migração `0005`). Toda escrita humana recebe um `Principal` autenticado com papel `editor` (ADR-014). Texto como `"pessoa:ana"` é recusado. Em exemplos, `ana` é um Principal obtido por device flow (a CLI faz login por comando; não há arquivo de sessão).
+`TaskService(repo)` gerencia projetos, etapas, tarefas e subtarefas sobre o mesmo banco (migração `0005`). Toda escrita humana recebe um `Principal` autenticado com papel `editor` (ADR-014). Texto como `"pessoa:ana"` é recusado. Em exemplos, `ana` é um Principal obtido por device flow (a CLI reusa um arquivo 0600 só com o token de sessão do Forge).
 ```python
 svc = TaskService(repo)
 proj = svc.create_project("Forge", ana); etapa = svc.create_stage(proj.id, "Fase 1", ana)

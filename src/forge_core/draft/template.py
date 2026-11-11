@@ -46,9 +46,13 @@ INSTRUCTION = """Responda APENAS um objeto JSON UTF-8, sem markdown, sem ferrame
 Chaves obrigatórias: title, solicitado_por, objetivo, contexto, problemas (1 a 5 strings),
 novos_problemas (string, vazia se não houver), situacao_atual, comportamento_esperado (1 a 5),
 criterios (1 a 6), observacoes (lista de 1 a 3 strings).
+Chaves opcionais de sugestão do board: tipo, prioridade, size (strings).
 Não invente fatos.
 Use o marcador [PENDENTE] SOMENTE se um destes campos obrigatórios estiver ausente do contexto
 do usuário: solicitado_por, objetivo, comportamento_esperado, criterios.
+Sugira tipo, prioridade e size a partir das opções do board listadas no prompt, quando houver.
+Use [PENDENTE] nesses três SOMENTE se o contexto não permitir decidir.
+Nunca invente uma opção que não esteja na lista do board.
 Nunca use [PENDENTE] em observacoes nem em campos opcionais (novos_problemas): escreva Nenhuma
 ou deixe a string vazia.
 Se o contexto do usuário contiver o texto [PENDENTE] (mesmo entre aspas, crases ou parênteses),
@@ -74,6 +78,16 @@ def validate_title(title: str) -> str:
     if not TITLE_RE.match(title) or len(title) > 200:
         raise DraftError("invalid_title")
     return title
+
+
+def _suggestion(value) -> str:
+    """Sugestão de board: string limpa ou vazio. [PENDENTE] e não-string viram vazio."""
+    if not isinstance(value, str):
+        return ""
+    text = redact(value).strip()
+    if not text or _has_pending(text):
+        return ""
+    return text
 
 
 def _clean_text(value, *, allow_empty: bool = False) -> str:
@@ -144,6 +158,9 @@ def parse_model_json(raw: str) -> dict:
         "comportamento_esperado": _items(data["comportamento_esperado"], 1, 5),
         "criterios": _items(data["criterios"], 1, 6),
         "observacoes": _items(data["observacoes"], 1, 3),
+        "tipo": _suggestion(data.get("tipo")),
+        "prioridade": _suggestion(data.get("prioridade")),
+        "size": _suggestion(data.get("size")),
     }
     rendered = render(parsed)
     _reject_scope(rendered)

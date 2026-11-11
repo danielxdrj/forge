@@ -20,7 +20,7 @@ import secrets
 from contextlib import contextmanager
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from collections.abc import Callable
 
@@ -30,6 +30,12 @@ from .github import GitHubIdentity
 
 ROLES = ("owner", "editor", "approver")
 _ISSUED = object()
+_EXPIRY_SQL = (
+    "COALESCE(("
+    "SELECT r.expires_at FROM session_renewals r "
+    "WHERE r.session_id = s.id ORDER BY r.at DESC, r.id DESC LIMIT 1"
+    "), s.expires_at)"
+)
 
 
 @dataclass(frozen=True)
@@ -56,6 +62,10 @@ def _now() -> str:
 
 def _digest(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def _parse_iso(value: str) -> datetime:
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
 
 
 def _is_integrity_error(exc: Exception) -> bool:
@@ -99,7 +109,9 @@ class AuthStore:
         ident = self._verify(access_token)
         return ident.github_id, ident.login
 
-    def bootstrap_owner(self, access_token: str, expected_github_id: int) -> tuple[Principal, str]:
+    def bootstrap_owner(
+        self, access_token: str, expected_github_id: int, *, expires_at: str | None = None,
+    ) -> tuple[Principal, str]:
         """Primeiro dono. Exige o id GitHub esperado (âncora do operador) e confere a identidade verificada.
 
         Só funciona uma vez: a segunda chamada, ou a concorrente, é recusada pela linha singleton.
@@ -123,14 +135,14 @@ class AuthStore:
                 self._repo.record_audit("sistema:auth", "auth.bootstrap", "identity:new", "error: ja_inicializado")
                 raise AuthorizationError("bootstrap_already_done") from None
             raise
-        return self._open(github_id, login)
+        return self._open(github_id, login, expires_at=expires_at)
 
     # --- sessão ---
 
     def open_session(self, access_token: str, *, expires_at: str | None = None) -> tuple[Principal, str]:
         """Sessão para a identidade verificada pelo GitHub. Devolve (Principal, token); no banco fica só o hash.
 
-        `expires_at` ISO-8601: sessões web sempre enviam prazo. CLI legado omite (NULL = sem expiração).
+        `expires_at` ISO-8601: web e CLI humanas enviam prazo. Despacho e testes sem prazo usam NULL.
         """
         github_id, login = self._verified(access_token)
         return self._open(github_id, login, expires_at=expires_at)
@@ -155,7 +167,7 @@ class AuthStore:
         rows = self._repo.fetch(
             "SELECT s.id, s.identity_id, s.login FROM sessions s WHERE s.token_hash = ? "
             "AND NOT EXISTS (SELECT 1 FROM session_revocations r WHERE r.session_id = s.id) "
-            "AND (s.expires_at IS NULL OR s.expires_at > ?)",
+            f"AND ({_EXPIRY_SQL} IS NULL OR {_EXPIRY_SQL} > ?)",
             (_digest(token), self._clock()))
         if len(rows) != 1:
             raise AuthenticationError("invalid_session")
@@ -192,7 +204,7 @@ class AuthStore:
         rows = tx.execute(
             "SELECT 1 FROM sessions s WHERE s.id = ? AND s.identity_id = ? "
             "AND NOT EXISTS (SELECT 1 FROM session_revocations r WHERE r.session_id = s.id) "
-            "AND (s.expires_at IS NULL OR s.expires_at > ?)",
+            f"AND ({_EXPIRY_SQL} IS NULL OR {_EXPIRY_SQL} > ?)",
             (principal.session_id, principal.identity_id, self._clock())).fetchall()
         if not rows:
             raise AuthenticationError("invalid_session")
@@ -212,6 +224,58 @@ class AuthStore:
                        (principal.session_id, _now()))
             tx.audit(principal.identity_id, "auth.session_revoke", f"session:{principal.session_id}", "ok")
 
+    def touch_session(self, principal: Principal, ttl_seconds: int) -> str | None:
+        """Renovação deslizante append-only: novo expires_at se restar menos da metade do TTL.
+
+        Sessões sem prazo (CLI legado / despacho, expires_at NULL) não são tocadas.
+        """
+        if not isinstance(principal, Principal):
+            raise AuthenticationError("principal_missing")
+        now = self._clock()
+        rows = self._repo.fetch(
+            f"SELECT {_EXPIRY_SQL} FROM sessions s WHERE s.id = ? AND s.identity_id = ? "
+            "AND NOT EXISTS (SELECT 1 FROM session_revocations r WHERE r.session_id = s.id)",
+            (principal.session_id, principal.identity_id),
+        )
+        if len(rows) != 1:
+            raise AuthenticationError("invalid_session")
+        current = rows[0][0]
+        if current is None:
+            return None
+        if current <= now:
+            raise AuthenticationError("invalid_session")
+        remaining = (_parse_iso(current) - _parse_iso(now)).total_seconds()
+        if remaining > ttl_seconds / 2:
+            return current
+        new_exp = (_parse_iso(now) + timedelta(seconds=ttl_seconds)).isoformat()
+        with self._repo.transaction() as tx:
+            still = tx.execute(
+                "SELECT 1 FROM sessions s WHERE s.id = ? AND s.identity_id = ? "
+                "AND NOT EXISTS (SELECT 1 FROM session_revocations r WHERE r.session_id = s.id)",
+                (principal.session_id, principal.identity_id),
+            ).fetchall()
+            if not still:
+                raise AuthenticationError("invalid_session")
+            tx.execute(
+                "INSERT INTO session_renewals (id, session_id, expires_at, at) VALUES (?, ?, ?, ?)",
+                (uuid.uuid4().hex, principal.session_id, new_exp, now),
+            )
+        return new_exp
+
+    def _revoke_identity_sessions_in_tx(self, tx, identity_id: str, actor_id: str) -> None:
+        rows = tx.execute(
+            "SELECT s.id FROM sessions s WHERE s.identity_id = ? "
+            "AND NOT EXISTS (SELECT 1 FROM session_revocations r WHERE r.session_id = s.id)",
+            (identity_id,),
+        ).fetchall()
+        ts = self._clock()
+        for (sid,) in rows:
+            tx.execute(
+                "INSERT INTO session_revocations (session_id, revoked_at) VALUES (?, ?)",
+                (sid, ts),
+            )
+            tx.audit(actor_id, "auth.session_revoke", f"session:{sid}", "ok: identity_revoke")
+
     def transition_actor(self, actor) -> str:
         """Autor de uma transição de status: sempre uma pessoa autenticada com papel `editor` agora."""
         return self.require(actor, "editor").identity_id
@@ -226,7 +290,7 @@ class AuthStore:
         rows = self._repo.fetch(
             "SELECT 1 FROM sessions s WHERE s.id = ? AND s.identity_id = ? "
             "AND NOT EXISTS (SELECT 1 FROM session_revocations r WHERE r.session_id = s.id) "
-            "AND (s.expires_at IS NULL OR s.expires_at > ?)",
+            f"AND ({_EXPIRY_SQL} IS NULL OR {_EXPIRY_SQL} > ?)",
             (principal.session_id, principal.identity_id, self._clock()))
         if not rows:
             raise AuthenticationError("invalid_session")
@@ -273,6 +337,7 @@ class AuthStore:
                 raise AuthorizationError("grant_already_revoked")
             tx.execute("INSERT INTO role_revocations (grant_id, revoked_by, revoked_at) VALUES (?, ?, ?)",
                        (grant_id, owner.identity_id, _now()))
+            self._revoke_identity_sessions_in_tx(tx, iid, owner.identity_id)
             tx.audit(owner.identity_id, "auth.revoke", f"identity:{iid}", f"ok: role={role}")
 
     def _active_owner_count(self, tx=None) -> int:

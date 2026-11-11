@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from auth_helpers import FakeGitHub, TEST_CLIENT_ID, bootstrap, person
+from forge_core.auth import cli as auth_cli
 from forge_core.agents.provider import ProviderResponse
 from forge_core.draft.cli import run as draft_run
 from forge_core.draft.context import MAX_CONTEXT_BYTES, FileContext, TextContext, resolve_source
@@ -131,6 +132,8 @@ def _env(tmp_path):
         "FORGE_DATABASE_URL": f"sqlite:///{tmp_path / 'd.db'}",
         "FORGE_GITHUB_CLIENT_ID": TEST_CLIENT_ID,
         "FORGE_CURSOR_MODEL": "<MODELO_DA_ASSINATURA>",
+        "HOME": str(tmp_path / "home"),
+        "XDG_CONFIG_HOME": str(tmp_path / "home" / ".config"),
     }
 
 
@@ -569,6 +572,7 @@ def test_cli_contexto_arquivo_stdin_editor_ok_viewer_denied(tmp_path):
     )
     assert code == 0 and (tmp_path / "from-stdin.md").is_file()
 
+    assert auth_cli.run(["logout"], env, transport=login_gh, out=_Buf(), err=_Buf()) == 0
     login_gh.select("solta", 1004)
     err2 = _Buf()
     code = draft_run(

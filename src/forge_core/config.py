@@ -24,7 +24,7 @@ _DEFAULT_WEB_HOSTS = (
     "localhost:8091",
 )
 _HOST = re.compile(r"^[A-Za-z0-9.-]+:[0-9]{1,5}$")
-_DEFAULT_SESSION_TTL = 8 * 3600
+_DEFAULT_SESSION_TTL = 7 * 24 * 3600
 
 
 @dataclass(frozen=True)

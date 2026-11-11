@@ -6,6 +6,15 @@ from forge_core.tasks import TaskService
 from auth_helpers import actor
 
 
+def test_0014_session_renewals_exists(make_repo):
+    sqlite = [p.stem for p in pending_migrations("sqlite")]
+    postgres = [p.stem for p in pending_migrations("postgres")]
+    assert any(s.startswith("0014_") for s in sqlite)
+    assert any(s.startswith("0014_") for s in postgres)
+    repo = make_repo()
+    repo.fetch("SELECT id, session_id, expires_at, at FROM session_renewals LIMIT 0")
+
+
 def test_0013_is_listed_for_both_dialects():
     sqlite = [p.stem for p in pending_migrations("sqlite")]
     postgres = [p.stem for p in pending_migrations("postgres")]

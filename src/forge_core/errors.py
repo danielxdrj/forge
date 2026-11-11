@@ -72,7 +72,8 @@ class AuthorizationError(ForgeError):
 class DraftError(ForgeError):
     """Falha no rascunho de issue (validação, LLM, arquivo, gh local). Código fixo; sem segredo."""
 
-    def __init__(self, code: str, hint: str = ""):
+    def __init__(self, code: str, hint: str = "", *, fields: list[str] | None = None):
         super().__init__(code if not hint else f"{code}: {hint}")
         self.code = code
         self.hint = hint
+        self.fields = list(fields) if fields else []

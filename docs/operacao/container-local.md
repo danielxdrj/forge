@@ -24,10 +24,11 @@ CI e testes unitários **não** chamam GitHub nem Cursor reais.
 | `FORGE_PG_READONLY_PASSWORD` | leitor `forge_readonly` (HeidiSQL/DBeaver). **Obrigatória**: primeiro boot falha fechado se faltar ou estiver vazia |
 | `FORGE_GITHUB_CLIENT_ID` | client id **público** do OAuth App com Device Flow |
 | `FORGE_PG_HOST_PORT` | porta do Postgres no loopback do host (padrão `5433`) |
-| `FORGE_FRONTEND_HOST_PORT` | origem do navegador (padrão `8090`) |
+| `FORGE_FRONTEND_HOST_PORT` | origem do navegador (padrão `8090`). O compose interpola essa porta em `FORGE_WEB_HOSTS`. Se você definir `FORGE_WEB_HOSTS` à mão, inclua `127.0.0.1:<porta>` e `localhost:<porta>` |
+| `FORGE_SESSION_TTL_SECONDS` | prazo da sessão web/CLI (padrão 7 dias; mínimo 60, máximo 604800) |
 | `FORGE_CURSOR_MODEL` | opcional; modelo da assinatura Cursor (sem default de custo) |
 
-A senha **não** vai para arquivo no repositório. O compose lê as variáveis como `secrets.environment`.
+A senha **não** vai para arquivo no repositório. O Postgres lê `secrets.environment`. O `forge_backend` é `read_only: true`; Compose v2 recusa `secrets.environment` nesse caso (`file is the sole supported option`). **Plano B:** tmpfs em `/run/secrets` (mode 0700, uid/gid 1000); o entrypoint grava as senhas da env em arquivos 0600 nesse tmpfs e remove as variáveis do processo antes do uvicorn. O código continua lendo de arquivo. Residual: `docker inspect` ainda mostra a env configurada no serviço. Ainda precisa ser validado no Windows (Docker Desktop).
 
 A senha de cada papel é gravada no volume `forge_pgdata` no **primeiro boot**. Depois disso, mudar é `ALTER ROLE ... PASSWORD` (não basta trocar a env e reiniciar).
 
@@ -53,17 +54,21 @@ Bash equivalente: exporte as mesmas variáveis e rode o `docker compose`.
 As ferramentas estão **na imagem**. Credenciais ficam no volume `forge_cli_home` (`HOME` do usuário `forge`, uid 1000). Não monte keyring, `HOME`/`APPDATA` nem `docker.sock` do Windows. **Não** use `docker compose exec -u 0`: `gh`, `cursor-agent` e `python -m forge_core.auth.cli` correm como `forge`.
 
 ```powershell
-docker compose -f docker-compose.forge.yml exec forge_backend gh auth login
+docker compose -f docker-compose.forge.yml exec forge_backend gh auth login -s project
+# se o login já existir sem o escopo:
+docker compose -f docker-compose.forge.yml exec forge_backend gh auth refresh -s project
 docker compose -f docker-compose.forge.yml exec forge_backend cursor-agent login
 ```
 
-Siga o device flow que o comando mostrar. Sem `GH_TOKEN` / `GITHUB_TOKEN`.
+Siga o device flow que o comando mostrar. Sem `GH_TOKEN` / `GITHUB_TOKEN`. O `gh` grava o token **em texto puro** no volume `forge_cli_home`. Risco aceito: é um volume Docker próprio desta instalação. **Nunca** monte o keyring, `HOME` ou `%APPDATA%` do host.
+
+A sessão Forge (web e `python -m forge_core.auth.cli`) também vive nesse volume (`/home/forge/.config/forge/session`, permissão 0600, só o token de sessão do Forge — sem token GitHub). Logout web ou `python -m forge_core.auth.cli logout` invalida a sessão no banco e apaga o arquivo. Restart do container **não** pede login de novo enquanto a sessão valer (padrão 7 dias).
 
 Se um volume antigo `forge_cli_home` estiver com dono root: uma vez, `docker compose -f docker-compose.forge.yml exec -u 0 forge_backend chown -R forge:forge /home/forge`. Volume **novo** já nasce com uid 1000.
 
 ## Bootstrap do owner e papel editor
 
-O owner **não** implica editor. Quem vai criar tarefas precisa dos dois. Cada comando pede um device flow no terminal (ADR-014). O id tem de ser o da conta que autorizar. **Não** informe `FORGE_DATABASE_URL` nem senha neste `exec`:
+O owner **não** implica editor. Quem vai criar tarefas precisa dos dois. O device flow da CLI corre no `bootstrap` e no primeiro `whoami`/`grant`; os comandos seguintes reusam o arquivo de sessão no volume. O id tem de ser o da conta que autorizar. **Não** informe `FORGE_DATABASE_URL` nem senha neste `exec`:
 
 ```powershell
 docker compose -f docker-compose.forge.yml exec forge_backend python -m forge_core.auth.cli bootstrap --expect-github-id <ID_NUMERICO>
@@ -79,11 +84,11 @@ Start-Process 'http://127.0.0.1:8090'
 1. **Entrar com GitHub**: a página mostra o `user_code` e o link de verificação. Autorize no GitHub; a página consulta `/api` sozinha.
 2. `/api/auth/whoami` (via UI) lista login e papéis. Sem `editor`, a tela de tarefas explica que o owner não basta.
 3. **Nova tarefa**: escolha um repositório da allowlist (org `ferreiraeborzone`), cole o contexto escrito (máx. 64 KiB; sem imagem) e **Gerar rascunho**.
-4. Confira a pré-visualização (saída do LLM: não é HTML). Preencha Tipo, Prioridade e Size (opções do board IT Backlog, projeto 13).
-5. **Confirmar e publicar**: o backend recusa se o `preview_hash` mudou. Issue, item do board e branch entram em `task_links`. Se falhar no meio, **Confirmar** de novo retoma; não duplica a issue.
+4. Confira a pré-visualização. Seções com `[PENDENTE]` aparecem listadas; edite o corpo na própria prévia (textarea) ou complemente o contexto e **Gerar de novo**. Tipo, prioridade e size vêm sugeridos pelo gerador (opções do board IT Backlog, projeto 13); troque só se quiser. Se `/api/board/fields` falhar (ex.: gh sem escopo `project`), a tela mostra o erro real, não selects vazios.
+5. **Confirmar e publicar**: o backend recusa se o `preview_hash` mudou (`409 diff_changed`) ou se ainda houver `[PENDENTE]` (`400 pending_fields` com a lista das seções). Issue, item do board e branch entram em `task_links`. Se falhar no meio, **Confirmar** de novo retoma; não duplica a issue.
 6. A lista **Tarefas** mostra repositório, título, fase/status, link da issue e da PR (se o `gh` achar a PR da branch).
 
-O token GitHub não é gravado. A sessão Forge vai num cookie HttpOnly, SameSite=Strict, Path=/, prazo padrão 8 h. CSRF: cookie legível `forge_csrf` + cabeçalho `X-CSRF-Token` em todo não-GET.
+O token GitHub não é gravado. A sessão Forge vai num cookie HttpOnly, SameSite=Strict, Path=/, prazo padrão 7 dias (renovação deslizante) e na tabela `sessions` (`token_hash`). CSRF: cookie legível `forge_csrf` + cabeçalho `X-CSRF-Token` em todo não-GET. Sem script inline (CSP `default-src 'self'`).
 
 ## HeidiSQL e DBeaver (somente leitura)
 
@@ -122,12 +127,17 @@ Guarde o dump fora do Git. Restaure só em ambiente de teste.
 | --- | --- |
 | `Bind for 0.0.0.0:5433 failed` / porta em uso | Outro Postgres (compose de dev). `down` nele ou `FORGE_PG_HOST_PORT` |
 | `forge-init: segredo ausente/vazio` | Defina as três senhas no ambiente **antes** do primeiro `up` (volume novo) |
-| `forge-web: segredo ausente` | O backend não leu `/run/secrets/...`; conferir `secrets:` no compose |
+| `forge-web: segredo ausente` | O entrypoint não materializou `/run/secrets` a partir da env; conferir tmpfs `/run/secrets` e as variáveis `FORGE_PG_*_PASSWORD` |
 | `forge-auth: FORGE_DATABASE_URL é obrigatória` | Comando rodou **fora** do container. Dentro, os arquivos de segredo preenchem a URL |
-| `host_rejected` | Host fora da allowlist. Padrão: 127.0.0.1/localhost nas portas 8090 e 8091 |
+| `host_rejected` | Host fora da allowlist. Se mudou `FORGE_FRONTEND_HOST_PORT`, o compose já interpola em `FORGE_WEB_HOSTS`; se você definiu `FORGE_WEB_HOSTS` à mão, inclua a porta nova |
 | `csrf` | Recarregue a página e tente de novo (cookie `forge_csrf` + cabeçalho `X-CSRF-Token`) |
 | `forbidden` ao gerar/confirmar | Falta papel `editor` (owner sozinho não basta) |
-| `diff_changed` | A pré-visualização mudou; atualize tipo/prioridade/size e confirme de novo |
+| `diff_changed` | A pré-visualização mudou; salve o rascunho e confirme de novo |
+| `pending_fields` | Ainda há `[PENDENTE]` nas seções listadas no JSON `fields`; edite o corpo ou complemente o contexto |
+| `project_scope` | `gh auth login -s project` ou `gh auth refresh -s project` dentro do container |
+| `cannot create secret ... file is the sole supported option` | Compose recusou `secrets.environment` em serviço `read_only`. Este repositório usa o plano B (tmpfs `/run/secrets` + entrypoint); atualize a imagem e `up` de novo |
+| `exec /entrypoint.sh: no such file or directory` / initdb sem papéis | Scripts com CRLF (`core.autocrlf=true`). `git add --renormalize .` ou reclonar; `.gitattributes` força LF em `*.sh`, `*.conf` e `Dockerfile*` |
+| Selects de tipo/prioridade/size vazios | `/api/board/fields` falhou; a tela mostra o erro (quase sempre escopo `project` do gh) |
 | `device_flow_disabled` | Habilite Device Flow no OAuth App |
 | Página em 8091 recusada / conexão recusada | A 8091 do backend **não** é publicada. Use `http://127.0.0.1:8090` |
 | `gh` / `cursor-agent` sem permissão em `/home/forge` | Volume antigo como root: `chown` uma vez como uid 0 (passo acima) |
