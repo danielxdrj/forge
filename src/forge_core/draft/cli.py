@@ -171,7 +171,7 @@ def run(argv: list[str], env: Mapping[str, str] | None = None, transport: Transp
             )
             return 0
 
-        return _with_login(store, flow, out, operation)
+        return _with_login(store, flow, out, operation, env, settings.session_ttl_seconds)
     except DeviceFlowError as exc:
         print(f"forge-tasks: falha no login ({exc.code})", file=err)
     except DraftError as exc:

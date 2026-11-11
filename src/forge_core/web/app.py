@@ -45,6 +45,7 @@ class DraftFieldsIn(BaseModel):
     tipo: str = ""
     prioridade: str = ""
     size: str = ""
+    body_md: str | None = None
 
 
 class ConfirmIn(BaseModel):
@@ -105,8 +106,9 @@ def create_app(
         except AuthenticationError:
             return None
 
-    def _json_error(status: int, code: str) -> JSONResponse:
-        resp = JSONResponse({"error": code}, status_code=status)
+    def _json_error(status: int, code: str, **extra) -> JSONResponse:
+        payload = {"error": code, **{k: v for k, v in extra.items() if v not in (None, "", [])}}
+        resp = JSONResponse(payload, status_code=status)
         for key, value in SECURITY_HEADERS.items():
             resp.headers[key] = value
         return resp
@@ -115,6 +117,7 @@ def create_app(
         code = exc.code
         status = {
             "diff_changed": 409,
+            "draft_published": 409,
             "draft_missing": 404,
             "task_missing": 404,
             "provider_missing": 503,
@@ -124,7 +127,12 @@ def create_app(
             "provider_error": 502,
             "forbidden": 403,
         }.get(code, 400)
-        return _json_error(status, code)
+        extra = {}
+        if exc.fields:
+            extra["fields"] = list(exc.fields)
+        if exc.hint:
+            extra["hint"] = exc.hint
+        return _json_error(status, code, **extra)
 
     def _apply_session_cookie(response: Response, session_token: str) -> None:
         response.set_cookie(
@@ -251,6 +259,17 @@ def create_app(
         if "access-control-allow-origin" in response.headers:
             del response.headers["access-control-allow-origin"]
         _set_csrf(response, request.state.csrf_token)
+        raw_session = request.cookies.get(SESSION_COOKIE)
+        if raw_session:
+            try:
+                principal = store.resolve_session(raw_session)
+                store.touch_session(principal, settings.session_ttl_seconds)
+                response.set_cookie(
+                    SESSION_COOKIE, raw_session, max_age=settings.session_ttl_seconds,
+                    **_cookie_kw(httponly=True),
+                )
+            except AuthenticationError:
+                pass
         return response
 
     @app.get("/api/health")
@@ -333,7 +352,9 @@ def create_app(
         if isinstance(principal, JSONResponse):
             return principal
         try:
-            return panel.update_fields(principal, task_id, body.tipo, body.prioridade, body.size)
+            return panel.update_fields(
+                principal, task_id, body.tipo, body.prioridade, body.size, body_md=body.body_md,
+            )
         except DraftError as exc:
             return _draft_error(exc)
 

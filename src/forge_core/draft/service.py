@@ -17,7 +17,8 @@ from ..logging import redact
 from ..tasks.service import TaskService
 from .cursor_cli import build_prompt
 from .github_gh import (
-    GhCli, RemoteState, current_iteration_id, find_field, match_option, names_match,
+    GhCli, RemoteState, canonical_board_value, current_iteration_id, find_field,
+    match_option, names_match,
 )
 from .template import (
     ASSIGNEE, PENDING, PROJECT_NUMBER, PROJECT_OWNER, PROJECT_TITLE,
@@ -171,13 +172,13 @@ class DraftService:
         self.today = today or date.today()
 
     def generate(self, context: str, repo: str, principal: Principal, output: Path,
-                 meta: dict, branch_prefix: str = "") -> DraftResult:
+                 meta: dict, branch_prefix: str = "", board: dict | None = None) -> DraftResult:
         repo = validate_repo(repo)
         self.tasks._auth.require(principal, "editor")
         context = redact(context.strip())
         if not context:
             raise DraftError("empty_context")
-        prompt = build_prompt(context)
+        prompt = build_prompt(context, board)
         if "FORGE_" in prompt or "GH_TOKEN" in prompt or "GITHUB_TOKEN" in prompt:
             raise DraftError("secret_in_prompt")
         try:
@@ -187,6 +188,7 @@ class DraftService:
         except Exception as exc:
             raise DraftError("provider_error") from exc
         data = parse_model_json(response.text)
+        meta = _merge_board_suggestions(meta, data, board)
         body = render(data)
         write_exclusive(output, body)
         task = self.tasks.create_task(
@@ -408,6 +410,25 @@ def _header_name(line: str) -> str:
     if text.startswith("## "):
         text = text[3:].strip()
     return text
+
+
+def _merge_board_suggestions(meta: dict, data: dict, board: dict | None) -> dict:
+    """CLI informa tipo/prioridade/size; a tela deixa o modelo sugerir e só troca se quiser."""
+    out = dict(meta or {})
+    for key in ("tipo", "prioridade", "size"):
+        current = (out.get(key) or "").strip()
+        if current:
+            continue
+        suggested = (data.get(key) or "").strip()
+        if not suggested:
+            out[key] = ""
+            continue
+        names = list((board or {}).get(key) or [])
+        if names:
+            out[key] = canonical_board_value(names, suggested) or ""
+        else:
+            out[key] = suggested
+    return out
 
 
 def parse_model_json_from_body(body: str) -> dict:

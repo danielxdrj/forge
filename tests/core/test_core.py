@@ -13,6 +13,7 @@ from forge_core.logging import configure_logging
 def test_valid_config_starts():
     s = start({"FORGE_CONFIG_DIR": "/tmp/cfg.example.invalid"})
     assert s.log_level == "INFO" and s.automation_enabled
+    assert s.session_ttl_seconds == 7 * 24 * 3600
 
 
 def test_missing_required_fails_clearly():

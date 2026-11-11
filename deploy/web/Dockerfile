@@ -47,7 +47,11 @@ RUN pip install --no-cache-dir --upgrade pip \
     && rm -rf /root/.cache/pip
 
 COPY deploy/web/entrypoint.sh /entrypoint.sh
-RUN chmod 0755 /entrypoint.sh
+COPY deploy/web/initdb/01-roles.sh /tmp/check-lf-01-roles.sh
+RUN python -c "import pathlib,sys; files=['/entrypoint.sh','/tmp/check-lf-01-roles.sh']; bad=[f for f in files if b'\r' in pathlib.Path(f).read_bytes()];\
+ sys.exit('CRLF forbidden in '+', '.join(bad)+'; use LF (.gitattributes, git add --renormalize .)' if bad else 0)" \
+    && rm -f /tmp/check-lf-01-roles.sh \
+    && chmod 0755 /entrypoint.sh
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \

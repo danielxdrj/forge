@@ -73,6 +73,35 @@ def test_backend_dockerfile_runs_as_user_forge():
     assert re.search(r"(?m)^USER forge\s*$", BACKEND_DOCKERFILE)
 
 
+def test_backend_is_read_only_with_run_secrets_tmpfs():
+    backend = COMPOSE.split("forge_backend:")[1].split("forge_frontend:")[0]
+    assert "read_only: true" in backend
+    assert "/run/secrets" in backend
+    assert "mode=0700" in backend
+    assert "uid=1000" in backend
+    assert "gid=1000" in backend
+    assert not re.search(r"(?m)^\s+secrets:\s*$", backend)
+    assert "FORGE_SECRET_OWNER_PASSWORD_FILE: /run/secrets/forge_pg_owner_password" in backend
+    assert "FORGE_WEB_HOSTS:" in backend
+    assert "FORGE_FRONTEND_HOST_PORT:-8090" in backend
+    assert "FORGE_SESSION_TTL_SECONDS:" in backend
+
+
+def test_shell_and_dockerfiles_have_no_cr():
+    paths = list((ROOT / "deploy").rglob("*.sh"))
+    paths += list((ROOT / "deploy").rglob("*.conf"))
+    paths += list(ROOT.glob("Dockerfile*"))
+    paths += list((ROOT / "deploy").rglob("Dockerfile*"))
+    cr = [str(p.relative_to(ROOT)) for p in paths if p.is_file() and b"\r" in p.read_bytes()]
+    assert cr == []
+    gitattributes = (ROOT / ".gitattributes").read_text(encoding="utf-8")
+    assert "*.sh text eol=lf" in gitattributes
+    assert "*.conf text eol=lf" in gitattributes
+    assert "Dockerfile* text eol=lf" in gitattributes
+    assert "b'\\r'" in BACKEND_DOCKERFILE
+    assert "check-lf-01-roles.sh" in BACKEND_DOCKERFILE
+
+
 def test_nginx_proxies_api_sets_forwarded_headers_and_csp():
     assert "location /api/" in NGINX
     assert "proxy_pass http://forge_backend:8091" in NGINX
@@ -94,3 +123,7 @@ def test_nginx_proxies_api_sets_forwarded_headers_and_csp():
     js = (ROOT / "deploy/frontend/html/app.js").read_text(encoding="utf-8")
     assert "innerHTML" not in js
     assert "textContent" in js
+    assert "draft-body" in js
+    assert "pending_fields" in js
+    assert "fieldsError" in js
+    assert "Gerar de novo" in js

@@ -144,7 +144,7 @@ def _execute(args, argv, env, transport, provider, gh, git, out, err, stdin) -> 
         )
         return 0
 
-    return _with_login(store, flow, out, operation)
+    return _with_login(store, flow, out, operation, env, settings.session_ttl_seconds)
 
 
 def main() -> int:

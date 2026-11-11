@@ -355,6 +355,22 @@ def names_match(actual: str, wanted: str) -> bool:
     return a == w or a.endswith(w) or w.endswith(a)
 
 
+def canonical_board_value(names: list[str], wanted: str) -> str | None:
+    """Devolve o nome canônico da opção do board, ou None se não houver correspondência única."""
+    wanted = (wanted or "").strip()
+    if not wanted:
+        return None
+    exact = [n for n in names if fold_option_name(n) == fold_option_name(wanted)]
+    if len(exact) == 1:
+        return exact[0]
+    if len(exact) > 1:
+        return None
+    loose = [n for n in names if names_match(n, wanted)]
+    if len(loose) == 1:
+        return loose[0]
+    return None
+
+
 def match_option(field: dict, wanted: str) -> str:
     options = field.get("options") or []
     exact, loose = [], []

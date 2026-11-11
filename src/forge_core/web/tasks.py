@@ -8,9 +8,9 @@ from pathlib import Path
 
 from ..auth.store import Principal
 from ..draft.context import decode_utf8
-from ..draft.github_gh import GhCli, RemoteState, find_field
+from ..draft.github_gh import GhCli, RemoteState, canonical_board_value, find_field
 from ..draft.service import DraftResult, DraftService, parse_model_json_from_body, parse_remote
-from ..draft.template import required_pending, validate_repo
+from ..draft.template import PENDING, required_pending, validate_repo
 from ..errors import DraftError
 from ..storage.drafts import (
     DraftRecord,
@@ -109,8 +109,16 @@ class WebTaskService:
         repo_name = require_allowed_repo(self.repo, repo_name)
         text = decode_utf8(context.encode("utf-8"), origin="contexto")
         output = self.drafts_dir / f"draft-{uuid.uuid4().hex}.md"
+        board = self._board_or_empty()
         meta = {"tipo": "", "prioridade": "", "size": "", "sprint": "", "escopo": ""}
-        result = self.drafts.generate(text, repo_name, principal, output, meta)
+        result = self.drafts.generate(text, repo_name, principal, output, meta, board=board)
+        meta = {
+            "tipo": (result.meta or {}).get("tipo") or "",
+            "prioridade": (result.meta or {}).get("prioridade") or "",
+            "size": (result.meta or {}).get("size") or "",
+            "sprint": "",
+            "escopo": "",
+        }
         preview = self.drafts.preview_text(result, repo_name, meta, result.branch_prefix)
         digest = preview_hash(preview)
         rec = insert_draft(
@@ -118,9 +126,9 @@ class WebTaskService:
             task_id=result.task_id,
             repo_name=repo_name,
             body_md=result.body,
-            tipo="",
-            prioridade="",
-            size="",
+            tipo=meta["tipo"],
+            prioridade=meta["prioridade"],
+            size=meta["size"],
             preview_hash=digest,
             created_by=principal.identity_id,
             status="rascunho",
@@ -128,49 +136,71 @@ class WebTaskService:
         self.repo.record_audit(
             principal.identity_id, "draft.generate", f"task:{result.task_id}", f"ok: repo={repo_name} hash={digest}"
         )
+        pending = required_pending(parse_model_json_from_body(result.body), meta)
         return {
             "task_id": result.task_id,
             "draft_id": rec.id,
             "title": result.title,
+            "body": result.body,
             "preview": preview,
             "preview_hash": digest,
             "repo": repo_name,
+            "tipo": rec.tipo,
+            "prioridade": rec.prioridade,
+            "size": rec.size,
+            "pending": pending,
         }
 
-    def update_fields(self, principal: Principal, task_id: str, tipo: str, prioridade: str, size: str) -> dict:
+    def update_fields(
+        self,
+        principal: Principal,
+        task_id: str,
+        tipo: str,
+        prioridade: str,
+        size: str,
+        body_md: str | None = None,
+    ) -> dict:
         self.tasks._auth.require(principal, "editor")
         draft = latest_draft_for_task(self.repo, task_id)
         if draft is None:
             raise DraftError("draft_missing")
+        if draft.status == "publicado":
+            raise DraftError("draft_published")
+        next_body = draft.body_md
+        if body_md is not None:
+            next_body = decode_utf8(body_md.encode("utf-8"), origin="rascunho")
+        parsed = parse_model_json_from_body(next_body)
+        options = self._board_or_none()
         meta = {
-            "tipo": (tipo or "").strip(),
-            "prioridade": (prioridade or "").strip(),
-            "size": (size or "").strip(),
+            "tipo": self._canonical_field("tipo", tipo, options),
+            "prioridade": self._canonical_field("prioridade", prioridade, options),
+            "size": self._canonical_field("size", size, options),
             "sprint": "",
             "escopo": "",
         }
-        result = self._result_from_draft(draft, principal)
-        pending = required_pending(parse_model_json_from_body(result.body), meta)
-        field_pending = [k for k in pending if k in ("tipo", "prioridade", "size")]
-        if field_pending:
-            raise DraftError("pending_required", ",".join(field_pending))
+        result = self._result_from_body(draft, principal, next_body, parsed["title"])
         preview = self.drafts.preview_text(result, draft.repo, meta, result.branch_prefix)
         digest = preview_hash(preview)
         rec = update_draft(
-            self.repo, draft.id, tipo=meta["tipo"], prioridade=meta["prioridade"], size=meta["size"],
-            preview_hash=digest,
+            self.repo, draft.id,
+            tipo=meta["tipo"], prioridade=meta["prioridade"], size=meta["size"],
+            preview_hash=digest, body_md=next_body,
         )
         self.repo.record_audit(
             principal.identity_id, "draft.fields", f"task:{task_id}", f"ok: repo={draft.repo} hash={digest}"
         )
+        pending = required_pending(parsed, meta)
         return {
             "task_id": task_id,
             "draft_id": rec.id,
+            "title": parsed["title"],
+            "body": rec.body_md,
             "preview": preview,
             "preview_hash": digest,
             "tipo": rec.tipo,
             "prioridade": rec.prioridade,
             "size": rec.size,
+            "pending": pending,
         }
 
     def confirm(self, principal: Principal, task_id: str, submitted_hash: str) -> dict:
@@ -191,7 +221,7 @@ class WebTaskService:
         result = self._result_from_draft(draft, principal)
         pending = required_pending(parse_model_json_from_body(result.body), meta)
         if pending:
-            raise DraftError("pending_required", ",".join(pending))
+            raise DraftError("pending_fields", fields=pending)
         if draft.status == "rascunho":
             draft = update_draft(self.repo, draft.id, status="confirmado")
         try:
@@ -239,14 +269,53 @@ class WebTaskService:
             })
         return out
 
+    def _board_or_empty(self) -> dict:
+        try:
+            return self.fields.get()
+        except DraftError:
+            return {}
+
+    def _board_or_none(self) -> dict | None:
+        try:
+            return self.fields.get()
+        except DraftError:
+            return None
+
+    def _canonical_field(self, key: str, value: str, options: dict | None) -> str:
+        text = (value or "").strip()
+        if not text or text.lower() == PENDING.lower():
+            return ""
+        if options is None:
+            return text
+        names = list(options.get(key) or [])
+        matched = canonical_board_value(names, text)
+        if matched is None:
+            raise DraftError("invalid_board_option", fields=[key])
+        return matched
+
     def _result_from_draft(self, draft: DraftRecord, principal: Principal) -> DraftResult:
-        path = self._materialize(draft)
-        return self.drafts.load_resume(draft.task_id, path, principal, draft.repo)
+        return self._result_from_body(draft, principal, draft.body_md)
+
+    def _result_from_body(
+        self, draft: DraftRecord, principal: Principal, body: str, title: str | None = None,
+    ) -> DraftResult:
+        path = self._materialize_body(draft.task_id, body)
+        result = self.drafts.load_resume(draft.task_id, path, principal, draft.repo)
+        if title:
+            result.title = title
+        else:
+            parsed = parse_model_json_from_body(body)
+            result.title = parsed["title"]
+        result.body = body
+        return result
+
+    def _materialize_body(self, task_id: str, body: str) -> Path:
+        path = self.drafts_dir / f"{task_id}.md"
+        path.write_text(body, encoding="utf-8")
+        return path
 
     def _materialize(self, draft: DraftRecord) -> Path:
-        path = self.drafts_dir / f"{draft.task_id}.md"
-        path.write_text(draft.body_md, encoding="utf-8")
-        return path
+        return self._materialize_body(draft.task_id, draft.body_md)
 
     def _sync_links(self, task_id: str, repo_name: str, principal: Principal, remote: RemoteState | None = None):
         if remote is None:
@@ -311,4 +380,4 @@ def _branch_from_link(link) -> str | None:
     marker = "/tree/"
     if marker in url:
         return url.split(marker, 1)[1]
-        return url or None
+    return url or None

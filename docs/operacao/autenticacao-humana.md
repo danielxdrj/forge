@@ -26,16 +26,18 @@ python -m forge_core.auth.cli bootstrap --expect-github-id <ID_NUMERICO_DO_DONO>
 
 ## Operação do dia a dia
 
-Não há arquivo de sessão. Cada comando faz um login próprio (device flow), executa e revoga a sessão ao terminar. **Custo de UX: cada comando pede novo login no navegador.**
+A sessão Forge fica no banco (`sessions.token_hash`, nunca o token GitHub) e, na CLI, num arquivo 0600 (`$XDG_CONFIG_HOME/forge/session` ou `~/.config/forge/session`; no container, volume `forge_cli_home`). O device flow só corre no primeiro login ou quando a sessão expirar ou for revogada. O prazo padrão é 7 dias (`FORGE_SESSION_TTL_SECONDS`), com renovação deslizante. Papel é relido do banco a cada comando: owner não implica editor.
 
 ```bash
 python -m forge_core.auth.cli whoami                                   # identidade e papéis
 python -m forge_core.auth.cli grant --github-id 1234 --role editor     # só owner
-python -m forge_core.auth.cli revoke --grant-id 7                      # só owner
+python -m forge_core.auth.cli revoke --grant-id 7                      # só owner; invalida as sessões dessa identidade
+python -m forge_core.auth.cli logout                                   # invalida a sessão e apaga o arquivo local
 ```
 
 - Só quem já entrou ao menos uma vez tem identidade no banco. `grant` recusa `identity_unknown` antes disso.
-- Nenhum token, nenhum código de device e nenhum arquivo de sessão são gravados em disco. Não há `FORGE_SESSION_FILE`.
+- O arquivo de sessão contém **somente** o token de sessão do Forge. Risco aceito no volume Docker próprio; nunca monte o keyring/`HOME` do host.
+- `FORGE_SESSION_FILE` pode apontar para outro caminho nos testes. Não coloque o token GitHub nesse arquivo.
 
 ## Quando algo dá errado
 

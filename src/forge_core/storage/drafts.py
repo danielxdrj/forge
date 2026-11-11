@@ -130,6 +130,7 @@ def update_draft(
     size: str | None = None,
     preview_hash: str | None = None,
     status: str | None = None,
+    body_md: str | None = None,
     now: str | None = None,
 ) -> DraftRecord:
     rec = get_draft(repo, draft_id)
@@ -141,12 +142,13 @@ def update_draft(
     next_size = rec.size if size is None else size
     next_hash = rec.preview_hash if preview_hash is None else preview_hash
     next_status = rec.status if status is None else status
+    next_body = rec.body_md if body_md is None else body_md
     repo._run(
         [
             (
-                "UPDATE drafts SET tipo = ?, prioridade = ?, size = ?, preview_hash = ?, status = ?, "
-                "updated_at = ? WHERE id = ?",
-                (next_tipo, next_pri, next_size, next_hash, next_status, ts, draft_id),
+                "UPDATE drafts SET body_md = ?, tipo = ?, prioridade = ?, size = ?, preview_hash = ?, "
+                "status = ?, updated_at = ? WHERE id = ?",
+                (next_body, next_tipo, next_pri, next_size, next_hash, next_status, ts, draft_id),
             )
         ]
     )

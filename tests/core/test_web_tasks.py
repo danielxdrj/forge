@@ -239,14 +239,23 @@ def test_generate_stores_draft_and_fields_and_confirm_publish(tmp_path):
         f"/api/tasks/{task_id}/draft", headers=_h(csrf),
         json={"tipo": "", "prioridade": "Alta", "size": "3"},
     )
-    assert empty.status_code == 400
-    assert empty.json()["error"] == "pending_required"
+    assert empty.status_code == 200
+    assert "tipo" in empty.json()["pending"]
 
     pending_marker = client.post(
         f"/api/tasks/{task_id}/draft", headers=_h(csrf),
         json={"tipo": "[PENDENTE]", "prioridade": "Alta", "size": "3"},
     )
-    assert pending_marker.status_code == 400
+    assert pending_marker.status_code == 200
+    assert "tipo" in pending_marker.json()["pending"]
+
+    unknown = client.post(
+        f"/api/tasks/{task_id}/draft", headers=_h(csrf),
+        json={"tipo": "NaoExiste", "prioridade": "Alta", "size": "3"},
+    )
+    assert unknown.status_code == 400
+    assert unknown.json()["error"] == "invalid_board_option"
+    assert "tipo" in unknown.json()["fields"]
 
     fields = client.post(f"/api/tasks/{task_id}/draft", headers=_h(csrf), json=META_OK)
     assert fields.status_code == 200
@@ -356,3 +365,120 @@ def test_html_login_routes_are_gone(tmp_path):
     assert client.get("/login", headers=HOST).status_code == 404
     assert client.get("/whoami", headers=HOST).status_code == 404
     assert client.get("/", headers=HOST).status_code == 404
+
+
+def test_generate_suggests_board_fields_and_confirm_without_extra_draft(tmp_path):
+    payload = dict(VALID, tipo="Bug", prioridade="Alta", size="3")
+    client, _repo, _ = _app(tmp_path, provider=FakeLLM(json.dumps(payload)))
+    csrf = _login(client)
+    gen = client.post("/api/tasks/generate", headers=_h(csrf), json={"repo": REPO, "context": CONTEXT})
+    assert gen.status_code == 200
+    body = gen.json()
+    assert body["tipo"] == "Bug"
+    assert body["prioridade"] == "Alta"
+    assert body["size"] == "3"
+    assert body["pending"] == []
+    assert body["body"]
+    ok = client.post(
+        f"/api/tasks/{body['task_id']}/confirm",
+        headers=_h(csrf),
+        json={"preview_hash": body["preview_hash"]},
+    )
+    assert ok.status_code == 200
+    assert ok.json()["issue_url"] == ISSUE_URL
+
+
+def test_confirm_pending_body_returns_pending_fields(tmp_path):
+    payload = dict(
+        VALID,
+        objetivo="[PENDENTE]",
+        comportamento_esperado=["[PENDENTE]"],
+        criterios=["[PENDENTE]"],
+        tipo="Bug",
+        prioridade="Alta",
+        size="3",
+    )
+    client, _repo, _ = _app(tmp_path, provider=FakeLLM(json.dumps(payload)))
+    csrf = _login(client)
+    gen = client.post(
+        "/api/tasks/generate", headers=_h(csrf),
+        json={"repo": REPO, "context": "tarefa de teste, solicitado por carlos daniel"},
+    )
+    assert gen.status_code == 200
+    pending = gen.json()["pending"]
+    assert "objetivo" in pending
+    assert "comportamento_esperado" in pending
+    assert "criterios" in pending
+    refused = client.post(
+        f"/api/tasks/{gen.json()['task_id']}/confirm",
+        headers=_h(csrf),
+        json={"preview_hash": gen.json()["preview_hash"]},
+    )
+    assert refused.status_code == 400
+    data = refused.json()
+    assert data["error"] == "pending_fields"
+    assert "objetivo" in data["fields"]
+    assert "comportamento_esperado" in data["fields"]
+    assert "criterios" in data["fields"]
+
+
+def test_edit_body_updates_preview_hash_and_old_hash_conflicts(tmp_path):
+    client, _repo, _ = _app(tmp_path)
+    csrf = _login(client)
+    gen = client.post("/api/tasks/generate", headers=_h(csrf), json={"repo": REPO, "context": CONTEXT})
+    task_id = gen.json()["task_id"]
+    old_hash = gen.json()["preview_hash"]
+    body = gen.json()["body"]
+    edited = body.replace("Corrigir o login.", "Corrigir o login na tela de autenticacao.")
+    saved = client.post(
+        f"/api/tasks/{task_id}/draft",
+        headers=_h(csrf),
+        json={**META_OK, "body_md": edited},
+    )
+    assert saved.status_code == 200
+    new_hash = saved.json()["preview_hash"]
+    assert new_hash != old_hash
+    assert "Corrigir o login na tela de autenticacao." in saved.json()["body"]
+    mismatch = client.post(
+        f"/api/tasks/{task_id}/confirm", headers=_h(csrf), json={"preview_hash": old_hash},
+    )
+    assert mismatch.status_code == 409
+    assert mismatch.json()["error"] == "diff_changed"
+    ok = client.post(
+        f"/api/tasks/{task_id}/confirm", headers=_h(csrf), json={"preview_hash": new_hash},
+    )
+    assert ok.status_code == 200
+
+
+def test_board_fields_error_includes_hint(tmp_path):
+    def runner(argv, **kwargs):
+        cmd = argv[1:]
+        if cmd[:2] == ["auth", "status"]:
+            return subprocess.CompletedProcess(
+                argv, 0, stdout=b"Logged in to github.com as danielxdrj\nToken scopes: 'repo'\n", stderr=b"",
+            )
+        return subprocess.CompletedProcess(argv, 1, stdout=b"", stderr=b"")
+
+    settings = _settings(tmp_path)
+    repo = open_repository(settings.database_url)
+    seed_allowed_repos(repo)
+    owner = bootstrap(repo, FakeGitHub())
+    person(repo, owner, FakeGitHub(), "maria", 42, "editor")
+    from datetime import date
+    gh = GhCli(runner=runner, today=date(2026, 11, 8))
+    app = create_app(repo, settings, transport=Scripted(), provider=FakeLLM(), gh=gh, drafts_dir=tmp_path / "drafts")
+    client = TestClient(app, base_url="http://127.0.0.1:8090")
+    _login(client)
+    r = client.get("/api/board/fields", headers=HOST)
+    assert r.status_code == 400
+    assert r.json()["error"] == "project_scope"
+    assert "project" in (r.json().get("hint") or "")
+
+
+def test_branch_from_link_without_tree_keeps_url():
+    from types import SimpleNamespace
+    from forge_core.web.tasks import _branch_from_link
+
+    assert _branch_from_link(None) is None
+    assert _branch_from_link(SimpleNamespace(url="https://github.com/org/repo/tree/feat-x")) == "feat-x"
+    assert _branch_from_link(SimpleNamespace(url="feat-x")) == "feat-x"
