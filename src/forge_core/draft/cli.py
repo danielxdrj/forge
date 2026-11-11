@@ -27,7 +27,7 @@ def _flag_given(argv: list[str], name: str) -> bool:
 
 
 def run(argv: list[str], env: Mapping[str, str] | None = None, transport: Transport | None = None,
-        provider=None, gh=None, out=None, err=None, stdin=None) -> int:
+        provider=None, gh=None, git=None, out=None, err=None, stdin=None) -> int:
     env = os.environ if env is None else env
     out = out or sys.stdout
     err = err or sys.stderr
@@ -51,6 +51,8 @@ def run(argv: list[str], env: Mapping[str, str] | None = None, transport: Transp
     d.add_argument("--escopo", default="", help="só campo de board, nunca seção do corpo")
     d.add_argument("--branch-prefix", default="", help="prefixo já usado no cadastro (ADR-012)")
     d.add_argument("--model", default="", help="mesmo que FORGE_CURSOR_MODEL (precedência: flag > env)")
+    from ..resolver import cli as resolver_cli
+    resolver_cli.add_parser(sub)
     args = parser.parse_args(argv)
     if args.cmd == "doctor":
         try:
@@ -61,6 +63,18 @@ def run(argv: list[str], env: Mapping[str, str] | None = None, transport: Transp
         except ForgeError as exc:
             print(f"forge-tasks: erro ({type(exc).__name__})", file=err)
             return 1
+    if args.cmd == "resolver":
+        try:
+            return resolver_cli._execute(args, argv, env, transport, provider, gh, git, out, err, stdin)
+        except DeviceFlowError as exc:
+            print(f"forge-tasks: falha no login ({exc.code})", file=err)
+        except DraftError as exc:
+            print(f"forge-tasks: {exc}", file=err)
+        except (AuthenticationError, AuthorizationError, ConfigError) as exc:
+            print(f"forge-tasks: {exc}", file=err)
+        except ForgeError as exc:
+            print(f"forge-tasks: erro ({type(exc).__name__})", file=err)
+        return 1
     if args.cmd != "draft":
         return 1
     try:

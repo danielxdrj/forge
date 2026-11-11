@@ -63,6 +63,10 @@ As seções são investigação, automações, log local, conexões e configura�
 
 `src/forge_core/draft/` lê contexto por `ContextSource` (`--contexto` / `--arquivo`, stdin `-`), gera o corpo no template fixo e só então, com confirmação ou `--retomar`, chama o `gh` (dublê em `tests/core/test_draft.py`).
 
+## Resolver de issue
+
+`src/forge_core/resolver/` clona o repo-alvo, chama o mesmo `ProviderAdapter.complete` em modo implementador (Cursor CLI hoje) só no clone temporário e, após `s`/`sim`, o Forge faz push e abre PR em rascunho (`Closes #n`). Testes em `tests/core/test_resolver.py` usam motor e `gh` falsos.
+
 ## O que este guia não cobre ainda
 
 Upload de log, conectores externos, cofre de segredos, a ligação da tela com a API e agentes privilegiados continuam nas etapas seguintes.

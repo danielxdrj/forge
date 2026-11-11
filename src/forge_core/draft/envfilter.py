@@ -78,10 +78,36 @@ def filter_env(src: Mapping[str, str], allow: frozenset[str], *,
     return out
 
 
+_GH_PATH_OK = frozenset({"GH_HOST", "GH_CONFIG_DIR"})
+
+
 def assert_no_host_secrets(env: Mapping[str, str]) -> None:
     for key in env:
         ku = key.upper()
         if ku in ("GH_TOKEN", "GITHUB_TOKEN", "DATABASE_URL") or ku.startswith("FORGE_") or (
-            ku.startswith("GH_") and ku != "GH_HOST"
+            ku.startswith("GH_") and ku not in _GH_PATH_OK
         ) or ku.startswith("GITHUB_"):
             raise AssertionError(f"env vazou {key}")
+
+
+def harden_implementer_env(child: dict[str, str], scratch: str) -> dict[str, str]:
+    """Git/gh do motor não veem credencial do operador. HOME/APPDATA podem ficar para a Cursor CLI."""
+    from pathlib import Path
+    root = Path(scratch)
+    root.mkdir(parents=True, exist_ok=True)
+    global_cfg = root / "gitconfig.empty"
+    if not global_cfg.is_file():
+        global_cfg.write_text("", encoding="utf-8")
+    gh_dir = root / "gh-config"
+    gh_dir.mkdir(exist_ok=True)
+    child["GIT_CONFIG_NOSYSTEM"] = "1"
+    child["GIT_CONFIG_GLOBAL"] = str(global_cfg.resolve())
+    child["GIT_TERMINAL_PROMPT"] = "0"
+    child["GH_CONFIG_DIR"] = str(gh_dir.resolve())
+    child["GCM_INTERACTIVE"] = "never"
+    child["GIT_ASKPASS"] = ""
+    child["SSH_ASKPASS"] = ""
+    for key in list(child):
+        if key.upper() == "SSH_AUTH_SOCK":
+            del child[key]
+    return child

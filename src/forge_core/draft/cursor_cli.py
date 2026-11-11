@@ -17,7 +17,7 @@ from pathlib import Path, PureWindowsPath
 from ..agents.provider import ProviderResponse
 from ..errors import DraftError
 from ..logging import redact
-from .envfilter import assert_no_host_secrets, cursor_env_allow, filter_env
+from .envfilter import assert_no_host_secrets, cursor_env_allow, filter_env, harden_implementer_env
 from .template import INSTRUCTION
 
 # https://cursor.com/docs/cli/reference/permissions
@@ -34,6 +34,13 @@ DOCUMENTED_DENY = (
     "WebFetch(*)",
     "Mcp(*:*)",
 )
+
+# ADR-016: no clone temporário o motor pode editar e testar; MCP e web continuam negados.
+IMPLEMENTER_DENY = (
+    "WebFetch(*)",
+    "Mcp(*:*)",
+)
+IMPLEMENTER_MODE = "agent"
 
 FORBIDDEN_FLAGS = ("--force", "--yolo", "-f", "--approve-mcps")
 TRUST_FLAG = "--trust"
@@ -149,6 +156,7 @@ def build_cursor_child_env(
     *,
     platform: str,
     scratch_tmp: str | None = None,
+    isolate_git: bool = False,
 ) -> dict[str, str]:
     child = filter_env(src, cursor_env_allow(platform))
     child["NODE_OPTIONS"] = forge_node_options(src)
@@ -160,6 +168,11 @@ def build_cursor_child_env(
     assert_no_host_secrets(child)
     if any(k.upper().startswith("FORGE_") for k in child):
         raise DraftError("unsafe_flags")
+    if isolate_git:
+        if not scratch_tmp:
+            raise DraftError("unsafe_flags")
+        harden_implementer_env(child, scratch_tmp)
+        assert_no_host_secrets(child)
     return child
 
 
@@ -183,7 +196,10 @@ class CursorCliAdapter:
     def __init__(self, *, agent_bin: str | None = None, model: str | None = None,
                  timeout: int = DEFAULT_TIMEOUT, env: Mapping[str, str] | None = None,
                  runner: Runner | None = None, which: WhichFn | None = None,
-                 path_exists: ExistsFn | None = None, platform: str | None = None):
+                 path_exists: ExistsFn | None = None, platform: str | None = None,
+                 workspace: str | None = None, mode: str = "ask",
+                 deny: tuple[str, ...] | None = None, cleanup_workspace: bool = True,
+                 isolate_git: bool = False):
         self.agent_bin = agent_bin
         self.model = model
         self.timeout = timeout
@@ -192,6 +208,11 @@ class CursorCliAdapter:
         self._which = which
         self._path_exists = path_exists
         self._platform = platform
+        self.workspace = workspace
+        self.mode = mode
+        self.deny = deny if deny is not None else DOCUMENTED_DENY
+        self.cleanup_workspace = cleanup_workspace
+        self.isolate_git = isolate_git
         self.last_workspace: str | None = None
         self.last_scratch: str | None = None
         self.last_argv: list[str] | None = None
@@ -207,19 +228,26 @@ class CursorCliAdapter:
             env, which=self._which, path_exists=self._path_exists, platform=platform,
         )
         self.last_resolved_bin = agent_bin
-        workspace = tempfile.mkdtemp(prefix=WORKSPACE_PREFIX)
+        owned = self.workspace
+        if owned:
+            workspace = str(Path(owned))
+            self.last_workspace = workspace
+        else:
+            workspace = tempfile.mkdtemp(prefix=WORKSPACE_PREFIX)
+            self.last_workspace = workspace
         scratch = tempfile.mkdtemp(prefix=SCRATCH_PREFIX)
-        self.last_workspace = workspace
         self.last_scratch = scratch
         try:
-            self._prepare_workspace(workspace)
+            self._prepare_workspace(workspace, require_empty=owned is None)
             argv = self._argv_for(workspace, agent_bin)
             self.last_argv = list(argv)
             if any(f in argv for f in FORBIDDEN_FLAGS):
                 raise DraftError("unsafe_flags")
             if TRUST_FLAG in argv and not is_owned_forge_workspace(workspace, self.last_workspace):
                 raise DraftError("unsafe_flags")
-            child_env = build_cursor_child_env(env, platform=platform, scratch_tmp=scratch)
+            child_env = build_cursor_child_env(
+                env, platform=platform, scratch_tmp=scratch, isolate_git=self.isolate_git,
+            )
             if Path(child_env.get("TMP", scratch)).resolve() == Path(workspace).resolve():
                 raise DraftError("unsafe_flags")
             self.last_child_env = child_env
@@ -246,24 +274,26 @@ class CursorCliAdapter:
                 raise DraftError("cursor_cli_error", hint)
             return ProviderResponse(text=raw.decode("utf-8", "replace"))
         finally:
-            shutil.rmtree(workspace, ignore_errors=True)
+            if self.cleanup_workspace and owned is None:
+                shutil.rmtree(workspace, ignore_errors=True)
             shutil.rmtree(scratch, ignore_errors=True)
 
-    def _prepare_workspace(self, workspace: str) -> None:
+    def _prepare_workspace(self, workspace: str, *, require_empty: bool = True) -> None:
         cursor_dir = Path(workspace) / ".cursor"
-        cursor_dir.mkdir()
+        cursor_dir.mkdir(exist_ok=not require_empty)
         (cursor_dir / "cli.json").write_text(
-            json.dumps({"permissions": {"allow": [], "deny": list(DOCUMENTED_DENY)}}, indent=2),
+            json.dumps({"permissions": {"allow": [], "deny": list(self.deny)}}, indent=2),
             encoding="utf-8",
         )
-        leftovers = [p.name for p in Path(workspace).iterdir() if p.name != ".cursor"]
-        if leftovers:
-            raise DraftError("workspace_not_empty")
+        if require_empty:
+            leftovers = [p.name for p in Path(workspace).iterdir() if p.name != ".cursor"]
+            if leftovers:
+                raise DraftError("workspace_not_empty")
 
     def _argv_for(self, workspace: str, agent_bin: str | None = None) -> list[str]:
         bin_path = agent_bin or self.last_resolved_bin or self.agent_bin or "agent"
         argv = [
-            bin_path, "-p", "--output-format", "text", "--mode", "ask",
+            bin_path, "-p", "--output-format", "text", "--mode", self.mode,
             "--workspace", workspace,
         ]
         if self.model:
@@ -271,6 +301,15 @@ class CursorCliAdapter:
         if is_owned_forge_workspace(workspace, self.last_workspace):
             argv.append(TRUST_FLAG)
         return argv
+
+
+def implementer_adapter(**kwargs) -> CursorCliAdapter:
+    """Mesma porta ProviderAdapter.complete; workspace = clone temporário (ADR-016)."""
+    kwargs.setdefault("mode", IMPLEMENTER_MODE)
+    kwargs.setdefault("deny", IMPLEMENTER_DENY)
+    kwargs.setdefault("cleanup_workspace", False)
+    kwargs.setdefault("isolate_git", True)
+    return CursorCliAdapter(**kwargs)
 
 
 def build_prompt(user_context: str) -> str:

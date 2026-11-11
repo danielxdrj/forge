@@ -458,9 +458,9 @@ def parse_model_json_from_body(body: str) -> dict:
     }
 
 
-def ask_confirm(text: str, *, yes: bool, stdin, out) -> bool:
+def ask_confirm(text: str, *, yes: bool, stdin, out, question: str | None = None) -> bool:
     print(text, file=out)
-    print("Criar issue/board/branch no GitHub? [s/N]", file=out)
+    print(question or "Criar issue/board/branch no GitHub? [s/N]", file=out)
     if yes:
         return True
     if stdin is None or not hasattr(stdin, "isatty") or not stdin.isatty():
