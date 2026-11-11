@@ -52,6 +52,14 @@ WhichFn = Callable[[str], str | None]
 ExistsFn = Callable[[str], bool]
 
 
+def resolve_cursor_model(env: Mapping[str, str], *, flag: str | None = None) -> str | None:
+    """Precedência compartilhada por draft e doctor: flag CLI > FORGE_CURSOR_MODEL > padrão da CLI."""
+    for raw in (flag, env.get("FORGE_CURSOR_MODEL")):
+        if raw and str(raw).strip():
+            return str(raw).strip()
+    return None
+
+
 def resolve_agent_executable(
     env: Mapping[str, str],
     *,
@@ -278,6 +286,7 @@ def diagnose_cursor_cli(
     path_exists: ExistsFn | None = None,
     platform: str | None = None,
     timeout: int = 60,
+    model_flag: str | None = None,
 ) -> int:
     """Diagnóstico: nomes de env, caminhos, `agent --version` e uma chamada mínima. Sem valores secretos."""
     platform = sys.platform if platform is None else platform
@@ -306,9 +315,11 @@ def diagnose_cursor_cli(
         vtext = (ver.stdout or b"").decode("utf-8", "replace").strip()
         print(f"version_exit: {ver.returncode}", file=out)
         print(f"version: {redact(vtext)[:200]}", file=out)
+        model = resolve_cursor_model(env, flag=model_flag)
+        print("model=" + (model if model else "(padrão da CLI)"), file=out)
         adapter = CursorCliAdapter(
             agent_bin=agent, env=env, runner=runner, which=which,
-            path_exists=path_exists, platform=platform, timeout=timeout, model=None,
+            path_exists=path_exists, platform=platform, timeout=timeout, model=model,
         )
         try:
             resp = adapter.complete("responda OK")

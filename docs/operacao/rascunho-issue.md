@@ -30,10 +30,12 @@ OAuth Client ID é o público já usado no login Forge. Não grave token no Git.
 
 ## Diagnóstico Cursor CLI (`doctor`)
 
-Não exige `FORGE_DATABASE_URL`. Mostra caminho do `agent`, `agent --version`, **nomes** das variáveis repassadas (nunca valores), scratch TMP, `NODE_OPTIONS` injetado, e uma chamada mínima (`responda OK`) pelo mesmo adaptador.
+Não exige `FORGE_DATABASE_URL`. Mostra caminho do `agent`, `agent --version`, **nomes** das variáveis repassadas (nunca valores), scratch TMP, `NODE_OPTIONS` injetado, `model=` (flag `--model` > `FORGE_CURSOR_MODEL` > padrão da CLI) e uma chamada mínima (`responda OK`) pelo **mesmo** resolvedor de modelo do `draft`.
 
 ```powershell
+$env:FORGE_CURSOR_MODEL = "<MODELO_DA_ASSINATURA>"
 python -m forge_core.draft doctor
+python -m forge_core.draft doctor --model composer-2.5
 # ou:
 forge-tasks doctor
 ```

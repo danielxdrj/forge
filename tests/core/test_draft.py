@@ -23,6 +23,7 @@ from forge_core.draft.cursor_cli import (
     format_cursor_cli_error,
     forge_node_options,
     resolve_agent_executable,
+    resolve_cursor_model,
 )
 from forge_core.draft.envfilter import (
     CURSOR_ENV_ALLOW_WIN,
@@ -392,6 +393,7 @@ def test_doctor_prints_names_not_secrets():
     env = {
         "PATH": "/bin", "HOME": "/h", "CURSOR_API_KEY": "super-secret-key",
         "GH_TOKEN": "gho_nope", "FORGE_CURSOR_AGENT": "agent",
+        "FORGE_CURSOR_MODEL": "composer-2.5",
     }
     code = diagnose_cursor_cli(env, out=out, runner=runner, platform="linux")
     assert code == 0
@@ -401,7 +403,66 @@ def test_doctor_prints_names_not_secrets():
     assert "CURSOR_API_KEY" in out.text
     assert "agent_path:" in out.text
     assert "probe_exit: 0" in out.text
+    assert "model=composer-2.5" in out.text
+    probes = [a for a in seen if "-p" in a]
+    assert probes and "--model" in probes[0] and "composer-2.5" in probes[0]
     assert any("--version" in a for a in seen)
+
+
+def test_doctor_and_draft_use_the_same_model_resolution():
+    env = {"FORGE_CURSOR_MODEL": "composer-2.5"}
+    assert resolve_cursor_model(env) == "composer-2.5"
+    assert resolve_cursor_model(env, flag="  other-model  ") == "other-model"
+    assert resolve_cursor_model({}, flag="") is None
+    assert resolve_cursor_model({}) is None
+    draft_model = resolve_cursor_model(env, flag="")
+    doctor_model = resolve_cursor_model(env, flag=None)
+    assert draft_model == doctor_model == "composer-2.5"
+    seen = {}
+
+    def runner(argv, cwd=None, env=None, **kwargs):
+        if "-p" in argv:
+            seen["probe"] = argv
+        return subprocess.CompletedProcess(argv, 0, stdout=b"OK\n", stderr=b"")
+
+    diagnose_cursor_cli(
+        {"PATH": "/bin", "FORGE_CURSOR_AGENT": "agent", "FORGE_CURSOR_MODEL": "composer-2.5"},
+        out=_Buf(), runner=runner, platform="linux",
+    )
+    adapter = CursorCliAdapter(
+        runner=runner, env={"PATH": "/bin"}, agent_bin="agent",
+        model=resolve_cursor_model({"FORGE_CURSOR_MODEL": "composer-2.5"}),
+    )
+    adapter.complete("x")
+    assert seen["probe"].count("composer-2.5") == 1
+    assert adapter.last_argv.count("composer-2.5") == 1
+    assert adapter.last_argv[adapter.last_argv.index("--model") + 1] == seen["probe"][seen["probe"].index("--model") + 1]
+
+
+def test_doctor_cli_flag_overrides_env_like_draft():
+    env = {"PATH": "/bin", "FORGE_CURSOR_AGENT": "agent", "FORGE_CURSOR_MODEL": "from-env"}
+    assert resolve_cursor_model(env, flag="from-flag") == "from-flag"
+    seen = []
+
+    def runner(argv, cwd=None, env=None, **kwargs):
+        seen.append(argv)
+        return subprocess.CompletedProcess(argv, 0, stdout=b"OK\n", stderr=b"")
+
+    out = _Buf()
+    code = diagnose_cursor_cli(env, out=out, runner=runner, platform="linux", model_flag="from-flag")
+    assert code == 0
+    assert "model=from-flag" in out.text
+    probes = [a for a in seen if "-p" in a]
+    assert "from-flag" in probes[0] and "from-env" not in probes[0]
+    seen.clear()
+    out2 = _Buf()
+    diagnose_cursor_cli(
+        {"PATH": "/bin", "FORGE_CURSOR_AGENT": "agent"},
+        out=out2, runner=runner, platform="linux",
+    )
+    assert "model=(padrão da CLI)" in out2.text
+    probes2 = [a for a in seen if "-p" in a]
+    assert probes2 and "--model" not in probes2[0]
 
 
 def test_cli_contexto_arquivo_stdin_editor_ok_viewer_denied(tmp_path):

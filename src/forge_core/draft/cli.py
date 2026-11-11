@@ -15,7 +15,7 @@ from ..errors import AuthenticationError, AuthorizationError, ConfigError, Draft
 from ..storage.sql import open_repository
 from ..tasks.service import TaskService
 from .context import resolve_source
-from .cursor_cli import CursorCliAdapter, diagnose_cursor_cli
+from .cursor_cli import CursorCliAdapter, diagnose_cursor_cli, resolve_cursor_model
 from .github_gh import GhCli
 from .service import DraftService, ask_confirm
 from .template import validate_repo
@@ -29,7 +29,8 @@ def run(argv: list[str], env: Mapping[str, str] | None = None, transport: Transp
     stdin = sys.stdin if stdin is None else stdin
     parser = argparse.ArgumentParser(prog="forge-tasks", description="Rascunho de issue (Forge).")
     sub = parser.add_subparsers(dest="cmd", required=True)
-    sub.add_parser("doctor", help="diagnóstico do adaptador Cursor CLI (sem valores de segredo)")
+    doc = sub.add_parser("doctor", help="diagnóstico do adaptador Cursor CLI (sem valores de segredo)")
+    doc.add_argument("--model", default="", help="mesmo que FORGE_CURSOR_MODEL (precedência: flag > env)")
     d = sub.add_parser("draft", help="gerar rascunho e opcionalmente publicar com gh local")
     d.add_argument("context", nargs="?", help="alias do --contexto")
     d.add_argument("--contexto", default="", help="contexto em texto livre")
@@ -44,10 +45,11 @@ def run(argv: list[str], env: Mapping[str, str] | None = None, transport: Transp
     d.add_argument("--size", default="")
     d.add_argument("--escopo", default="", help="só campo de board, nunca seção do corpo")
     d.add_argument("--branch-prefix", default="", help="prefixo já usado no cadastro (ADR-012)")
+    d.add_argument("--model", default="", help="mesmo que FORGE_CURSOR_MODEL (precedência: flag > env)")
     args = parser.parse_args(argv)
     if args.cmd == "doctor":
         try:
-            return diagnose_cursor_cli(env, out=out)
+            return diagnose_cursor_cli(env, out=out, model_flag=args.model)
         except DraftError as exc:
             print(f"forge-tasks: {exc}", file=err)
             return 1
@@ -63,7 +65,7 @@ def run(argv: list[str], env: Mapping[str, str] | None = None, transport: Transp
         if not settings.github_client_id:
             raise ConfigError("FORGE_GITHUB_CLIENT_ID é obrigatória para entrar")
         validate_repo(args.repo)
-        model = env.get("FORGE_CURSOR_MODEL", "").strip()
+        model = resolve_cursor_model(env, flag=args.model)
         if not args.retomar and provider is None and not model:
             raise DraftError("model_required")
 
