@@ -154,6 +154,22 @@ def test_template_order_and_pending_and_no_scope():
     with pytest.raises(DraftError) as ei:
         parse_model_json(json.dumps(dict(VALID, observacoes=["pendência de escopo do Forge"])))
     assert ei.value.code == "scope_in_body"
+    ok_ctx = parse_model_json(json.dumps(dict(
+        VALID,
+        contexto="ajustar o escopo do relatorio",
+        observacoes=["fora do escopo desta sprint"],
+    )))
+    assert "escopo do relatorio" in ok_ctx["contexto"]
+    assert "escopo desta sprint" in ok_ctx["observacoes"][0]
+    with pytest.raises(DraftError) as ei:
+        parse_model_json(json.dumps(dict(VALID, situacao_atual="Escopo:\nainda vazio")))
+    assert ei.value.code == "scope_in_body"
+    with pytest.raises(DraftError) as ei:
+        parse_model_json(json.dumps(dict(VALID, criterios=["definir o escopo operacional"])))
+    assert ei.value.code == "scope_in_body"
+    with pytest.raises(DraftError) as ei:
+        parse_model_json(json.dumps(dict(VALID, observacoes=["falta a configuração do Forge"])))
+    assert ei.value.code == "scope_in_body"
 
 
 def test_any_pending_marker_blocks_remote():

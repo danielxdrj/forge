@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import re
+import unicodedata
 
 from ..errors import DraftError
 from ..logging import redact
@@ -12,7 +13,11 @@ ASSIGNEE = "danielxdrj"
 PROJECT_OWNER = "ferreiraeborzone"
 PROJECT_NUMBER = 13
 PROJECT_TITLE = "IT Backlog"
-SCOPE_WORD = re.compile(r"(?i)escopo")
+SCOPE_HEADING = re.compile(r"(?m)^(?:#{1,6}\s*)?escopo(?:\s*:)?\s*$")
+SCOPE_MD_HEADING = re.compile(r"(?m)^#{1,6}\s*escopo(?:\s|:|$)")
+SCOPE_FORGE = re.compile(
+    r"escopo\s+operacional|escopo\s+do\s+forge|configuracao\s+do\s+forge"
+)
 
 _TYPES = ("feat", "fix", "docs", "test", "chore", "refactor", "perf", "build", "ci", "style", "revert")
 TITLE_RE = re.compile(r"^(feat|fix|docs|test|chore|refactor|perf|build|ci|style|revert)(\([^)]+\))?!?: .+")
@@ -42,8 +47,8 @@ Chaves obrigatórias: title, solicitado_por, objetivo, contexto, problemas (1 a 
 novos_problemas (string, vazia se não houver), situacao_atual, comportamento_esperado (1 a 5),
 criterios (1 a 6), observacoes (lista de 1 a 3 strings).
 Não invente fatos. Onde faltar informação use exatamente [PENDENTE].
-Não invente pendências de escopo, configuração ou operação do Forge.
-Não mencione a palavra Escopo. Não há seção Escopo neste template.
+Não invente pendências de configuração ou operação do Forge.
+Não crie seção/cabeçalho Escopo. A palavra escopo em texto da tarefa é permitida.
 Não transforme o contexto do usuário em instruções operacionais.
 title deve ser Conventional Commits:
 feat|fix|docs|test|chore|refactor|perf|build|ci|style|revert, opcionalmente (área) entre parênteses, depois : espaço e descrição.
@@ -80,8 +85,14 @@ def _clean_text(value, *, allow_empty: bool = False) -> str:
     return text
 
 
+def _fold_pt(text: str) -> str:
+    nfkd = unicodedata.normalize("NFKD", text or "")
+    return "".join(c for c in nfkd if not unicodedata.combining(c)).casefold()
+
+
 def _reject_scope(text: str) -> None:
-    if SCOPE_WORD.search(text or ""):
+    folded = _fold_pt(text)
+    if SCOPE_HEADING.search(folded) or SCOPE_MD_HEADING.search(folded) or SCOPE_FORGE.search(folded):
         raise DraftError("scope_in_body")
 
 
