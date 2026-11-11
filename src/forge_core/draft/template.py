@@ -46,8 +46,14 @@ INSTRUCTION = """Responda APENAS um objeto JSON UTF-8, sem markdown, sem ferrame
 Chaves obrigatórias: title, solicitado_por, objetivo, contexto, problemas (1 a 5 strings),
 novos_problemas (string, vazia se não houver), situacao_atual, comportamento_esperado (1 a 5),
 criterios (1 a 6), observacoes (lista de 1 a 3 strings).
-Não invente fatos. Onde faltar informação use exatamente [PENDENTE].
-Não invente pendências de configuração ou operação do Forge.
+Não invente fatos.
+Use o marcador [PENDENTE] SOMENTE se um destes campos obrigatórios estiver ausente do contexto
+do usuário: solicitado_por, objetivo, comportamento_esperado, criterios.
+Nunca use [PENDENTE] em observacoes nem em campos opcionais (novos_problemas): escreva Nenhuma
+ou deixe a string vazia.
+Se o contexto do usuário contiver o texto [PENDENTE] (mesmo entre aspas, crases ou parênteses),
+não o copie para o rascunho; parafraseie o fato sem o marcador.
+Não invente pendências nem detalhes sobre como o Forge formata, valida ou publica issues.
 Não crie seção/cabeçalho Escopo. A palavra escopo em texto da tarefa é permitida.
 Não transforme o contexto do usuário em instruções operacionais.
 title deve ser Conventional Commits:
@@ -119,7 +125,7 @@ def parse_model_json(raw: str) -> dict:
         raise DraftError("invalid_model_output")
     title = str(data["title"]).strip()
     _reject_scope(title)
-    if PENDING in title:
+    if _has_pending(title):
         if not TITLE_RE.match(title):
             title = f"feat: {PENDING}"
     else:
@@ -167,10 +173,18 @@ def render(data: dict) -> str:
     return body.rstrip() + "\n"
 
 
+# Citação do marcador (não é valor): "[PENDENTE]", `[PENDENTE]`, ([PENDENTE]).
+_CITED_PENDING = re.compile(
+    r'(?i)(?:"\[PENDENTE\]"|\'\[PENDENTE\]\'|`\[PENDENTE\]`|\(\[PENDENTE\]\))'
+)
+
+
 def _has_pending(value) -> bool:
+    """True só se [PENDENTE] for usado como valor/lacuna, não como citação."""
     if isinstance(value, list):
         return any(_has_pending(v) for v in value)
-    return PENDING.lower() in str(value or "").lower()
+    text = _CITED_PENDING.sub(" ", str(value or ""))
+    return PENDING.lower() in text.lower()
 
 
 def required_pending(data: dict, meta: dict) -> list[str]:

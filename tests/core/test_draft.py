@@ -181,6 +181,19 @@ def test_any_pending_marker_blocks_remote():
     assert required_pending(parse_model_json(json.dumps(VALID)), META) == []
     data3 = parse_model_json(json.dumps(dict(VALID, observacoes=["ok", "falta [PENDENTE]"])))
     assert "observacoes" in required_pending(data3, META)
+    cited = parse_model_json(json.dumps(dict(
+        VALID,
+        problemas=["O contexto do usuario citou ([PENDENTE]) literalmente"],
+        observacoes=['Nenhuma. O texto tinha "[PENDENTE]" e `[PENDENTE]`.'],
+    )))
+    assert required_pending(cited, META) == []
+    gap = parse_model_json(json.dumps(dict(
+        VALID,
+        observacoes=["Detalhes tecnicos de como o Forge aplica formatacao: [PENDENTE] se necessario"],
+    )))
+    assert "observacoes" in required_pending(gap, META)
+    labeled = parse_model_json(json.dumps(dict(VALID, situacao_atual="Campo: [PENDENTE]")))
+    assert "situacao_atual" in required_pending(labeled, META)
 
 
 def test_title_and_repo_validation():
