@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.19.0](https://github.com/danielxdrj/forge/compare/v0.18.0...v0.19.0) (2026-11-11)
+
+
+### Features
+
+* **web:** container local com Postgres e login device flow (ADR-017) ([#31](https://github.com/danielxdrj/forge/issues/31)) ([8c0dda5](https://github.com/danielxdrj/forge/commit/8c0dda522084e65b787cd381a20c78a54957b321))
+
 ## [0.18.0](https://github.com/danielxdrj/forge/compare/v0.17.0...v0.18.0) (2026-11-11)
 
 
