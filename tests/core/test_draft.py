@@ -19,10 +19,17 @@ from forge_core.draft.cursor_cli import (
     STDERR_SNIPPET,
     TRUST_FLAG,
     CursorCliAdapter,
+    diagnose_cursor_cli,
     format_cursor_cli_error,
+    forge_node_options,
     resolve_agent_executable,
 )
-from forge_core.draft.envfilter import GH_ENV_ALLOW, filter_env
+from forge_core.draft.envfilter import (
+    CURSOR_ENV_ALLOW_WIN,
+    GH_ENV_ALLOW,
+    cursor_env_allow,
+    filter_env,
+)
 from forge_core.draft.github_gh import GhCli
 from forge_core.draft.service import DraftService, parse_remote, sidecar_path
 from forge_core.draft.template import (
@@ -192,6 +199,11 @@ def test_cursor_temp_cwd_deny_allowlist_payload_and_cleanup(tmp_path):
     assert seen["input"] == prompt.encode("utf-8")
     assert seen["shell"] is False
     assert "GH_TOKEN" not in seen["env"]
+    assert adapter.last_stdin_eof is True
+    tmp = seen["env"].get("TMP") or seen["env"].get("TEMP") or seen["env"].get("TMPDIR")
+    assert tmp and Path(tmp).resolve() != Path(seen["cwd"]).resolve()
+    assert seen["env"].get("NODE_OPTIONS") == "--max-old-space-size=512"
+    assert "FORGE_" not in " ".join(seen["env"])
     assert not Path(adapter.last_workspace).exists()
     assert "Shell()" not in seen["deny"] and "Read()" not in seen["deny"]
 
@@ -299,9 +311,97 @@ def test_cursor_cli_error_redacts_and_truncates_stderr():
 
 
 def test_env_filter_drops_forge_and_gh_tokens():
-    src = {"PATH": "/bin", "GH_TOKEN": "x", "FORGE_CONFIG_DIR": "c", "HOME": "/h"}
+    src = {"PATH": "/bin", "GH_TOKEN": "x", "FORGE_CONFIG_DIR": "c", "HOME": "/h", "GITHUB_TOKEN": "y"}
     out = filter_env(src, GH_ENV_ALLOW)
     assert "GH_TOKEN" not in out and "FORGE_CONFIG_DIR" not in out
+    assert "GITHUB_TOKEN" not in out
+
+
+def test_windows_allowlist_keeps_systemroot_drops_secrets():
+    src = {
+        "SystemRoot": r"C:\Windows", "ComSpec": r"C:\Windows\system32\cmd.exe",
+        "PATHEXT": ".COM;.EXE;.BAT;.CMD", "LOCALAPPDATA": r"C:\Users\me\AppData\Local",
+        "USERPROFILE": r"C:\Users\me", "NUMBER_OF_PROCESSORS": "8",
+        "PROCESSOR_ARCHITECTURE": "AMD64", "OS": "Windows_NT",
+        "ProgramFiles": r"C:\Program Files", "ALLUSERSPROFILE": r"C:\ProgramData",
+        "TEMP": r"C:\Windows\Temp", "CURSOR_API_KEY": "cursor-session",
+        "GH_TOKEN": "gho_secret", "GITHUB_TOKEN": "ghs_secret",
+        "FORGE_DATABASE_URL": "sqlite:///x", "DATABASE_URL": "postgresql://x",
+        "NODE_OPTIONS": "--require evil.js --max-old-space-size=64",
+        "gh_extra": "nope",
+    }
+    allow = cursor_env_allow("win32")
+    assert "SYSTEMROOT" in {x.upper() for x in CURSOR_ENV_ALLOW_WIN}
+    out = filter_env(src, allow)
+    assert out["SystemRoot"] == r"C:\Windows"
+    assert out["TEMP"] == r"C:\Windows\Temp"
+    assert out["CURSOR_API_KEY"] == "cursor-session"
+    assert "GH_TOKEN" not in out and "GITHUB_TOKEN" not in out
+    assert "FORGE_DATABASE_URL" not in out and "DATABASE_URL" not in out
+    assert "NODE_OPTIONS" not in out
+    assert forge_node_options(src) == "--max-old-space-size=512"
+    child_src = dict(src)
+    child_src["FORGE_CURSOR_MAX_OLD_SPACE_MB"] = "768"
+    from forge_core.draft.cursor_cli import build_cursor_child_env
+    child = build_cursor_child_env(child_src, platform="win32", scratch_tmp=r"D:\scratch")
+    assert child["NODE_OPTIONS"] == "--max-old-space-size=768"
+    assert "--require" not in child["NODE_OPTIONS"]
+    assert "FORGE_CURSOR_MAX_OLD_SPACE_MB" not in child
+    assert child["TEMP"] == r"C:\Windows\Temp"
+    assert child["TEMP"] != r"D:\scratch"
+
+
+def test_posix_scratch_tmp_when_host_has_none_and_stdin_eof():
+    seen = {}
+
+    def runner(argv, cwd=None, env=None, **kwargs):
+        seen["cwd"] = cwd
+        seen["env"] = env
+        seen["input"] = kwargs.get("input")
+        seen["calls"] = seen.get("calls", 0) + 1
+        return subprocess.CompletedProcess(argv, 0, stdout=b"ok", stderr=b"")
+
+    adapter = CursorCliAdapter(runner=runner, env={"PATH": "/bin"}, agent_bin="agent", platform="linux")
+    adapter.complete("hi")
+    assert seen["calls"] == 1
+    assert seen["input"] == b"hi"
+    assert adapter.last_stdin_eof is True
+    tmp = seen["env"]["TMPDIR"]
+    assert Path(tmp).resolve() != Path(seen["cwd"]).resolve()
+    assert Path(tmp).name.startswith("forge-cursor-scratch-") or not Path(tmp).exists()
+
+
+def test_cursor_cli_error_uses_stdout_when_stderr_empty():
+    gc = "Last few GCs ... Scavenge 52.6 (62.1) -> 49.5 (62.9) MB ... allocation failure"
+    hint = format_cursor_cli_error(134, b"", {}, stdout=gc.encode())
+    assert "exit=134" in hint
+    assert "allocation failure" in hint
+    assert len(hint.split("stderr=", 1)[1]) <= STDERR_SNIPPET
+
+
+def test_doctor_prints_names_not_secrets():
+    seen = []
+
+    def runner(argv, cwd=None, env=None, **kwargs):
+        seen.append(argv)
+        if "--version" in argv:
+            return subprocess.CompletedProcess(argv, 0, stdout=b"2026.11.10\n", stderr=b"")
+        return subprocess.CompletedProcess(argv, 0, stdout=b"OK\n", stderr=b"")
+
+    out = _Buf()
+    env = {
+        "PATH": "/bin", "HOME": "/h", "CURSOR_API_KEY": "super-secret-key",
+        "GH_TOKEN": "gho_nope", "FORGE_CURSOR_AGENT": "agent",
+    }
+    code = diagnose_cursor_cli(env, out=out, runner=runner, platform="linux")
+    assert code == 0
+    assert "super-secret-key" not in out.text
+    assert "gho_nope" not in out.text
+    assert "env_names:" in out.text
+    assert "CURSOR_API_KEY" in out.text
+    assert "agent_path:" in out.text
+    assert "probe_exit: 0" in out.text
+    assert any("--version" in a for a in seen)
 
 
 def test_cli_contexto_arquivo_stdin_editor_ok_viewer_denied(tmp_path):

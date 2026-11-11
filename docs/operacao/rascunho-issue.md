@@ -28,6 +28,47 @@ gh auth status
 
 OAuth Client ID é o público já usado no login Forge. Não grave token no Git.
 
+## Diagnóstico Cursor CLI (`doctor`)
+
+Não exige `FORGE_DATABASE_URL`. Mostra caminho do `agent`, `agent --version`, **nomes** das variáveis repassadas (nunca valores), scratch TMP, `NODE_OPTIONS` injetado, e uma chamada mínima (`responda OK`) pelo mesmo adaptador.
+
+```powershell
+python -m forge_core.draft doctor
+# ou:
+forge-tasks doctor
+```
+
+## Isolar no PowerShell (env completo vs. mínimo)
+
+Pasta temp vazia, prompt via stdin, `--trust` só nessa pasta. Compare a sessão normal com um env mínimo (ajuste o caminho do `agent.cmd`):
+
+```powershell
+$ws = Join-Path $env:TEMP ("forge-manual-" + [guid]::NewGuid().ToString("n"))
+New-Item -ItemType Directory -Path $ws | Out-Null
+$agent = (Get-Command agent -ErrorAction SilentlyContinue).Source
+if (-not $agent) { $agent = Join-Path $env:LOCALAPPDATA "cursor-agent\agent.cmd" }
+
+# A) env da sessão (completo)
+"responda OK" | & $agent -p --output-format text --mode ask --workspace $ws --trust
+Write-Host "exit A:" $LASTEXITCODE
+
+# B) env mínimo (allowlist Windows + NODE_OPTIONS do Forge; sem GH_TOKEN/FORGE_*)
+$scratch = Join-Path $env:TEMP ("forge-scratch-" + [guid]::NewGuid().ToString("n"))
+New-Item -ItemType Directory -Path $scratch | Out-Null
+$env:TMP = $scratch
+$env:TEMP = $scratch
+$env:NODE_OPTIONS = "--max-old-space-size=512"
+Remove-Item Env:GH_TOKEN -ErrorAction SilentlyContinue
+Remove-Item Env:GITHUB_TOKEN -ErrorAction SilentlyContinue
+Remove-Item Env:FORGE_DATABASE_URL -ErrorAction SilentlyContinue
+Remove-Item Env:DATABASE_URL -ErrorAction SilentlyContinue
+"responda OK" | & $agent -p --output-format text --mode ask --workspace $ws --trust
+Write-Host "exit B:" $LASTEXITCODE
+Remove-Item -Recurse -Force $ws, $scratch -ErrorAction SilentlyContinue
+```
+
+Se A passa e B aborta (exit 134 / GCs V8), o env mínimo ainda está incompleto. Se os dois abortam, o problema não é o filtro do Forge.
+
 ## Gerar
 
 `--contexto` e `--arquivo` são exclusivos. Posicional é alias de `--contexto`. `--arquivo -` lê stdin.

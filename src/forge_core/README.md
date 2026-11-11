@@ -99,7 +99,7 @@ svc.update_task(a.id, ana, expected_version=1, priority="high")
 ```
 
 ## Rascunho de issue (ADR-015)
-`python -m forge_core.draft draft --contexto "..."` ou `--arquivo` (stdin: `--arquivo -`). `--retomar <id>` continua sem LLM. `FORGE_CURSOR_MODEL` é obrigatório na geração (escolha da assinatura; sem default de custo). Runbook: `docs/operacao/rascunho-issue.md`.
+`python -m forge_core.draft draft --contexto "..."` ou `--arquivo` (stdin: `--arquivo -`). `--retomar <id>` continua sem LLM. `python -m forge_core.draft doctor` diagnostica o adaptador Cursor (nomes de env, nunca valores). `FORGE_CURSOR_MODEL` é obrigatório na geração (escolha da assinatura; sem default de custo). Runbook: `docs/operacao/rascunho-issue.md`.
 
 ## Autenticação humana (ADR-014)
 `forge_core.auth`: login por OAuth device flow do GitHub (`github.py`), identidades e papéis `owner`/`editor`/`approver` em tabelas append-only (`store.py`) e CLI local (`cli.py`). Pré-requisito humano e operação: `docs/operacao/autenticacao-humana.md`. Os testes usam transporte falso (`tests/core/test_auth.py`).

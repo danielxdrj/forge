@@ -15,7 +15,7 @@ from ..errors import AuthenticationError, AuthorizationError, ConfigError, Draft
 from ..storage.sql import open_repository
 from ..tasks.service import TaskService
 from .context import resolve_source
-from .cursor_cli import CursorCliAdapter
+from .cursor_cli import CursorCliAdapter, diagnose_cursor_cli
 from .github_gh import GhCli
 from .service import DraftService, ask_confirm
 from .template import validate_repo
@@ -29,6 +29,7 @@ def run(argv: list[str], env: Mapping[str, str] | None = None, transport: Transp
     stdin = sys.stdin if stdin is None else stdin
     parser = argparse.ArgumentParser(prog="forge-tasks", description="Rascunho de issue (Forge).")
     sub = parser.add_subparsers(dest="cmd", required=True)
+    sub.add_parser("doctor", help="diagnóstico do adaptador Cursor CLI (sem valores de segredo)")
     d = sub.add_parser("draft", help="gerar rascunho e opcionalmente publicar com gh local")
     d.add_argument("context", nargs="?", help="alias do --contexto")
     d.add_argument("--contexto", default="", help="contexto em texto livre")
@@ -44,6 +45,15 @@ def run(argv: list[str], env: Mapping[str, str] | None = None, transport: Transp
     d.add_argument("--escopo", default="", help="só campo de board, nunca seção do corpo")
     d.add_argument("--branch-prefix", default="", help="prefixo já usado no cadastro (ADR-012)")
     args = parser.parse_args(argv)
+    if args.cmd == "doctor":
+        try:
+            return diagnose_cursor_cli(env, out=out)
+        except DraftError as exc:
+            print(f"forge-tasks: {exc}", file=err)
+            return 1
+        except ForgeError as exc:
+            print(f"forge-tasks: erro ({type(exc).__name__})", file=err)
+            return 1
     if args.cmd != "draft":
         return 1
     try:
