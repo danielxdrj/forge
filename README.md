@@ -36,7 +36,7 @@ A API cria e consulta uma investigação e anexa o texto de um log local. O banc
 
 ## Painel local do Core (atual)
 
-A instalação local vigente é o Compose [`docker-compose.forge.yml`](docker-compose.forge.yml) (`name: forge`): Postgres 16 interno e API FastAPI de login. Runbook (Windows incluído): [docs/operacao/container-local.md](docs/operacao/container-local.md). Decisão: [ADR-017](docs/arquitetura/adr/ADR-017-painel-web-local-container.md).
+A instalação local vigente é o Compose [`docker-compose.forge.yml`](docker-compose.forge.yml) (`name: forge`): Postgres 16, API JSON e `forge_frontend` (nginx) em `http://127.0.0.1:8090`. Runbook (Windows incluído): [docs/operacao/container-local.md](docs/operacao/container-local.md). Decisão: [ADR-017](docs/arquitetura/adr/ADR-017-painel-web-local-container.md).
 
 ```powershell
 docker compose -f docker-compose.forge.yml up -d --build

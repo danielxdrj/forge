@@ -434,6 +434,52 @@ def test_cli_refuses_missing_client_id(cli_env):
     assert "FORGE_GITHUB_CLIENT_ID" in err.text
 
 
+def test_cli_applies_secret_files_when_database_url_absent(tmp_path, monkeypatch):
+    owner = tmp_path / "forge_pg_owner_password"
+    app = tmp_path / "forge_pg_app_password"
+    owner.write_text("s-owner/com:especial\n", encoding="utf-8")
+    app.write_text("s-app senha\n", encoding="utf-8")
+    seen = {}
+
+    def fake_open(url, migration_url=None):
+        seen["url"] = url
+        seen["mig"] = migration_url
+        return open_repository(f"sqlite:///{tmp_path / 'from-secret.db'}")
+
+    monkeypatch.setattr(cli, "open_repository", fake_open)
+    env = {
+        "FORGE_CONFIG_DIR": str(tmp_path / "cfg"),
+        "FORGE_GITHUB_CLIENT_ID": TEST_CLIENT_ID,
+        "FORGE_SECRET_OWNER_PASSWORD_FILE": str(owner),
+        "FORGE_SECRET_APP_PASSWORD_FILE": str(app),
+        "FORGE_PG_HOST": "forge_postgres",
+        "FORGE_PG_PORT": "5432",
+        "FORGE_PG_DB": "forge",
+        "FORGE_PG_OWNER_USER": "forge_owner",
+        "FORGE_PG_APP_USER": "forge_app",
+    }
+    out, err = _Buf(), _Buf()
+    assert cli.run(["whoami"], env, transport=Scripted([], token="outro-token", user=(7, "joao")),
+                   out=out, err=err) == 0
+    assert "forge_app" in seen["url"]
+    assert "forge_owner" in seen["mig"]
+    combined = out.text + err.text
+    assert "s-owner" not in combined
+    assert "s-app senha" not in combined
+    assert "postgresql://" not in combined
+    assert "FORGE_DATABASE_URL é obrigatória" not in combined
+
+
+def test_cli_still_requires_url_outside_container(tmp_path):
+    env = {
+        "FORGE_CONFIG_DIR": str(tmp_path / "cfg"),
+        "FORGE_GITHUB_CLIENT_ID": TEST_CLIENT_ID,
+    }
+    err = _Buf()
+    assert cli.run(["whoami"], env, transport=Scripted([]), out=_Buf(), err=err) == 1
+    assert "FORGE_DATABASE_URL é obrigatória" in err.text
+
+
 class _Buf:
     def __init__(self):
         self.text = ""

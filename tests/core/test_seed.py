@@ -31,3 +31,15 @@ def test_list_active_allowed_repos_skips_inactive_project(make_repo):
     forge = [p for p in svc.list_projects() if p.title == PROJECT_TITLE][0]
     svc.deactivate_project(forge.id, ana)
     assert list_active_allowed_repos(repo) == []
+
+
+def test_list_active_allowed_repos_excludes_extra_repo(make_repo):
+    repo = make_repo()
+    seed_allowed_repos(repo)
+    svc = ProjectService(repo)
+    ana = actor(repo, "ana")
+    forge = [p for p in svc.list_projects() if p.title == PROJECT_TITLE][0]
+    extra = svc.add_repository(forge.id, "outro", ORG, "nao-na-lista", ana)
+    names = {(r.owner, r.repo_name) for r in list_active_allowed_repos(repo)}
+    assert (ORG, extra.repo_name) not in names
+    assert (ORG, "site") in names

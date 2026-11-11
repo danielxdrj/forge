@@ -59,9 +59,13 @@ A tela fica em `frontend`. JavaScript é a linguagem. React monta o que aparece,
 
 As seções são investigação, automações, log local, conexões e configurações. As listas começam vazias. O formulário de conexão pede nome, tipo, destino e referência do segredo, e não grava o valor do segredo. Não há chamada à API e não há registros de exemplo.
 
+## Painel local (ADR-017)
+
+O Compose `docker-compose.forge.yml` sobe `forge_postgres`, `forge_backend` (API JSON em FastAPI) e `forge_frontend` (nginx, `127.0.0.1:8090`). A UI é HTML + JS vanilla em `deploy/frontend/html/` (sem `innerHTML` para texto do LLM). Login por device flow em `/api/auth/*`. Criar tarefa: `/api/repos`, `/api/tasks/generate`, campos do board, `/api/tasks/{id}/confirm`. Testes em `tests/core/test_web_auth.py` e `tests/core/test_web_tasks.py` usam GitHub/Cursor/gh falsos.
+
 ## Rascunho de issue
 
-`src/forge_core/draft/` lê contexto por `ContextSource` (`--contexto` / `--arquivo`, stdin `-`), gera o corpo no template fixo e só então, com confirmação ou `--retomar`, chama o `gh` (dublê em `tests/core/test_draft.py`).
+`src/forge_core/draft/` lê contexto por `ContextSource` (`--contexto` / `--arquivo`, stdin `-`), gera o corpo no template fixo e só então, com confirmação ou `--retomar`, chama o `gh` (dublê em `tests/core/test_draft.py`). O painel web chama o mesmo `DraftService`.
 
 ## Resolver de issue
 

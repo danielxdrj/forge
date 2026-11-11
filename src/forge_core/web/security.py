@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hmac
 import secrets
+import socket
 from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 
@@ -56,10 +57,30 @@ def host_allowed(host: str, allowlist: tuple[str, ...]) -> bool:
     return host.strip().lower() in {h.lower() for h in allowlist}
 
 
+def peer_is_trusted(peer_ip: str | None, trusted_proxies: tuple[str, ...]) -> bool:
+    """True se o peer é um IP listado ou resolve para um hostname da lista (ex.: forge_frontend)."""
+    if not peer_ip:
+        return False
+    if peer_ip in trusted_proxies:
+        return True
+    for item in trusted_proxies:
+        if item == peer_ip:
+            return True
+        try:
+            infos = socket.getaddrinfo(item, None)
+        except OSError:
+            continue
+        for info in infos:
+            addr = info[4][0] if info[4] else ""
+            if addr and addr == peer_ip:
+                return True
+    return False
+
+
 def effective_host(host_header: str, forwarded_host: str | None, peer_ip: str | None,
                    *, trust_forwarded: bool, trusted_proxies: tuple[str, ...]) -> str:
     """Host do pedido. X-Forwarded-Host só vale se o peer for um proxy confiável da rede compose."""
-    if trust_forwarded and peer_ip and peer_ip in trusted_proxies:
+    if trust_forwarded and peer_is_trusted(peer_ip, trusted_proxies):
         fwd = (forwarded_host or "").split(",")[0].strip()
         if fwd:
             return fwd

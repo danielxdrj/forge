@@ -1,1 +1,1 @@
-"""Painel web local (ADR-017). Extra opcional `[web]`. Sem tela de tarefas nesta entrega."""
+"""Painel web local (ADR-017). Extra opcional `[web]`. API JSON; UI no forge_frontend."""

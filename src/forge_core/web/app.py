@@ -1,4 +1,4 @@
-"""API JSON FastAPI + páginas mínimas de login (ADR-017). Sem tela de tarefas."""
+"""API JSON FastAPI (ADR-017). Sem HTML: a UI está no forge_frontend."""
 from __future__ import annotations
 
 import time
@@ -6,14 +6,14 @@ from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import FastAPI, Form, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
-from jinja2 import Environment, FileSystemLoader, select_autoescape
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse, Response
+from pydantic import BaseModel, Field
 
 from ..auth.github import DeviceFlow, DeviceFlowError, Transport, UrllibTransport
 from ..auth.store import AuthStore, Principal
 from ..config import Settings
-from ..errors import AuthenticationError, AuthorizationError
+from ..errors import AuthenticationError, AuthorizationError, DraftError
 from ..logging import redact
 from ..storage.sql import SqlRepository
 from .pending import PendingLogin, PendingStore
@@ -31,8 +31,24 @@ from .security import (
     roles_of,
     session_expires_at,
 )
+from .tasks import WebTaskService
 
-_TEMPLATES = Path(__file__).parent / "templates"
+_SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
+
+
+class GenerateIn(BaseModel):
+    repo: str
+    context: str
+
+
+class DraftFieldsIn(BaseModel):
+    tipo: str = ""
+    prioridade: str = ""
+    size: str = ""
+
+
+class ConfirmIn(BaseModel):
+    preview_hash: str = Field(min_length=1, max_length=128)
 
 
 def create_app(
@@ -42,6 +58,9 @@ def create_app(
     transport: Transport | None = None,
     monotonic: Callable[[], float] | None = None,
     wall: Callable[[], str] | None = None,
+    provider=None,
+    gh=None,
+    drafts_dir: Path | None = None,
 ) -> FastAPI:
     if not settings.github_client_id:
         raise ValueError("FORGE_GITHUB_CLIENT_ID é obrigatória para o painel web")
@@ -50,12 +69,16 @@ def create_app(
     flow = DeviceFlow(settings.github_client_id, transport or UrllibTransport(), clock=clock_mono)
     store = AuthStore(repo, verify=flow.identity, clock=clock_wall)
     pending = PendingStore(clock_mono)
-    jinja = Environment(loader=FileSystemLoader(str(_TEMPLATES)), autoescape=select_autoescape(["html"]))
+    from ..tasks.service import TaskService
+
+    tasks = TaskService(repo)
+    panel = WebTaskService(repo, tasks, provider, gh, drafts_dir=drafts_dir)
     app = FastAPI(title="Forge", docs_url=None, redoc_url=None, openapi_url=None)
     app.state.repo = repo
     app.state.store = store
     app.state.settings = settings
     app.state.require_editor = require_editor
+    app.state.panel = panel
 
     def _audit(actor: str, action: str, target: str, result: str) -> None:
         repo.record_audit(actor, action, target, redact(result))
@@ -73,15 +96,6 @@ def create_app(
             CSRF_COOKIE, token, max_age=settings.session_ttl_seconds, **_cookie_kw(httponly=False)
         )
 
-    def _ensure_csrf(request: Request, response: Response) -> str:
-        token = request.cookies.get(CSRF_COOKIE) or new_token()
-        _set_csrf(response, token)
-        return token
-
-    def _check_csrf(request: Request, form_token: str | None = None) -> bool:
-        submitted = request.headers.get(CSRF_HEADER) or form_token
-        return csrf_ok(request.cookies.get(CSRF_COOKIE), submitted)
-
     def _principal(request: Request) -> Principal | None:
         raw = request.cookies.get(SESSION_COOKIE)
         if not raw:
@@ -97,17 +111,35 @@ def create_app(
             resp.headers[key] = value
         return resp
 
-    def _html(name: str, *, status: int = 200, **ctx) -> HTMLResponse:
-        body = jinja.get_template(name).render(**ctx)
-        resp = HTMLResponse(body, status_code=status)
-        for key, value in SECURITY_HEADERS.items():
-            resp.headers[key] = value
-        return resp
+    def _draft_error(exc: DraftError) -> JSONResponse:
+        code = exc.code
+        status = {
+            "diff_changed": 409,
+            "draft_missing": 404,
+            "task_missing": 404,
+            "provider_missing": 503,
+            "gh_missing": 503,
+            "gh_not_logged": 503,
+            "cursor_cli_missing": 503,
+            "provider_error": 502,
+            "forbidden": 403,
+        }.get(code, 400)
+        return _json_error(status, code)
 
     def _apply_session_cookie(response: Response, session_token: str) -> None:
         response.set_cookie(
             SESSION_COOKIE, session_token, max_age=settings.session_ttl_seconds, **_cookie_kw(httponly=True)
         )
+
+    def _delete_auth_cookies(response: Response) -> None:
+        kw = {
+            "path": "/",
+            "samesite": "strict",
+            "httponly": True,
+            "secure": settings.cookie_secure,
+        }
+        response.delete_cookie(SESSION_COOKIE, **kw)
+        response.delete_cookie(DEVICE_COOKIE, **kw)
 
     def _start_device() -> tuple[dict, str, int]:
         dc = flow.start()
@@ -176,8 +208,22 @@ def create_app(
                 _audit(principal.identity_id, "auth.web_logout", f"session:{principal.session_id}", "error: invalid")
             else:
                 _audit(principal.identity_id, "auth.web_logout", f"session:{principal.session_id}", "ok")
-        response.delete_cookie(SESSION_COOKIE, path="/")
-        response.delete_cookie(DEVICE_COOKIE, path="/")
+        _delete_auth_cookies(response)
+
+    def _need_principal(request: Request) -> Principal | JSONResponse:
+        principal = _principal(request)
+        if principal is None:
+            return _json_error(401, "invalid_session")
+        return principal
+
+    def _need_editor(request: Request) -> Principal | JSONResponse:
+        principal = _need_principal(request)
+        if isinstance(principal, JSONResponse):
+            return principal
+        try:
+            return require_editor(store, principal)
+        except AuthorizationError:
+            return _json_error(403, "forbidden")
 
     @app.middleware("http")
     async def _secure(request: Request, call_next):
@@ -192,13 +238,19 @@ def create_app(
         if not host_allowed(host, settings.web_hosts):
             _audit("anon:web", "auth.host_rejected", "web", "error: host")
             return _json_error(400, "host_rejected")
+        token = request.cookies.get(CSRF_COOKIE) or new_token()
+        request.state.csrf_token = token
+        if request.method not in _SAFE_METHODS:
+            submitted = request.headers.get(CSRF_HEADER)
+            if not csrf_ok(request.cookies.get(CSRF_COOKIE), submitted):
+                _audit("anon:web", "auth.csrf", "web", "error: csrf")
+                return _json_error(403, "csrf")
         response = await call_next(request)
         for key, value in SECURITY_HEADERS.items():
             response.headers.setdefault(key, value)
         if "access-control-allow-origin" in response.headers:
             del response.headers["access-control-allow-origin"]
-        csrf = request.cookies.get(CSRF_COOKIE) or new_token()
-        _set_csrf(response, csrf)
+        _set_csrf(response, request.state.csrf_token)
         return response
 
     @app.get("/api/health")
@@ -207,9 +259,6 @@ def create_app(
 
     @app.post("/api/auth/login/start")
     def api_login_start(request: Request):
-        if not _check_csrf(request):
-            _audit("anon:web", "auth.web_login_fail", "web", "error: csrf")
-            return _json_error(403, "csrf")
         try:
             body, browser_id, expires_in = _start_device()
         except DeviceFlowError as exc:
@@ -217,7 +266,6 @@ def create_app(
             return _json_error(400, exc.code)
         response = JSONResponse(body)
         response.set_cookie(DEVICE_COOKIE, browser_id, max_age=expires_in, **_cookie_kw(httponly=True))
-        _ensure_csrf(request, response)
         return response
 
     @app.get("/api/auth/login/status")
@@ -226,8 +274,13 @@ def create_app(
         response = JSONResponse(body)
         if session_token:
             _apply_session_cookie(response, session_token)
-            response.delete_cookie(DEVICE_COOKIE, path="/")
-        _ensure_csrf(request, response)
+            response.delete_cookie(
+                DEVICE_COOKIE,
+                path="/",
+                samesite="strict",
+                httponly=True,
+                secure=settings.cookie_secure,
+            )
         return response
 
     @app.get("/api/auth/whoami")
@@ -243,96 +296,65 @@ def create_app(
 
     @app.post("/api/auth/logout")
     def api_logout(request: Request):
-        if not _check_csrf(request):
-            _audit("anon:web", "auth.web_logout", "web", "error: csrf")
-            return _json_error(403, "csrf")
         response = JSONResponse({"status": "ok"})
         _do_logout(request, response)
-        _ensure_csrf(request, response)
         return response
 
-    @app.get("/", response_class=HTMLResponse)
-    def root(request: Request):
-        if _principal(request) is not None:
-            return RedirectResponse("/whoami", status_code=303)
-        return RedirectResponse("/login", status_code=303)
+    @app.get("/api/repos")
+    def api_repos(request: Request):
+        principal = _need_editor(request)
+        if isinstance(principal, JSONResponse):
+            return principal
+        return {"repos": panel.list_repos(principal)}
 
-    @app.get("/login", response_class=HTMLResponse)
-    def login_get(request: Request):
-        if _principal(request) is not None:
-            return RedirectResponse("/whoami", status_code=303)
-        body, session_token = _poll_device(request.cookies.get(DEVICE_COOKIE))
-        if session_token:
-            redir = RedirectResponse("/whoami", status_code=303)
-            _apply_session_cookie(redir, session_token)
-            redir.delete_cookie(DEVICE_COOKIE, path="/")
-            _ensure_csrf(request, redir)
-            return redir
-        csrf_holder = Response()
-        csrf = _ensure_csrf(request, csrf_holder)
-        if body.get("status") == "pending":
-            page = _html(
-                "login.html",
-                csrf_token=csrf,
-                pending=True,
-                user_code=body["user_code"],
-                verification_uri=body["verification_uri"],
-                error=None,
-            )
-        else:
-            error = None if body.get("status") in (None, "idle") else body.get("status")
-            page = _html("login.html", csrf_token=csrf, pending=False, error=error)
-        _copy_cookies(csrf_holder, page)
-        return page
-
-    @app.post("/login")
-    async def login_post(request: Request, csrf_token: str = Form(default="")):
-        if not _check_csrf(request, csrf_token):
-            _audit("anon:web", "auth.web_login_fail", "web", "error: csrf")
-            return _html("login.html", status=403, csrf_token=csrf_token, pending=False, error="csrf")
+    @app.get("/api/board/fields")
+    def api_board_fields(request: Request):
+        principal = _need_editor(request)
+        if isinstance(principal, JSONResponse):
+            return principal
         try:
-            _body, browser_id, expires_in = _start_device()
-        except DeviceFlowError as exc:
-            _audit("anon:web", "auth.web_login_fail", "web", f"error: {exc.code}")
-            page = _html("login.html", csrf_token=csrf_token, pending=False, error=exc.code)
-            _ensure_csrf(request, page)
-            return page
-        response = RedirectResponse("/login", status_code=303)
-        response.set_cookie(DEVICE_COOKIE, browser_id, max_age=expires_in, **_cookie_kw(httponly=True))
-        _ensure_csrf(request, response)
-        return response
+            return panel.board_fields(principal)
+        except DraftError as exc:
+            return _draft_error(exc)
 
-    @app.get("/whoami", response_class=HTMLResponse)
-    def whoami_get(request: Request):
-        principal = _principal(request)
-        if principal is None:
-            return RedirectResponse("/login", status_code=303)
-        holder = Response()
-        csrf = _ensure_csrf(request, holder)
-        page = _html(
-            "whoami.html",
-            csrf_token=csrf,
-            login=principal.login,
-            identity=principal.identity_id,
-            roles=roles_of(store, principal.identity_id),
-        )
-        _copy_cookies(holder, page)
-        return page
+    @app.post("/api/tasks/generate")
+    def api_generate(request: Request, body: GenerateIn):
+        principal = _need_editor(request)
+        if isinstance(principal, JSONResponse):
+            return principal
+        try:
+            return panel.generate(principal, body.repo, body.context)
+        except DraftError as exc:
+            return _draft_error(exc)
 
-    @app.post("/logout")
-    async def logout_post(request: Request, csrf_token: str = Form(default="")):
-        if not _check_csrf(request, csrf_token):
-            _audit("anon:web", "auth.web_logout", "web", "error: csrf")
-            return _json_error(403, "csrf")
-        response = RedirectResponse("/login", status_code=303)
-        _do_logout(request, response)
-        _ensure_csrf(request, response)
-        return response
+    @app.post("/api/tasks/{task_id}/draft")
+    def api_update_draft(request: Request, task_id: str, body: DraftFieldsIn):
+        principal = _need_editor(request)
+        if isinstance(principal, JSONResponse):
+            return principal
+        try:
+            return panel.update_fields(principal, task_id, body.tipo, body.prioridade, body.size)
+        except DraftError as exc:
+            return _draft_error(exc)
+
+    @app.post("/api/tasks/{task_id}/confirm")
+    def api_confirm(request: Request, task_id: str, body: ConfirmIn):
+        principal = _need_editor(request)
+        if isinstance(principal, JSONResponse):
+            return principal
+        try:
+            return panel.confirm(principal, task_id, body.preview_hash)
+        except DraftError as exc:
+            return _draft_error(exc)
+
+    @app.get("/api/tasks")
+    def api_list_tasks(request: Request):
+        principal = _need_editor(request)
+        if isinstance(principal, JSONResponse):
+            return principal
+        try:
+            return {"tasks": panel.list_tasks(principal)}
+        except DraftError as exc:
+            return _draft_error(exc)
 
     return app
-
-
-def _copy_cookies(src: Response, dest: Response) -> None:
-    for header in src.raw_headers:
-        if header[0].decode().lower() == "set-cookie":
-            dest.raw_headers.append(header)

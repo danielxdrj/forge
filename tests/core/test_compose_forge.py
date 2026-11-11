@@ -1,24 +1,28 @@
-"""Checagens estáticas do docker-compose.forge.yml (sem subir serviços)."""
+"""Checagens estáticas do docker-compose.forge.yml e do nginx (sem subir serviços)."""
 from pathlib import Path
 import re
 
 ROOT = Path(__file__).resolve().parents[2]
 COMPOSE = (ROOT / "docker-compose.forge.yml").read_text(encoding="utf-8")
+NGINX = (ROOT / "deploy/frontend/nginx.conf").read_text(encoding="utf-8")
+FRONTEND_DOCKERFILE = (ROOT / "deploy/frontend/Dockerfile").read_text(encoding="utf-8")
+BACKEND_DOCKERFILE = (ROOT / "deploy/web/Dockerfile").read_text(encoding="utf-8")
 
 
-def test_compose_project_and_container_names():
+def test_compose_project_and_three_container_names():
     assert re.search(r"(?m)^name:\s*forge\s*$", COMPOSE)
     assert "container_name: forge_postgres" in COMPOSE
     assert "container_name: forge_backend" in COMPOSE
-    assert "container_name: forge_frontend" not in COMPOSE
-    assert "forge_frontend" in COMPOSE  # planejado no PR B, citado no comentário
+    assert "container_name: forge_frontend" in COMPOSE
+    assert COMPOSE.count("container_name:") == 3
     assert "forge_pgdata" in COMPOSE
     assert "forge_cli_home" in COMPOSE
 
 
-def test_ports_are_loopback_only_and_configurable():
+def test_ports_are_loopback_only_frontend_8090_backend_not_published():
+    assert "127.0.0.1:${FORGE_FRONTEND_HOST_PORT:-8090}:8080" in COMPOSE
     assert "127.0.0.1:${FORGE_PG_HOST_PORT:-5433}:5432" in COMPOSE
-    assert "127.0.0.1:${FORGE_BACKEND_HOST_PORT:-8091}:8091" in COMPOSE
+    assert "8091:8091" not in COMPOSE
     assert "0.0.0.0" not in COMPOSE
     for match in re.finditer(r'-\s*"([^"]+)"', COMPOSE):
         mapping = match.group(1)
@@ -54,3 +58,39 @@ def test_secrets_come_from_environment_not_files():
     assert not re.search(r"(?m)^\s+file:", COMPOSE)
     for banned in ("GH_TOKEN", "GITHUB_TOKEN"):
         assert banned not in COMPOSE
+
+
+def test_backend_trusts_forwarded_only_from_frontend_hostname():
+    assert 'FORGE_TRUST_FORWARDED: "true"' in COMPOSE
+    assert "FORGE_TRUSTED_PROXIES: forge_frontend" in COMPOSE
+
+
+def test_postgres_image_is_pinned_by_digest():
+    assert re.search(r"postgres:16-bookworm@sha256:[0-9a-f]{64}", COMPOSE)
+
+
+def test_backend_dockerfile_runs_as_user_forge():
+    assert re.search(r"(?m)^USER forge\s*$", BACKEND_DOCKERFILE)
+
+
+def test_nginx_proxies_api_sets_forwarded_headers_and_csp():
+    assert "location /api/" in NGINX
+    assert "proxy_pass http://forge_backend:8091" in NGINX
+    assert "proxy_set_header Host $http_host" in NGINX
+    assert "proxy_set_header X-Forwarded-Host $http_host" in NGINX
+    assert "proxy_set_header X-Forwarded-For" in NGINX
+    assert "proxy_set_header X-Forwarded-Proto" in NGINX
+    assert "default-src 'self'" in NGINX
+    assert "frame-ancestors 'none'" in NGINX
+    assert "nosniff" in NGINX
+    assert "no-referrer" in NGINX
+    assert "unsafe-inline" not in NGINX
+    assert "listen 8080" in NGINX
+    assert "nginxinc/nginx-unprivileged" in FRONTEND_DOCKERFILE
+    assert "@sha256:" in FRONTEND_DOCKERFILE
+    html = (ROOT / "deploy/frontend/html/index.html").read_text(encoding="utf-8")
+    assert "<script src=\"/app.js\"" in html
+    assert "onclick=" not in html
+    js = (ROOT / "deploy/frontend/html/app.js").read_text(encoding="utf-8")
+    assert "innerHTML" not in js
+    assert "textContent" in js
