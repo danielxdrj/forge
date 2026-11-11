@@ -17,7 +17,7 @@ from ..logging import redact
 from ..tasks.service import TaskService
 from .cursor_cli import build_prompt
 from .github_gh import (
-    GhCli, RemoteState, current_iteration_id, find_field, match_option,
+    GhCli, RemoteState, current_iteration_id, find_field, match_option, names_match,
 )
 from .template import (
     ASSIGNEE, PENDING, PROJECT_NUMBER, PROJECT_OWNER, PROJECT_TITLE,
@@ -234,6 +234,12 @@ class DraftService:
             if ids.get("escopo"):
                 ef, eo = ids["escopo"]
                 gh.edit_select(item_id, ef, eo)
+            try:
+                self._verify_board(gh, item_id, ids, meta)
+            except DraftError:
+                write_checkpoint(output, remote)
+                self._save_remote(result.task_id, principal, remote)
+                raise
             remote.phase = "board"
             write_checkpoint(output, remote)
             self._save_remote(result.task_id, principal, remote)
@@ -288,6 +294,43 @@ class DraftService:
             out["escopo"] = (escopo["id"], match_option(escopo, meta["escopo"]))
         return out
 
+    def _verify_board(self, gh: GhCli, item_id: str, ids: dict, meta: dict) -> None:
+        values = {row["field_id"]: row for row in gh.read_item_values(item_id)}
+        missing: list[str] = []
+        checks = {
+            "tipo": meta.get("tipo"),
+            "prioridade": meta.get("prioridade"),
+            "size": meta.get("size"),
+        }
+        if ids.get("escopo") and (meta.get("escopo") or "").strip():
+            checks["escopo"] = meta.get("escopo")
+        for key, wanted in checks.items():
+            fid, _oid = ids[key]
+            got = values.get(fid)
+            if not got or not names_match(got.get("name") or "", wanted or ""):
+                missing.append(key)
+        sprint_fid, _sprint_oid = ids["sprint"]
+        got = values.get(sprint_fid)
+        if not got or not (got.get("name") or "").strip():
+            missing.append("sprint")
+        if missing:
+            raise DraftError("board_mismatch", ",".join(missing))
+
+
+_BODY_HEADERS = (
+    "Solicitado Por", "Objetivo", "Contexto",
+    "Foram reportados os seguintes problemas:",
+    "Situação Atual", "Comportamento Esperado",
+    "Critérios de Aceite", "Observações",
+)
+
+
+def _header_name(line: str) -> str:
+    text = line.strip()
+    if text.startswith("## "):
+        text = text[3:].strip()
+    return text
+
 
 def parse_model_json_from_body(body: str) -> dict:
     """Reconstrói o dict a partir do markdown já validado (não chama o LLM)."""
@@ -297,18 +340,19 @@ def parse_model_json_from_body(body: str) -> dict:
     title = lines[0]
 
     def after(header: str) -> list[str]:
-        try:
-            i = lines.index(header)
-        except ValueError as exc:
-            raise DraftError("invalid_draft") from exc
+        i = next((n for n, ln in enumerate(lines) if _header_name(ln) == header), None)
+        if i is None:
+            raise DraftError("invalid_draft")
         acc = []
         for line in lines[i + 1:]:
-            if line in ("Solicitado Por", "Objetivo", "Contexto",
-                        "Foram reportados os seguintes problemas:",
-                        "Situação Atual", "Comportamento Esperado",
-                        "Critérios de Aceite", "Observações") and line != header:
+            name = _header_name(line)
+            if name in _BODY_HEADERS and name != header:
                 break
             acc.append(line)
+        while acc and not acc[0].strip():
+            acc.pop(0)
+        while acc and not acc[-1].strip():
+            acc.pop()
         return acc
 
     def bullets(block):

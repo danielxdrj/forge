@@ -31,7 +31,7 @@ from forge_core.draft.envfilter import (
     cursor_env_allow,
     filter_env,
 )
-from forge_core.draft.github_gh import GhCli
+from forge_core.draft.github_gh import GhCli, match_option, names_match
 from forge_core.draft.service import DraftService, parse_remote, sidecar_path
 from forge_core.draft.template import (
     ASSIGNEE, PENDING, parse_model_json, render, required_pending, validate_repo,
@@ -69,7 +69,7 @@ GRAPHQL_FIELDS = {
                         },
                     },
                     {"id": "f-t", "name": "Tipo", "options": [{"id": "o-bug", "name": "Bug"}]},
-                    {"id": "f-p", "name": "Prioridade", "options": [{"id": "o-high", "name": "Alta"}]},
+                    {"id": "f-p", "name": "Prioridade", "options": [{"id": "o-high", "name": "🔴 Alta"}]},
                     {"id": "f-z", "name": "Size", "options": [{"id": "o-3", "name": "3"}]},
                 ]
             }
@@ -137,16 +137,22 @@ def _env(tmp_path):
 def test_template_order_and_pending_and_no_scope():
     data = parse_model_json(json.dumps(VALID))
     body = render(data)
-    order = ["Solicitado Por", "Objetivo", "Contexto", "Foram reportados os seguintes problemas:",
-             "Situação Atual", "Comportamento Esperado", "Critérios de Aceite", "Observações"]
+    order = ["## Solicitado Por", "## Objetivo", "## Contexto",
+             "## Foram reportados os seguintes problemas:",
+             "## Situação Atual", "## Comportamento Esperado", "## Critérios de Aceite",
+             "## Observações"]
     positions = [body.index(h) for h in order]
     assert positions == sorted(positions)
+    assert "\n## Solicitado Por\n\n- Ana\n" in body
     assert "Escopo" not in body
     incomplete = dict(VALID, solicitado_por="Descreva o objetivo da solicitação aqui")
     parsed = parse_model_json(json.dumps(incomplete))
     assert parsed["solicitado_por"] == PENDING
     with pytest.raises(DraftError) as ei:
         parse_model_json(json.dumps(dict(VALID, objetivo="ok\n## Escopo\nnao")))
+    assert ei.value.code == "scope_in_body"
+    with pytest.raises(DraftError) as ei:
+        parse_model_json(json.dumps(dict(VALID, observacoes=["pendência de escopo do Forge"])))
     assert ei.value.code == "scope_in_body"
 
 
@@ -157,6 +163,8 @@ def test_any_pending_marker_blocks_remote():
     data2 = parse_model_json(json.dumps(dict(VALID, objetivo="corrigir [PENDENTE] depois")))
     assert "objetivo" in required_pending(data2, META)
     assert required_pending(parse_model_json(json.dumps(VALID)), META) == []
+    data3 = parse_model_json(json.dumps(dict(VALID, observacoes=["ok", "falta [PENDENTE]"])))
+    assert "observacoes" in required_pending(data3, META)
 
 
 def test_title_and_repo_validation():
@@ -165,6 +173,37 @@ def test_title_and_repo_validation():
         validate_repo("../etc")
     bad = dict(VALID, title="titulo livre")
     assert parse_model_json(json.dumps(bad))["title"] == f"feat: {PENDING}"
+    from forge_core.draft.template import TITLE_RE, validate_title
+    assert TITLE_RE.match("feat: login recusa senha valida")
+    assert TITLE_RE.match("fix(api)!: quebra")
+    assert TITLE_RE.match("revert: desfaz a mudanca")
+    assert validate_title("docs(readme): atualiza")
+    with pytest.raises(DraftError) as ei:
+        validate_title("WIP: sem conventional")
+    assert ei.value.code == "invalid_title"
+
+
+def test_match_option_accent_emoji_and_board_reread(tmp_path):
+    field = {"id": "f-p", "name": "Prioridade", "options": [
+        {"id": "o-high", "name": "🔴 Alta"},
+        {"id": "o-low", "name": "Baixa"},
+    ]}
+    assert match_option(field, "Alta") == "o-high"
+    assert match_option(field, "alta") == "o-high"
+    assert names_match("🔴 Alta", "Alta")
+    field2 = {"id": "f-t", "name": "Tipo", "options": [{"id": "o-bug", "name": "Manutenção"}]}
+    assert match_option(field2, "Manutencao") == "o-bug"
+    repo, login_gh, owner, editor, viewer = _people(tmp_path)
+    gh = GhCli(runner=_gh_script({"blank_priority": True}), today=date(2026, 11, 8))
+    svc = DraftService(TaskService(repo), FakeLLM(), gh, today=date(2026, 11, 8))
+    result = svc.generate("falha", "acme/app", editor, tmp_path / "prio.md", META)
+    with pytest.raises(DraftError) as ei:
+        svc.publish(result, "acme/app", editor, META)
+    assert ei.value.code == "board_mismatch"
+    assert "prioridade" in ei.value.hint
+    remote = parse_remote(TaskService(repo).get_task(result.task_id).context)
+    assert remote.issue == 9 and remote.phase == "issue"
+    assert sidecar_path(Path(result.path)).is_file()
 
 
 def test_cursor_temp_cwd_deny_allowlist_payload_and_cleanup(tmp_path):
@@ -710,7 +749,18 @@ def _gh_script(opts=None):
         elif cmd[:2] == ["project", "field-list"]:
             stdout = json.dumps(FIELD_LIST_REAL)
         elif cmd[:2] == ["api", "graphql"]:
-            stdout = json.dumps(GRAPHQL_FIELDS)
+            blob = " ".join(cmd)
+            if "ProjectV2Item" in blob:
+                nodes = [
+                    {"name": "Bug", "field": {"id": "f-t", "name": "Tipo"}},
+                    {"name": "3", "field": {"id": "f-z", "name": "Size"}},
+                    {"title": "Semana 45", "field": {"id": "f-s", "name": "Sprint"}},
+                ]
+                if not opts.get("blank_priority"):
+                    nodes.append({"name": "🔴 Alta", "field": {"id": "f-p", "name": "Prioridade"}})
+                stdout = json.dumps({"data": {"node": {"fieldValues": {"nodes": nodes}}}})
+            else:
+                stdout = json.dumps(GRAPHQL_FIELDS)
         elif cmd[:2] == ["issue", "create"]:
             created["n"] += 1
             stdout = ISSUE_URL + "\n"

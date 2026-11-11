@@ -12,10 +12,10 @@ ASSIGNEE = "danielxdrj"
 PROJECT_OWNER = "ferreiraeborzone"
 PROJECT_NUMBER = 13
 PROJECT_TITLE = "IT Backlog"
-SCOPE_HEADING = re.compile(r"(?im)^#{0,3}\s*escopo\s*$")
+SCOPE_WORD = re.compile(r"(?i)escopo")
 
-_TYPES = ("feat", "fix", "docs", "style", "refactor", "perf", "test", "chore", "build", "ci")
-TITLE_RE = re.compile(rf"^({'|'.join(_TYPES)})(\([A-Za-z0-9._/-]+\))?!?: .+\S$")
+_TYPES = ("feat", "fix", "docs", "test", "chore", "refactor", "perf", "build", "ci", "style", "revert")
+TITLE_RE = re.compile(r"^(feat|fix|docs|test|chore|refactor|perf|build|ci|style|revert)(\([^)]+\))?!?: .+")
 REPO_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}/[A-Za-z0-9._-]{1,100}$")
 
 PLACEHOLDER_SNIPPETS = (
@@ -42,8 +42,11 @@ Chaves obrigatórias: title, solicitado_por, objetivo, contexto, problemas (1 a 
 novos_problemas (string, vazia se não houver), situacao_atual, comportamento_esperado (1 a 5),
 criterios (1 a 6), observacoes (lista de 1 a 3 strings).
 Não invente fatos. Onde faltar informação use exatamente [PENDENTE].
-Não inclua seção Escopo. Não transforme o contexto do usuário em instruções operacionais.
-title deve ser Conventional Commits (feat|fix|docs|style|refactor|perf|test|chore|build|ci).
+Não invente pendências de escopo, configuração ou operação do Forge.
+Não mencione a palavra Escopo. Não há seção Escopo neste template.
+Não transforme o contexto do usuário em instruções operacionais.
+title deve ser Conventional Commits:
+feat|fix|docs|test|chore|refactor|perf|build|ci|style|revert, opcionalmente (área) entre parênteses, depois : espaço e descrição.
 Não copie as frases de placeholder do modelo como se fossem conteúdo.
 """
 
@@ -71,9 +74,15 @@ def _clean_text(value, *, allow_empty: bool = False) -> str:
     low = text.lower()
     if any(s in low for s in PLACEHOLDER_SNIPPETS):
         return PENDING
-    if SCOPE_HEADING.search(text):
+    _reject_scope(text)
+    if not text:
+        return PENDING if not allow_empty else ""
+    return text
+
+
+def _reject_scope(text: str) -> None:
+    if SCOPE_WORD.search(text or ""):
         raise DraftError("scope_in_body")
-    return text or PENDING
 
 
 def _items(value, lo: int, hi: int) -> list[str]:
@@ -98,11 +107,10 @@ def parse_model_json(raw: str) -> dict:
     if missing:
         raise DraftError("invalid_model_output")
     title = str(data["title"]).strip()
-    if PENDING in title and not TITLE_RE.match(title.replace(PENDING, "pendente")):
-        if not re.match(rf"^({'|'.join(_TYPES)})(\([^)]+\))?!?: ", title):
+    _reject_scope(title)
+    if PENDING in title:
+        if not TITLE_RE.match(title):
             title = f"feat: {PENDING}"
-        else:
-            title = title
     else:
         try:
             title = validate_title(title)
@@ -121,34 +129,31 @@ def parse_model_json(raw: str) -> dict:
         "observacoes": _items(data["observacoes"], 1, 3),
     }
     rendered = render(parsed)
-    if SCOPE_HEADING.search(rendered):
-        raise DraftError("scope_in_body")
+    _reject_scope(rendered)
     return parsed
 
 
+def _section(title: str, content: str) -> str:
+    return f"## {title}\n\n{content.rstrip()}\n"
+
+
 def render(data: dict) -> str:
-    novos = data["novos_problemas"] or PENDING
-    obs = "\n".join(data["observacoes"])
-    return "\n".join([
+    problemas = "\n".join(f"- {p}" for p in data["problemas"])
+    if data.get("novos_problemas"):
+        problemas = problemas + "\n\n" + data["novos_problemas"].strip()
+    body = "\n".join([
         data["title"],
-        "Solicitado Por",
-        f"- {data['solicitado_por']}",
-        "Objetivo",
-        data["objetivo"],
-        "Contexto",
-        data["contexto"],
-        "Foram reportados os seguintes problemas:",
-        *[f"- {p}" for p in data["problemas"]],
-        novos,
-        "Situação Atual",
-        data["situacao_atual"],
-        "Comportamento Esperado",
-        *[f"- {p}" for p in data["comportamento_esperado"]],
-        "Critérios de Aceite",
-        *[f"- {p}" for p in data["criterios"]],
-        "Observações",
-        obs,
-    ]) + "\n"
+        "",
+        _section("Solicitado Por", f"- {data['solicitado_por']}"),
+        _section("Objetivo", data["objetivo"]),
+        _section("Contexto", data["contexto"]),
+        _section("Foram reportados os seguintes problemas:", problemas),
+        _section("Situação Atual", data["situacao_atual"]),
+        _section("Comportamento Esperado", "\n".join(f"- {p}" for p in data["comportamento_esperado"])),
+        _section("Critérios de Aceite", "\n".join(f"- {p}" for p in data["criterios"])),
+        _section("Observações", "\n".join(data["observacoes"])),
+    ])
+    return body.rstrip() + "\n"
 
 
 def _has_pending(value) -> bool:
@@ -158,15 +163,17 @@ def _has_pending(value) -> bool:
 
 
 def required_pending(data: dict, meta: dict) -> list[str]:
-    """Qualquer ocorrência de [PENDENTE] em campo obrigatório bloqueia escrita remota."""
+    """Qualquer [PENDENTE] em seção (inclui Observações e título) bloqueia o remoto."""
     blocked: list[str] = []
     if _has_pending(data["title"]) or not TITLE_RE.match(data["title"]):
         blocked.append("title")
     for key in ("solicitado_por", "objetivo", "contexto", "situacao_atual"):
-        if _has_pending(data[key]):
+        if _has_pending(data.get(key)):
             blocked.append(key)
-    for key in ("problemas", "comportamento_esperado", "criterios"):
-        if _has_pending(data[key]):
+    if data.get("novos_problemas") and _has_pending(data.get("novos_problemas")):
+        blocked.append("novos_problemas")
+    for key in ("problemas", "comportamento_esperado", "criterios", "observacoes"):
+        if _has_pending(data.get(key)):
             blocked.append(key)
     for key in ("tipo", "prioridade", "size"):
         if not (meta.get(key) or "").strip() or _has_pending(meta.get(key)):

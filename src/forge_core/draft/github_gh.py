@@ -11,6 +11,7 @@ import json
 import os
 import re
 import subprocess
+import unicodedata
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import date, timedelta
@@ -50,6 +51,27 @@ query($id: ID!) {
           ... on ProjectV2SingleSelectField {
             id name
             options { id name }
+          }
+        }
+      }
+    }
+  }
+}
+"""
+
+ITEM_VALUES_QUERY = """
+query($id: ID!) {
+  node(id: $id) {
+    ... on ProjectV2Item {
+      fieldValues(first: 50) {
+        nodes {
+          ... on ProjectV2ItemFieldSingleSelectValue {
+            name
+            field { ... on ProjectV2SingleSelectField { id name } }
+          }
+          ... on ProjectV2ItemFieldIterationValue {
+            title
+            field { ... on ProjectV2IterationField { id name } }
           }
         }
       }
@@ -198,6 +220,30 @@ class GhCli:
             "--field-id", field_id, "--iteration-id", iteration_id,
         ])
 
+    def read_item_values(self, item_id: str) -> list[dict]:
+        """Relê o item do ProjectV2 (somente leitura). Sem mutação."""
+        text = self._run([
+            "api", "graphql", "-F", f"id={item_id}", "-f", f"query={ITEM_VALUES_QUERY}",
+        ])
+        payload = _json(text)
+        nodes = (((payload.get("data") or {}).get("node") or {}).get("fieldValues") or {}).get("nodes")
+        if not isinstance(nodes, list):
+            raise DraftError("board_mismatch", "item")
+        out = []
+        for node in nodes:
+            if not isinstance(node, dict):
+                continue
+            field = node.get("field") or {}
+            fid = field.get("id")
+            if not fid:
+                continue
+            out.append({
+                "field_id": str(fid),
+                "field_name": str(field.get("name") or ""),
+                "name": str(node.get("name") or node.get("title") or ""),
+            })
+        return out
+
     def develop(self, repo: str, number: int, name: str) -> str:
         listed = self._run(["issue", "develop", str(number), "--repo", repo, "--list"])
         if name in listed:
@@ -233,15 +279,36 @@ def find_field(fields: list[dict], kind: str) -> dict:
     raise DraftError("project_schema", kind)
 
 
+def fold_option_name(value: str) -> str:
+    text = unicodedata.normalize("NFKD", value or "")
+    text = "".join(c for c in text if not unicodedata.combining(c))
+    text = text.casefold().strip()
+    text = re.sub(r"^[^\w]+", "", text, flags=re.UNICODE)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def names_match(actual: str, wanted: str) -> bool:
+    a, w = fold_option_name(actual), fold_option_name(wanted)
+    if not a or not w:
+        return False
+    return a == w or a.endswith(w) or w.endswith(a)
+
+
 def match_option(field: dict, wanted: str) -> str:
     options = field.get("options") or []
-    wanted_l = wanted.strip().lower()
+    exact, loose = [], []
     for opt in options:
-        if str(opt.get("name") or "").strip().lower() == wanted_l:
-            oid = opt.get("id")
-            if oid:
-                return str(oid)
-    raise DraftError("pending_meta", field.get("name") or "option")
+        name = str(opt.get("name") or "")
+        folded = fold_option_name(name)
+        want = fold_option_name(wanted)
+        if folded == want:
+            exact.append(opt)
+        elif names_match(name, wanted):
+            loose.append(opt)
+    chosen = exact or loose
+    if len(chosen) != 1 or not chosen[0].get("id"):
+        raise DraftError("pending_meta", field.get("name") or "option")
+    return str(chosen[0]["id"])
 
 
 def current_iteration_id(field: dict, today: date, wanted: str | None) -> str:
