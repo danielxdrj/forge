@@ -84,7 +84,7 @@ Start-Process 'http://127.0.0.1:8090'
 ```
 
 1. **Entrar com GitHub**: a página mostra o `user_code` e o link de verificação. Autorize no GitHub; a página consulta `/api` sozinha.
-2. `/api/auth/whoami` (via UI) lista login e papéis. Sem `editor`, a tela de tarefas explica que o owner não basta.
+2. `/api/auth/whoami` (via UI) lista login e papéis (pills na barra superior). Sem `editor`, a tela de tarefas explica que o owner não basta. A barra esquerda troca Tarefas, Investigação (em construção), Teia de contexto (em construção) e, só para o papel **owner**, Conexões.
 3. **Nova tarefa**: escolha um repositório da allowlist (org `ferreiraeborzone`), cole o contexto escrito (máx. 64 KiB; sem imagem) e **Gerar rascunho**.
 4. Confira a pré-visualização. Comportamento esperado e Critérios de aceite vêm preenchidos mesmo com contexto curto, com prefixo `_Sugestão (revise):_` quando forem inferência. Só Objetivo pode ficar `[PENDENTE]`, e só se o contexto estiver vazio. Edite o corpo na própria prévia (textarea) ou complemente o contexto e **Gerar de novo**. Tipo, prioridade e size vêm sugeridos pelo gerador (opções do board IT Backlog, projeto 13); troque só se quiser. Se `/api/board/fields` falhar (ex.: gh sem escopo `project`), a tela mostra o erro real, não selects vazios.
 5. **Confirmar e publicar**: o backend recusa se o `preview_hash` mudou (`409 diff_changed`) ou se ainda houver `[PENDENTE]` real (`400 pending_fields`). Sugestões `_Sugestão (revise):_` não bloqueiam. Issue, item do board e branch entram em `task_links`. Se falhar no meio, **Confirmar** de novo retoma; não duplica a issue.

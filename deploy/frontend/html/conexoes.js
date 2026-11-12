@@ -25,6 +25,7 @@
     notice: "",
     busy: false,
     testResult: null,
+    loading: true,
   };
 
   function emptyForm() {
@@ -136,6 +137,7 @@
       invalid_secret: "Segredo inválido.",
       denied: "Autorização negada no GitHub.",
       expired: "O código expirou. Comece de novo.",
+      api_unreachable: "Não foi possível falar com a API. Recarregue a página.",
     };
     let text = map[code] || (detail && detail.message) || code;
     if (detail && detail.hint) {
@@ -390,21 +392,61 @@
     render();
   }
 
+  function renderNav() {
+    document.querySelectorAll("[data-nav]").forEach(function (link) {
+      link.classList.toggle("current", link.getAttribute("data-nav") === "conexoes");
+    });
+    const conn = document.getElementById("nav-conexoes");
+    if (conn) {
+      if (isOwner()) {
+        conn.removeAttribute("hidden");
+      } else {
+        conn.setAttribute("hidden", "");
+      }
+    }
+  }
+
+  function rolePill(role) {
+    return el("span", { class: "pill pill-role pill-role-" + role, text: role });
+  }
+
+  function typePill(type) {
+    const map = {
+      postgres: "core",
+      mysql: "core",
+      ftp: "ops",
+      sftp: "ops",
+      portainer: "ops",
+    };
+    return el("span", { class: "pill pill-" + (map[type] || "muted"), text: TYPE_LABEL[type] || type });
+  }
+
   function renderSession(target) {
     target.replaceChildren();
     if (state.who) {
-      target.appendChild(el("span", { text: "Login: " + state.who.login + " · papéis: " + (state.who.roles.join(", ") || "nenhum") }));
-      target.appendChild(el("button", { type: "button", text: "Sair", onClick: function () { logout(); } }));
+      target.appendChild(el("span", { class: "session-login", text: state.who.login }));
+      const roles = (state.who.roles || []).map(rolePill);
+      if (!roles.length) {
+        roles.push(el("span", { class: "pill pill-muted", text: "nenhum" }));
+      }
+      target.appendChild(el("span", { class: "session-roles" }, roles));
+      target.appendChild(el("button", { type: "button", class: "btn-sair", text: "Sair", onClick: function () { logout(); } }));
       return;
     }
     target.appendChild(el("span", { class: "muted", text: "Não autenticado" }));
   }
 
   function renderLogin(root) {
-    const box = el("section", null, [el("h2", { text: "Entrar" })]);
+    const box = el("section", { class: "card card-core" }, [
+      el("div", { class: "card-head" }, [
+        el("span", { class: "icon-box icon-core", text: "F" }),
+        el("h2", { text: "Entrar" }),
+        el("span", { class: "pill pill-existing", text: "INTEGRAÇÃO EXISTENTE" }),
+      ]),
+    ]);
     if (state.pending && state.pending.user_code) {
       box.appendChild(el("p", { text: "Abra o GitHub e informe o código:" }));
-      box.appendChild(el("p", { class: "code", text: state.pending.user_code }));
+      box.appendChild(el("p", { class: "code login-code", text: state.pending.user_code }));
       box.appendChild(el("p", { class: "muted", text: "Aguardando autorização no GitHub…" }));
     } else {
       box.appendChild(el("button", {
@@ -439,8 +481,21 @@
     render();
   }
 
+  function snapshotForm() {
+    if (!document.getElementById("conn-name")) {
+      return;
+    }
+    state.form = readForm();
+  }
+
   function renderForm(root) {
-    const form = el("section", null, [el("h2", { text: state.form.id ? "Editar conexão" : "Nova conexão" })]);
+    const form = el("section", { class: "card card-ops" }, [
+      el("div", { class: "card-head" }, [
+        el("span", { class: "icon-box icon-ops", text: "D" }),
+        el("h2", { text: state.form.id ? "Editar conexão" : "Nova conexão" }),
+        el("span", { class: "pill pill-ops", text: "OPERAÇÕES" }),
+      ]),
+    ]);
     if (!isOwner()) {
       form.appendChild(el("p", { class: "muted", text: "Só o papel owner cria, edita ou apaga conexões." }));
       root.appendChild(form);
@@ -539,7 +594,13 @@
   }
 
   function renderList(root) {
-    const box = el("section", null, [el("h2", { text: "Conexões" })]);
+    const box = el("section", { class: "card card-ops" }, [
+      el("div", { class: "card-head" }, [
+        el("span", { class: "icon-box icon-ops", text: "D" }),
+        el("h2", { text: "Conexões" }),
+        el("span", { class: "pill pill-existing", text: "INTEGRAÇÃO EXISTENTE" }),
+      ]),
+    ]);
     if (!state.connections.length) {
       box.appendChild(el("p", { class: "muted", text: "Nenhuma conexão cadastrada." }));
       root.appendChild(box);
@@ -577,10 +638,13 @@
       }
       tbody.appendChild(el("tr", null, [
         el("td", { text: conn.name || "" }),
-        el("td", { text: TYPE_LABEL[conn.type] || conn.type }),
+        el("td", null, [typePill(conn.type)]),
         el("td", { text: conn.user || "" }),
         el("td", { text: hosts }),
-        el("td", { text: conn.secret_set ? "definido" : "ausente" }),
+        el("td", null, [el("span", {
+          class: "pill " + (conn.secret_set ? "pill-ok" : "pill-muted"),
+          text: conn.secret_set ? "definido" : "ausente",
+        })]),
         el("td", null, actions),
       ]));
     });
@@ -593,7 +657,11 @@
     if (!state.testResult) {
       return;
     }
-    const box = el("section", null, [el("h2", { text: "Resultado do teste" })]);
+    const box = el("section", { class: "card" }, [
+      el("div", { class: "card-head" }, [
+        el("h2", { text: "Resultado do teste" }),
+      ]),
+    ]);
     box.appendChild(el("p", { class: state.testResult.ok ? "ok" : "error", text: state.testResult.message || "" }));
     (state.testResult.attempts || []).forEach(function (a) {
       const line = a.label + " (" + a.host + "): " + (a.ok ? "ok" : (a.message || a.error || "falhou"));
@@ -603,28 +671,36 @@
   }
 
   function render() {
+    snapshotForm();
     const session = document.getElementById("session");
     const app = document.getElementById("app");
     renderSession(session);
+    renderNav();
     app.replaceChildren();
+    if (state.loading) {
+      app.appendChild(el("section", { class: "card state-card" }, [
+        el("p", { class: "muted", text: "Carregando…" }),
+      ]));
+      return;
+    }
     if (state.error) {
-      app.appendChild(el("p", { class: "error", text: errorMessage(state.error, state.errorDetail) }));
+      app.appendChild(el("p", { class: "banner banner-error error", text: errorMessage(state.error, state.errorDetail) }));
     }
     if (state.notice) {
-      app.appendChild(el("p", { class: "ok", text: state.notice }));
+      app.appendChild(el("p", { class: "banner banner-ok ok", text: state.notice }));
     }
     if (!state.who) {
       renderLogin(app);
       return;
     }
     if (!isReader()) {
-      app.appendChild(el("section", null, [
+      app.appendChild(el("section", { class: "card" }, [
         el("p", { class: "error", text: "Só owner ou editor acessam Conexões. Owner cria/edita/apaga; editor lista e testa." }),
       ]));
       return;
     }
     if (!state.enabled) {
-      app.appendChild(el("section", null, [
+      app.appendChild(el("section", { class: "card" }, [
         el("h2", { text: "Conexões desligada" }),
         el("p", { class: "error", text: state.disabledMessage || errorMessage("vault_disabled") }),
       ]));
@@ -636,11 +712,18 @@
   }
 
   async function boot() {
-    await api("/api/health");
-    await loadWhoami();
-    if (isReader()) {
-      await loadConnections();
+    state.loading = true;
+    render();
+    try {
+      await api("/api/health");
+      await loadWhoami();
+      if (isReader()) {
+        await loadConnections();
+      }
+    } catch (err) {
+      state.error = "api_unreachable";
     }
+    state.loading = false;
     render();
   }
 

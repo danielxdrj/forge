@@ -153,7 +153,58 @@ def test_nginx_proxies_api_sets_forwarded_headers_and_csp():
     assert "Testar conexão" in conexoes
     html_conn = (ROOT / "deploy/frontend/html/conexoes.html").read_text(encoding="utf-8")
     assert "<script src=\"/conexoes.js\"" in html_conn
+    assert "onclick=" not in html_conn
     entrypoint = (ROOT / "deploy/web/entrypoint.sh").read_text(encoding="utf-8")
     assert "forge_connections_key" in entrypoint
     assert "FORGE_CONNECTIONS_KEY" in entrypoint
     assert "\r" not in entrypoint
+
+
+def test_frontend_shell_tabs_and_theme():
+    html = (ROOT / "deploy/frontend/html/index.html").read_text(encoding="utf-8")
+    css = (ROOT / "deploy/frontend/html/app.css").read_text(encoding="utf-8")
+    js = (ROOT / "deploy/frontend/html/app.js").read_text(encoding="utf-8")
+    html_conn = (ROOT / "deploy/frontend/html/conexoes.html").read_text(encoding="utf-8")
+    conexoes = (ROOT / "deploy/frontend/html/conexoes.js").read_text(encoding="utf-8")
+    assert "--bg: #0B1220" in css
+    assert "--card: #111A2B" in css
+    assert "--group-tasks:" in css
+    assert "--group-eng:" in css
+    assert "--group-delivery:" in css
+    assert "--group-ops:" in css
+    assert "--group-auto:" in css
+    assert "--group-sec:" in css
+    assert "--group-core:" in css
+    assert "[hidden]" in css
+    assert "display: none !important" in css
+    assert 'fonts.googleapis' not in css
+    assert "cdn." not in css.lower()
+    assert "<script>" not in html
+    assert "onclick=" not in html and "onload=" not in html
+    assert "javascript:" not in html.lower()
+    assert 'class="logo"' in html and ">F<" in html
+    assert "FORGE" in html
+    assert 'data-nav="tarefas"' in html
+    assert 'data-nav="investigacao"' in html
+    assert 'data-nav="teia"' in html
+    assert 'id="nav-conexoes"' in html
+    assert re.search(r'id="nav-conexoes"[^>]*\bhidden\b', html)
+    assert "Investigação" in html
+    assert "Teia de contexto" in html
+    assert 'id="session"' in html
+    assert "Em construção" in js
+    assert "issue-select" in js
+    assert "Código" in js
+    assert "Portainer" in js
+    assert "Banco" in js
+    assert "FTP" in js
+    assert "Obsidian" in js
+    assert "Carregando…" in js
+    assert "isOwner" in js
+    assert "statusPill" in js
+    assert "Sair" in js
+    assert 'id="nav-conexoes"' in html_conn
+    assert re.search(r'id="nav-conexoes"[^>]*\bhidden\b', html_conn)
+    assert "isOwner" in conexoes
+    assert "Carregando…" in conexoes
+    assert "Sair" in conexoes
