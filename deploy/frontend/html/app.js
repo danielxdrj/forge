@@ -466,11 +466,11 @@
     if (key.indexOf("publicado") !== -1) {
       kind = "ok";
     } else if (key.indexOf("rascunho") !== -1) {
-      kind = "tasks";
+      kind = "warn";
     } else if (key.indexOf("confirmado") !== -1) {
-      kind = "eng";
+      kind = "ok";
     } else if (key.indexOf("cancelado") !== -1) {
-      kind = "muted";
+      kind = "danger";
     }
     return el("span", { class: "pill pill-" + kind, text: label });
   }

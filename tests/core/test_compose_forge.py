@@ -113,6 +113,8 @@ def test_nginx_proxies_api_sets_forwarded_headers_and_csp():
     assert "proxy_set_header X-Forwarded-For" in NGINX
     assert "proxy_set_header X-Forwarded-Proto" in NGINX
     assert "default-src 'self'" in NGINX
+    assert "font-src 'self'" in NGINX
+    assert "font/woff2" in NGINX
     assert "frame-ancestors 'none'" in NGINX
     assert "nosniff" in NGINX
     assert "no-referrer" in NGINX
@@ -164,10 +166,17 @@ def test_frontend_shell_tabs_and_theme():
     html = (ROOT / "deploy/frontend/html/index.html").read_text(encoding="utf-8")
     css = (ROOT / "deploy/frontend/html/app.css").read_text(encoding="utf-8")
     js = (ROOT / "deploy/frontend/html/app.js").read_text(encoding="utf-8")
+    theme_js = (ROOT / "deploy/frontend/html/theme.js").read_text(encoding="utf-8")
     html_conn = (ROOT / "deploy/frontend/html/conexoes.html").read_text(encoding="utf-8")
     conexoes = (ROOT / "deploy/frontend/html/conexoes.js").read_text(encoding="utf-8")
-    assert "--bg: #0B1220" in css
-    assert "--card: #111A2B" in css
+    fonts = ROOT / "deploy/frontend/html/fonts"
+    assert ':root[data-theme="light"]' in css
+    assert ':root[data-theme="dark"]' in css
+    assert "--bg: #F7F6F4" in css
+    assert "--card: #FFFFFF" in css
+    assert "--bg: #121212" in css
+    assert "--wine: #990000" in css
+    assert "#E35A5A" in css
     assert "--group-tasks:" in css
     assert "--group-eng:" in css
     assert "--group-delivery:" in css
@@ -175,14 +184,37 @@ def test_frontend_shell_tabs_and_theme():
     assert "--group-auto:" in css
     assert "--group-sec:" in css
     assert "--group-core:" in css
+    assert ".pill-ok" in css
+    assert ".pill-warn" in css
+    assert ".pill-danger" in css
+    assert "Playfair Display" in css
+    assert "Inter" in css
+    assert "@font-face" in css
+    assert "/fonts/inter-latin-400-normal.woff2" in css
+    assert "/fonts/playfair-display-latin-700-normal.woff2" in css
+    assert (fonts / "inter-latin-400-normal.woff2").is_file()
+    assert (fonts / "inter-latin-600-normal.woff2").is_file()
+    assert (fonts / "playfair-display-latin-700-normal.woff2").is_file()
+    assert "SIL OPEN FONT LICENSE" in (fonts / "OFL.txt").read_text(encoding="utf-8")
     assert "[hidden]" in css
     assert "display: none !important" in css
-    assert 'fonts.googleapis' not in css
+    assert "fonts.googleapis" not in css
     assert "cdn." not in css.lower()
     assert "<script>" not in html
+    assert "<script>" not in html_conn
     assert "onclick=" not in html and "onload=" not in html
     assert "javascript:" not in html.lower()
-    assert 'class="logo"' in html and ">F<" in html
+    assert '<script src="/theme.js"></script>' in html
+    assert '<script src="/theme.js"></script>' in html_conn
+    assert '<script src="/app.js" defer></script>' in html
+    assert 'id="theme-toggle"' in html
+    assert 'id="theme-toggle"' in html_conn
+    assert "localStorage" in theme_js
+    assert "prefers-color-scheme" in theme_js
+    assert "data-theme" in theme_js
+    assert 'class="logo"' in html
+    assert 'class="logo-amp"' in html
+    assert "&amp;" in html
     assert "FORGE" in html
     assert 'data-nav="tarefas"' in html
     assert 'data-nav="investigacao"' in html
@@ -203,8 +235,10 @@ def test_frontend_shell_tabs_and_theme():
     assert "isOwner" in js
     assert "statusPill" in js
     assert "Sair" in js
+    assert "X-CSRF-Token" in js
     assert 'id="nav-conexoes"' in html_conn
     assert re.search(r'id="nav-conexoes"[^>]*\bhidden\b', html_conn)
     assert "isOwner" in conexoes
     assert "Carregando…" in conexoes
     assert "Sair" in conexoes
+    assert "X-CSRF-Token" in conexoes
