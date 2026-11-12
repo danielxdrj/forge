@@ -31,7 +31,27 @@ materialize_secrets() {
   }
   _write_secret forge_pg_owner_password FORGE_PG_OWNER_PASSWORD
   _write_secret forge_pg_app_password FORGE_PG_APP_PASSWORD
-  unset FORGE_PG_OWNER_PASSWORD FORGE_PG_APP_PASSWORD || true
+  # Chave Fernet das conexões: opcional. Sem ela a área Conexões fica desligada.
+  _write_optional_secret() {
+    name="$1"
+    var="$2"
+    eval "val=\${$var-}"
+    if [ -z "$val" ]; then
+      unset "$var" || true
+      return 0
+    fi
+    val=$(printf '%s' "$val" | tr -d '\r\n')
+    if [ -z "$val" ]; then
+      unset "$var" || true
+      return 0
+    fi
+    printf '%s' "$val" > "${dest_dir}/${name}"
+    chmod 0600 "${dest_dir}/${name}"
+    unset "$var" || true
+    val=""
+  }
+  _write_optional_secret forge_connections_key FORGE_CONNECTIONS_KEY
+  unset FORGE_PG_OWNER_PASSWORD FORGE_PG_APP_PASSWORD FORGE_CONNECTIONS_KEY || true
   chmod 0600 "${dest_dir}/forge_pg_owner_password" "${dest_dir}/forge_pg_app_password"
 }
 
@@ -40,6 +60,9 @@ if [ "$(id -u)" = "0" ]; then
   chown -R forge:forge /home/forge
   materialize_secrets
   chown forge:forge /run/secrets/forge_pg_owner_password /run/secrets/forge_pg_app_password
+  if [ -f /run/secrets/forge_connections_key ]; then
+    chown forge:forge /run/secrets/forge_connections_key
+  fi
   exec setpriv --reuid=1000 --regid=1000 --init-groups -- python -m forge_core.web
 fi
 materialize_secrets

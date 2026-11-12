@@ -21,6 +21,11 @@ header, main { max-width: 52rem; margin: 0 auto; padding: 1rem 1.25rem; }
 header { display: flex; justify-content: space-between; align-items: center; gap: 1rem; }
 h1, h2 { margin: 0 0 0.75rem; font-weight: 600; }
 h1 { font-size: 1.4rem; }
+nav a { margin-right: 0.9rem; text-decoration: none; color: var(--muted); }
+nav a.current { color: var(--fg); font-weight: 600; }
+.hosts { display: flex; flex-direction: column; gap: 0.5rem; }
+.host-row { display: grid; grid-template-columns: 1fr 1fr 5rem auto; gap: 0.4rem; align-items: end; }
+.host-row input { width: 100%; }
 section, .card {
   background: var(--card);
   border: 1px solid var(--border);

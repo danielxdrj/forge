@@ -29,6 +29,11 @@ def require_editor(store: AuthStore, principal: Principal) -> Principal:
     return store.require(principal, "editor")
 
 
+def require_owner(store: AuthStore, principal: Principal) -> Principal:
+    """Exige o papel owner para criar/editar/apagar conexões."""
+    return store.require(principal, "owner")
+
+
 def roles_of(store: AuthStore, identity_id: str) -> list[str]:
     return [role for role in ROLES if store.has_role(identity_id, role)]
 

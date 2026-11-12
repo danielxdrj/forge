@@ -82,6 +82,8 @@ def test_backend_is_read_only_with_run_secrets_tmpfs():
     assert "gid=1000" in backend
     assert not re.search(r"(?m)^\s+secrets:\s*$", backend)
     assert "FORGE_SECRET_OWNER_PASSWORD_FILE: /run/secrets/forge_pg_owner_password" in backend
+    assert "FORGE_SECRET_CONNECTIONS_KEY_FILE: /run/secrets/forge_connections_key" in backend
+    assert "FORGE_CONNECTIONS_KEY:" in backend
     assert "FORGE_WEB_HOSTS:" in backend
     assert "FORGE_FRONTEND_HOST_PORT:-8090" in backend
     assert "FORGE_SESSION_TTL_SECONDS:" in backend
@@ -103,6 +105,7 @@ def test_shell_and_dockerfiles_have_no_cr():
 
 
 def test_nginx_proxies_api_sets_forwarded_headers_and_csp():
+    assert "location = /conexoes" in NGINX
     assert "location /api/" in NGINX
     assert "proxy_pass http://forge_backend:8091" in NGINX
     assert "proxy_set_header Host $http_host" in NGINX
@@ -142,3 +145,15 @@ def test_nginx_proxies_api_sets_forwarded_headers_and_csp():
     assert "safeLink(links.pr_url)" in js
     assert "publishedIssueLink(task.issue_url)" in js
     assert "safeLink(task.pr_url" in js
+    conexoes = (ROOT / "deploy/frontend/html/conexoes.js").read_text(encoding="utf-8")
+    assert "innerHTML" not in conexoes
+    assert "textContent" in conexoes
+    assert "/api/connections" in conexoes
+    assert "secret_set" in conexoes
+    assert "Testar conexão" in conexoes
+    html_conn = (ROOT / "deploy/frontend/html/conexoes.html").read_text(encoding="utf-8")
+    assert "<script src=\"/conexoes.js\"" in html_conn
+    entrypoint = (ROOT / "deploy/web/entrypoint.sh").read_text(encoding="utf-8")
+    assert "forge_connections_key" in entrypoint
+    assert "FORGE_CONNECTIONS_KEY" in entrypoint
+    assert "\r" not in entrypoint

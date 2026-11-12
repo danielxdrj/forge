@@ -13,9 +13,13 @@ from pydantic import BaseModel, Field
 from ..auth.github import DeviceFlow, DeviceFlowError, Transport, UrllibTransport
 from ..auth.store import AuthStore, Principal
 from ..config import Settings
+from ..connections.probes import ConnectionProbes
+from ..connections.service import ConnectionService
+from ..connections.vault import ConnectionsVault
 from ..errors import AuthenticationError, AuthorizationError, DraftError
 from ..logging import redact
 from ..storage.sql import SqlRepository
+from .connections import register_connection_routes
 from .pending import PendingLogin, PendingStore
 from .security import (
     CSRF_COOKIE,
@@ -28,6 +32,7 @@ from .security import (
     host_allowed,
     new_token,
     require_editor,
+    require_owner,
     roles_of,
     session_expires_at,
 )
@@ -62,6 +67,8 @@ def create_app(
     provider=None,
     gh=None,
     drafts_dir: Path | None = None,
+    vault: ConnectionsVault | None = None,
+    probes: ConnectionProbes | None = None,
 ) -> FastAPI:
     if not settings.github_client_id:
         raise ValueError("FORGE_GITHUB_CLIENT_ID é obrigatória para o painel web")
@@ -74,12 +81,15 @@ def create_app(
 
     tasks = TaskService(repo)
     panel = WebTaskService(repo, tasks, provider, gh, drafts_dir=drafts_dir)
+    connections_vault = vault if vault is not None else ConnectionsVault.from_env()
+    connections = ConnectionService(repo, store, connections_vault, probes)
     app = FastAPI(title="Forge", docs_url=None, redoc_url=None, openapi_url=None)
     app.state.repo = repo
     app.state.store = store
     app.state.settings = settings
     app.state.require_editor = require_editor
     app.state.panel = panel
+    app.state.connections = connections
 
     def _audit(actor: str, action: str, target: str, result: str) -> None:
         repo.record_audit(actor, action, target, redact(result))
@@ -233,6 +243,23 @@ def create_app(
             return require_editor(store, principal)
         except AuthorizationError:
             return _json_error(403, "forbidden")
+
+    def _need_owner(request: Request) -> Principal | JSONResponse:
+        principal = _need_principal(request)
+        if isinstance(principal, JSONResponse):
+            return principal
+        try:
+            return require_owner(store, principal)
+        except AuthorizationError:
+            return _json_error(403, "forbidden")
+
+    def _need_connection_reader(request: Request) -> Principal | JSONResponse:
+        principal = _need_principal(request)
+        if isinstance(principal, JSONResponse):
+            return principal
+        if store.has_role(principal.identity_id, "editor") or store.has_role(principal.identity_id, "owner"):
+            return principal
+        return _json_error(403, "forbidden")
 
     @app.middleware("http")
     async def _secure(request: Request, call_next):
@@ -388,5 +415,14 @@ def create_app(
             return panel.list_tasks(principal)
         except DraftError as exc:
             return _draft_error(exc)
+
+    register_connection_routes(
+        app,
+        connections,
+        json_error=_json_error,
+        need_principal=_need_principal,
+        need_owner=_need_owner,
+        need_reader=_need_connection_reader,
+    )
 
     return app
