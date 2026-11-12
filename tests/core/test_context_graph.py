@@ -160,6 +160,17 @@ def test_context_graph_aggregates_limits_no_vault_no_content(tmp_path):
     assert any(e["type"] == "touches" for e in payload["edges"])
     assert any(e["type"] == "pr" for e in payload["edges"])
     assert any(e["type"] == "notes" for e in payload["edges"])
+    issue = next(n for n in payload["nodes"] if n["type"] == "issue")
+    assert issue.get("url") == ISSUE_URL
+    assert "Bug" in (issue.get("labels") or [])
+    assert any(int(p.get("number")) == 12 for p in (issue.get("prs") or []))
+    assert all("body" not in p for p in (issue.get("prs") or []))
+    pr = next(n for n in payload["nodes"] if n["type"] == "pr")
+    assert pr.get("url") == PR_URL
+    files = [n for n in payload["nodes"] if n["type"] == "file"]
+    assert files
+    assert all(n.get("path") for n in files)
+    assert all(str(n.get("url") or "").startswith("https://github.com/") for n in files)
     small = client.get(
         "/api/context-graph", headers=HOST,
         params={"repo": REPO, "limit": 10},

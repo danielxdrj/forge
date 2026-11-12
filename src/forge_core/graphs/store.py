@@ -184,13 +184,19 @@ def load_graph(root: Path, repo: str) -> dict | None:
 
 
 def graph_mtime_ns(root: Path, repo: str) -> int:
+    return graph_stamp(root, repo)[0]
+
+
+def graph_stamp(root: Path, repo: str) -> tuple[int, int]:
+    """mtime_ns e tamanho do graph.json. (0, 0) se faltar. Sem ler o conteúdo."""
     path = repo_dir(root, repo) / "graph.json"
     try:
         if path.is_file() and not path.is_symlink():
-            return int(path.stat().st_mtime_ns)
+            st = path.stat()
+            return int(st.st_mtime_ns), int(st.st_size)
     except OSError:
-        return 0
-    return 0
+        return (0, 0)
+    return (0, 0)
 
 
 def nodes_for_files(root: Path, repo: str, files: list[str], limit: int = 12) -> list[dict]:

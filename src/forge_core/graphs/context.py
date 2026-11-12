@@ -22,10 +22,13 @@ NODE_TYPES = ("issue", "pr", "note", "vault", "file", "module", "class")
 PRIORITY_TYPES = frozenset({"issue", "pr", "note", "vault"})
 FINE_CODE = frozenset({"function", "method", "symbol", "interface", "rationale"})
 KEEP_CODE = frozenset({"file", "module", "class"})
+CHILD_CODE = frozenset({"class", "function"}) | FINE_CODE
 IMPORT_REL = frozenset({"imports", "imports_from", "import", "uses"})
 CALL_REL = frozenset({"calls", "call"})
 CONTAINS_REL = frozenset({"contains", "defines", "has", "declares"})
 QUERY_MAX = store.QUERY_MAX
+EXPAND_DEFAULT = 80
+EXPAND_MAX = 200
 
 
 class ContextGraph:
@@ -35,6 +38,7 @@ class ContextGraph:
         self._vault = vault
         self._root = Path(settings.graph_dir)
         self._cache: tuple | None = None
+        self._agg: dict[str, tuple[tuple[int, int], dict]] = {}
 
     def build(
         self,
@@ -66,6 +70,68 @@ class ContextGraph:
         self._cache = (sig, payload)
         return payload
 
+    def expand(self, *, repo: str = "", file: str = "", limit: int = 0) -> dict:
+        """Filhos (classe/função) de um ficheiro. Sem corpo. Limitado."""
+        want_repo = (repo or "").strip()
+        allowed = [f"{row.owner}/{row.repo_name}" for row in list_active_allowed_repos(self._repo)]
+        match = [item for item in allowed if item.lower() == want_repo.lower()] if want_repo else []
+        if len(match) != 1:
+            raise GraphError("repo_not_allowed")
+        full = match[0]
+        rel = (file or "").strip().replace("\\", "/").lstrip("./")
+        if not rel or any(part == ".." for part in rel.split("/")):
+            raise GraphError("not_found")
+        agg = self._cached_agg(full)
+        if agg is None:
+            raise GraphError("not_indexed")
+        fid = _file_id(full, rel)
+        parent = agg["nodes"].get(fid)
+        if parent is None:
+            raise GraphError("not_found")
+        cap = EXPAND_DEFAULT
+        if limit and limit > 0:
+            cap = max(1, min(int(limit), EXPAND_MAX))
+        kids = list(agg["children"].get(fid) or [])
+        kids.sort(key=lambda n: (0 if n.get("type") == "class" else 1, str(n.get("label") or ""), str(n.get("id") or "")))
+        truncated = len(kids) > cap
+        kids = kids[:cap]
+        keep = {n["id"] for n in kids}
+        keep.add(fid)
+        edges: list[dict] = []
+        seen: dict[tuple[str, str, str], int] = {}
+        for raw in agg["child_edges"].get(fid) or []:
+            if raw["source"] in keep and raw["target"] in keep:
+                _edge(edges, seen, raw["source"], raw["target"], raw.get("type") or "calls", raw.get("weight") or 1)
+        for child in kids:
+            _edge(edges, seen, fid, child["id"], "contains", 1)
+        return {
+            "parent": dict(parent),
+            "nodes": [dict(n) for n in kids],
+            "edges": edges,
+            "truncated": truncated,
+            "shown": len(kids),
+            "total": len(agg["children"].get(fid) or []),
+        }
+
+    def _cached_agg(self, full: str) -> dict | None:
+        stamp = store.graph_stamp(self._root, full)
+        if stamp == (0, 0):
+            self._agg.pop(full, None)
+            return None
+        hit = self._agg.get(full)
+        if hit and hit[0] == stamp:
+            return hit[1]
+        data = store.load_graph(self._root, full)
+        if data is None:
+            self._agg.pop(full, None)
+            return None
+        raw_nodes, raw_edges = store.nodes_edges(data)
+        meta = store.read_meta(self._root, full) or {}
+        commit = str(meta.get("commit") or "")
+        agg = _aggregate_code(full, raw_nodes, raw_edges, commit)
+        self._agg[full] = (stamp, agg)
+        return agg
+
     def _signature(self, repos, type_filter, query, node_limit, edge_limit) -> tuple:
         mtimes = tuple((name, store.graph_mtime_ns(self._root, name)) for name in repos)
         notes_row = self._repo.fetch("SELECT COUNT(*), MAX(updated_at) FROM investigation_notes")
@@ -89,17 +155,25 @@ class ContextGraph:
     def _compose(self, repos: list[str], type_filter: tuple[str, ...], query: str, node_limit: int, edge_limit: int) -> dict:
         nodes: dict[str, dict] = {}
         edges: list[dict] = []
-        seen_edge: set[tuple[str, str, str]] = set()
+        seen_edge: dict[tuple[str, str, str], int] = {}
         vault_enabled = bool(self._vault.enabled)
+        raw_total = 0
+        aggregated = False
 
         for full in repos:
-            meta = store.read_meta(self._root, full) or {}
-            commit = str(meta.get("commit") or "")
-            data = store.load_graph(self._root, full)
-            if data is None:
+            agg = self._cached_agg(full)
+            if agg is None:
                 continue
-            raw_nodes, raw_edges = store.nodes_edges(data)
-            _add_code(full, raw_nodes, raw_edges, commit, nodes, edges, seen_edge)
+            raw_total += int(agg.get("raw_nodes") or 0)
+            if agg.get("children"):
+                aggregated = True
+            for ident, node in agg["nodes"].items():
+                nodes[ident] = dict(node)
+            for edge in agg["edges"]:
+                _edge(
+                    edges, seen_edge, edge["source"], edge["target"],
+                    edge.get("type") or "calls", edge.get("weight") or 1,
+                )
 
         repo_set = {r.lower() for r in repos}
         for item in list_completed(self._repo):
@@ -108,6 +182,7 @@ class ContextGraph:
             issue_id = f"issue:{item.repo}#{item.number}"
             nodes[issue_id] = _public(
                 issue_id, "issue", item.title or issue_id, repo=item.repo, url=item.url or "",
+                labels=_issue_labels(item), prs=_issue_prs(item),
             )
             files: list[str] = []
             for pr in item.prs or []:
@@ -119,8 +194,11 @@ class ContextGraph:
                 except (TypeError, ValueError):
                     continue
                 pr_id = f"pr:{item.repo}#{pr_n}"
+                pr_url = str(pr.get("url") or "")
+                if not pr_url:
+                    pr_url = f"https://github.com/{item.repo}/pull/{pr_n}"
                 nodes[pr_id] = _public(
-                    pr_id, "pr", f"PR #{pr_n}", repo=item.repo, url=str(pr.get("url") or ""),
+                    pr_id, "pr", f"PR #{pr_n}", repo=item.repo, url=pr_url,
                 )
                 _edge(edges, seen_edge, issue_id, pr_id, "pr")
                 for path in pr.get("files") or []:
@@ -179,10 +257,6 @@ class ContextGraph:
                     if target and target != src:
                         _edge(edges, seen_edge, src, target, "wiki")
 
-        collapse_classes = _count_code(nodes) > node_limit
-        if collapse_classes:
-            _collapse_classes(nodes, edges, seen_edge)
-
         if type_filter:
             keep_types = set(type_filter)
             nodes = {k: v for k, v in nodes.items() if v.get("type") in keep_types}
@@ -191,14 +265,22 @@ class ContextGraph:
         if query:
             nodes, edges = _filter_query(nodes, edges, query)
 
+        total = len(nodes)
         truncated = False
         if len(nodes) > node_limit or len(edges) > edge_limit:
             nodes, edges, truncated = _cap(nodes, edges, node_limit, edge_limit)
+
+        if raw_total > total:
+            aggregated = True
 
         return {
             "nodes": list(nodes.values()),
             "edges": edges,
             "truncated": truncated,
+            "aggregated": aggregated,
+            "shown": len(nodes),
+            "total": total,
+            "raw_total": raw_total,
             "vault": vault_enabled,
             "node_limit": node_limit,
             "edge_limit": edge_limit,
@@ -224,14 +306,58 @@ def _public(ident: str, typ: str, label: str, **extra) -> dict:
     return data
 
 
-def _edge(edges: list[dict], seen: set[tuple[str, str, str]], source: str, target: str, kind: str) -> None:
+def _issue_labels(item) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    labels = item.labels if isinstance(getattr(item, "labels", None), dict) else {}
+    for key in ("tipo", "prioridade", "sprint"):
+        val = str(labels.get(key) or "").strip()
+        fold = val.casefold()
+        if val and fold not in seen:
+            seen.add(fold)
+            out.append(val)
+    for name in labels.get("names") or []:
+        val = str(name).strip()
+        fold = val.casefold()
+        if val and fold not in seen:
+            seen.add(fold)
+            out.append(val)
+    return out
+
+
+def _issue_prs(item) -> list[dict]:
+    out: list[dict] = []
+    repo = str(getattr(item, "repo", "") or "")
+    for pr in getattr(item, "prs", None) or []:
+        if not isinstance(pr, dict):
+            continue
+        try:
+            number = int(pr.get("number"))
+        except (TypeError, ValueError):
+            continue
+        rec: dict = {"number": number}
+        url = str(pr.get("url") or "").strip()
+        if not url and repo:
+            url = f"https://github.com/{repo}/pull/{number}"
+        if url:
+            rec["url"] = url
+        out.append(rec)
+    return out
+
+
+def _edge(edges: list[dict], seen: dict[tuple[str, str, str], int], source: str, target: str, kind: str, weight: int = 1) -> None:
     if not source or not target or source == target:
         return
     key = (source, target, kind)
-    if key in seen:
+    idx = seen.get(key)
+    extra = int(weight) if weight else 1
+    if extra < 1:
+        extra = 1
+    if idx is not None:
+        edges[idx]["weight"] = int(edges[idx].get("weight") or 1) + extra
         return
-    seen.add(key)
-    edges.append({"source": source, "target": target, "type": kind})
+    seen[key] = len(edges)
+    edges.append({"source": source, "target": target, "type": kind, "weight": extra})
 
 
 def _code_kind(node: dict) -> str:
@@ -272,8 +398,23 @@ def _ensure_file(nodes: dict[str, dict], repo: str, path: str, commit: str) -> s
     return fid
 
 
-def _add_code(repo: str, raw_nodes: list, raw_edges: list, commit: str, nodes: dict, edges: list, seen: set) -> None:
-    parent: dict[str, str] = {}
+def _child_id(repo: str, kind: str, path: str, orig: str, label: str) -> str:
+    role = "class" if kind == "class" else "function"
+    key = orig or label
+    if path:
+        return f"{role}:{repo}:{path}:{key}"
+    return f"{role}:{repo}:{key}"
+
+
+def _aggregate_code(repo: str, raw_nodes: list, raw_edges: list, commit: str) -> dict:
+    nodes: dict[str, dict] = {}
+    edges: list[dict] = []
+    seen: dict[tuple[str, str, str], int] = {}
+    children: dict[str, list[dict]] = {}
+    child_edges: dict[str, list[dict]] = {}
+    child_seen: dict[str, set[tuple[str, str, str]]] = {}
+    to_file: dict[str, str] = {}
+    to_child: dict[str, str] = {}
     for node in raw_nodes:
         if not isinstance(node, dict):
             continue
@@ -281,35 +422,40 @@ def _add_code(repo: str, raw_nodes: list, raw_edges: list, commit: str, nodes: d
         kind = _code_kind(node)
         path = _file_of(node)
         label = str(node.get("label") or node.get("name") or orig or path)
-        if kind in FINE_CODE or kind == "function":
+        if kind in CHILD_CODE:
             if not path:
                 continue
             fid = _ensure_file(nodes, repo, path, commit)
-            if orig:
-                parent[orig] = fid
-            continue
-        if kind == "class":
-            cid = f"class:{repo}:{path}:{label}" if path else f"class:{repo}:{label}"
+            cid = _child_id(repo, kind, path, orig, label)
+            public_kind = "class" if kind == "class" else "function"
             url = f"https://github.com/{repo}/blob/{commit or 'HEAD'}/{path}" if path else ""
-            nodes[cid] = _public(cid, "class", label, repo=repo, path=path or None, url=url or None)
+            child = _public(cid, public_kind, label or cid, repo=repo, path=path, url=url or None)
+            bucket = children.setdefault(fid, [])
+            if not any(item["id"] == cid for item in bucket):
+                bucket.append(child)
             if orig:
-                parent[orig] = cid
-            if path:
-                _ensure_file(nodes, repo, path, commit)
+                to_file[orig] = fid
+                to_child[orig] = cid
             continue
         if kind == "module":
             mid = f"module:{repo}:{label or path}"
-            nodes[mid] = _public(mid, "module", label or path, repo=repo, path=path or None)
+            url = f"https://github.com/{repo}/blob/{commit or 'HEAD'}/{path}" if path else ""
+            nodes[mid] = _public(mid, "module", label or path, repo=repo, path=path or None, url=url or None)
             if orig:
-                parent[orig] = mid
+                to_file[orig] = mid
             continue
         if path:
             fid = _ensure_file(nodes, repo, path, commit)
             if orig:
-                parent[orig] = fid
+                to_file[orig] = fid
         elif orig:
             fid = _ensure_file(nodes, repo, label or orig, commit)
-            parent[orig] = fid
+            to_file[orig] = fid
+
+    for fid, kids in children.items():
+        if fid in nodes and kids:
+            nodes[fid]["expandable"] = True
+            nodes[fid]["children"] = len(kids)
 
     for raw in raw_edges:
         if not isinstance(raw, dict):
@@ -325,10 +471,28 @@ def _add_code(repo: str, raw_nodes: list, raw_edges: list, commit: str, nodes: d
             kind = "calls"
         else:
             kind = "calls"
-        left = parent.get(src)
-        right = parent.get(dst)
+        left = to_file.get(src)
+        right = to_file.get(dst)
         if left and right:
             _edge(edges, seen, left, right, kind)
+        left_c = to_child.get(src)
+        right_c = to_child.get(dst)
+        if left_c and right_c and left and left == right:
+            bucket = child_edges.setdefault(left, [])
+            keys = child_seen.setdefault(left, set())
+            key = (left_c, right_c, kind)
+            if key not in keys:
+                keys.add(key)
+                bucket.append({"source": left_c, "target": right_c, "type": kind, "weight": 1})
+
+    return {
+        "nodes": nodes,
+        "edges": edges,
+        "children": children,
+        "child_edges": child_edges,
+        "raw_nodes": len(raw_nodes),
+        "raw_edges": len(raw_edges),
+    }
 
 
 def _endpoint(raw) -> str:
@@ -343,7 +507,7 @@ def _count_code(nodes: dict[str, dict]) -> int:
     return sum(1 for n in nodes.values() if n.get("type") in KEEP_CODE)
 
 
-def _collapse_classes(nodes: dict[str, dict], edges: list[dict], seen: set) -> None:
+def _collapse_classes(nodes: dict[str, dict], edges: list[dict], seen: dict) -> None:
     remap: dict[str, str] = {}
     drop: set[str] = set()
     for ident, node in list(nodes.items()):
@@ -366,7 +530,7 @@ def _collapse_classes(nodes: dict[str, dict], edges: list[dict], seen: set) -> N
         src = remap.get(edge["source"], edge["source"])
         dst = remap.get(edge["target"], edge["target"])
         if src in nodes and dst in nodes:
-            _edge(new_edges, seen, src, dst, edge["type"])
+            _edge(new_edges, seen, src, dst, edge["type"], edge.get("weight") or 1)
     edges[:] = new_edges
 
 

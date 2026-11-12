@@ -55,11 +55,12 @@
     teiaTypes: [],
     teiaQuery: "",
     teiaSelected: null,
-    teiaCam: { x: 0, y: 0, k: 1 },
-    teiaPos: {},
-    teiaLayoutKey: "",
+    teiaExpanded: {},
     relatedIssues: [],
   };
+  let teiaCtl = null;
+  let teiaCanvas = null;
+  let teiaKey = "";
   const TEIA_TYPES = [
     { id: "issue", label: "Issues" },
     { id: "pr", label: "PRs" },
@@ -1013,8 +1014,13 @@
         nodes: graph.data.nodes || [],
         edges: graph.data.edges || [],
         truncated: !!graph.data.truncated,
+        aggregated: !!graph.data.aggregated,
+        shown: graph.data.shown || (graph.data.nodes || []).length,
+        total: graph.data.total || (graph.data.nodes || []).length,
+        raw_total: graph.data.raw_total || 0,
         vault: !!graph.data.vault,
       };
+      state.teiaExpanded = {};
       state.vault.enabled = !!graph.data.vault;
     } else if (graph.status === 401 || graph.status === 403) {
       setErrorFromResponse(graph.data);
@@ -1042,7 +1048,8 @@
   async function applyTeiaFilters() {
     snapshotForm();
     state.teiaSelected = null;
-    state.teiaLayoutKey = "";
+    state.teiaExpanded = {};
+    teiaKey = "";
     await loadTeia();
     render();
   }
@@ -1068,248 +1075,248 @@
     render();
   }
 
-  function svgEl(tag, attrs, children) {
-    const node = document.createElementNS("http://www.w3.org/2000/svg", tag);
-    if (attrs) {
-      Object.keys(attrs).forEach(function (key) {
-        const value = attrs[key];
-        if (value === null || value === undefined || value === false) {
-          return;
-        }
-        if (key === "text") {
-          node.textContent = value;
-          return;
-        }
-        node.setAttribute(key, value === true ? "" : String(value));
-      });
-    }
-    (children || []).forEach(function (child) {
-      if (child) {
-        node.appendChild(child);
-      }
-    });
-    return node;
+  function teiaTypeLabel(type) {
+    const map = {
+      issue: "Issue", pr: "PR", note: "Nota", vault: "Vault",
+      file: "Arquivo", module: "Módulo", class: "Classe", function: "Função",
+    };
+    return map[type] || type || "";
   }
 
-  function layoutTeia(nodes, edges) {
-    const n = nodes.length;
-    if (!n) {
+  function teiaCountText() {
+    const n = (state.teia.nodes || []).length;
+    const raw = state.teia.raw_total || 0;
+    const total = state.teia.total || n;
+    const m = raw > n ? raw : total;
+    if (state.teia.truncated || state.teia.aggregated || m > n) {
+      return "Mostrando " + n + " de " + m;
+    }
+    return n + " nós";
+  }
+
+  function teiaNodeById(id) {
+    if (!id) {
+      return null;
+    }
+    const nodes = state.teia.nodes || [];
+    for (let i = 0; i < nodes.length; i += 1) {
+      if (nodes[i].id === id) {
+        return nodes[i];
+      }
+    }
+    return null;
+  }
+
+  function teiaNeighbors(id) {
+    const out = [];
+    const seen = {};
+    (state.teia.edges || []).forEach(function (edge) {
+      let other = null;
+      if (edge.source === id) {
+        other = edge.target;
+      } else if (edge.target === id) {
+        other = edge.source;
+      }
+      if (other && !seen[other]) {
+        seen[other] = true;
+        const node = teiaNodeById(other);
+        if (node) {
+          out.push(node);
+        }
+      }
+    });
+    out.sort(function (a, b) {
+      return String(a.label || a.id).localeCompare(String(b.label || b.id));
+    });
+    return out;
+  }
+
+  function selectTeiaNode(id) {
+    state.teiaSelected = id || null;
+    if (teiaCtl) {
+      teiaCtl.setSelected(id || null);
+    }
+    fillTeiaDetail();
+    const node = teiaNodeById(id);
+    if (node && node.type === "file" && node.expandable && node.repo && node.path && !state.teiaExpanded[node.id]) {
+      expandTeiaFile(node);
+    }
+  }
+
+  async function expandTeiaFile(node) {
+    const params = new URLSearchParams();
+    params.set("repo", node.repo);
+    params.set("file", node.path);
+    const res = await api("/api/context-graph/expand?" + params.toString());
+    if (!res.ok) {
       return;
     }
-    const W = 1200;
-    const H = 800;
-    const key = nodes.map(function (item) { return item.id; }).join("|");
-    if (state.teiaLayoutKey === key && Object.keys(state.teiaPos).length) {
-      nodes.forEach(function (item) {
-        const pos = state.teiaPos[item.id];
-        if (pos) {
-          item.x = pos.x;
-          item.y = pos.y;
-        }
-      });
+    state.teiaExpanded[node.id] = true;
+    const kids = res.data.nodes || [];
+    const extra = res.data.edges || [];
+    const seen = {};
+    (state.teia.nodes || []).forEach(function (item) { seen[item.id] = true; });
+    kids.forEach(function (item) {
+      if (!seen[item.id]) {
+        state.teia.nodes.push(item);
+        seen[item.id] = true;
+      }
+    });
+    extra.forEach(function (edge) {
+      state.teia.edges.push(edge);
+    });
+    if (teiaCtl && teiaCtl.addAround) {
+      teiaCtl.addAround(node.id, kids, extra);
+    }
+    fillTeiaDetail();
+  }
+
+  function teiaLinkLabel(node) {
+    if (!node) {
+      return "Abrir";
+    }
+    if (node.type === "pr") {
+      return "Abrir PR";
+    }
+    if (node.type === "file" || node.type === "class" || node.type === "module") {
+      return "Abrir no GitHub";
+    }
+    if (node.type === "issue") {
+      return "Abrir issue";
+    }
+    return "Abrir";
+  }
+
+  function fillTeiaDetail(panel) {
+    const host = panel || document.getElementById("teia-detail");
+    if (!host) {
       return;
     }
-    const iters = n > 350 ? 24 : n > 150 ? 36 : 48;
-    nodes.forEach(function (item, i) {
-      const angle = (i / n) * Math.PI * 2;
-      const radius = 160 + (i % 7) * 18;
-      item.x = W / 2 + Math.cos(angle) * radius;
-      item.y = H / 2 + Math.sin(angle) * radius;
-      item.vx = 0;
-      item.vy = 0;
-    });
-    const index = {};
-    nodes.forEach(function (item, i) { index[item.id] = i; });
-    const links = [];
-    edges.forEach(function (edge) {
-      const a = index[edge.source];
-      const b = index[edge.target];
-      if (a !== undefined && b !== undefined) {
-        links.push([a, b]);
-      }
-    });
-    const cell = 48;
-    for (let t = 0; t < iters; t += 1) {
-      const grid = {};
-      nodes.forEach(function (item, i) {
-        const cx = Math.floor(item.x / cell);
-        const cy = Math.floor(item.y / cell);
-        const gk = cx + "," + cy;
-        if (!grid[gk]) {
-          grid[gk] = [];
+    host.replaceChildren();
+    host.appendChild(el("h2", { text: "Detalhe" }));
+    const selected = teiaNodeById(state.teiaSelected);
+    if (!selected) {
+      host.appendChild(el("p", { class: "muted", text: "Clique num nó para ver o detalhe." }));
+      return;
+    }
+    host.appendChild(el("p", { class: "pill pill-core", text: teiaTypeLabel(selected.type) }));
+    host.appendChild(el("h3", { text: selected.label || selected.id }));
+    if (selected.repo) {
+      host.appendChild(el("p", { text: selected.repo }));
+    }
+    if (selected.path) {
+      host.appendChild(el("p", { class: "muted", text: selected.path }));
+    }
+    if (selected.url) {
+      host.appendChild(safeLink(selected.url, teiaLinkLabel(selected)));
+    }
+    if (selected.type === "file" && selected.expandable) {
+      const n = selected.children || 0;
+      host.appendChild(el("p", {
+        class: "muted",
+        text: state.teiaExpanded[selected.id]
+          ? ("Símbolos no ficheiro: " + n)
+          : ("Clique para expandir " + n + " símbolos neste ficheiro."),
+      }));
+    }
+    const labels = selected.labels || [];
+    if (selected.type === "issue" && labels.length) {
+      host.appendChild(el("p", { class: "teia-k", text: "Labels" }));
+      const row = el("div", { class: "teia-chips" });
+      labels.forEach(function (name) {
+        row.appendChild(el("span", { class: "pill pill-tasks", text: String(name) }));
+      });
+      host.appendChild(row);
+    }
+    const prs = selected.prs || [];
+    if (selected.type === "issue" && prs.length) {
+      host.appendChild(el("p", { class: "teia-k", text: "PRs" }));
+      const list = el("div", { class: "teia-nlist" });
+      prs.forEach(function (pr) {
+        const prId = selected.repo ? ("pr:" + selected.repo + "#" + pr.number) : "";
+        const label = "PR #" + pr.number;
+        if (prId && teiaNodeById(prId)) {
+          list.appendChild(el("button", {
+            type: "button",
+            class: "teia-neighbor",
+            text: label,
+            onClick: function () { selectTeiaNode(prId); },
+          }));
+        } else if (pr.url) {
+          list.appendChild(safeLink(pr.url, label));
+        } else {
+          list.appendChild(el("span", { text: label }));
         }
-        grid[gk].push(i);
       });
-      nodes.forEach(function (item, i) {
-        const cx = Math.floor(item.x / cell);
-        const cy = Math.floor(item.y / cell);
-        let fx = (W / 2 - item.x) * 0.002;
-        let fy = (H / 2 - item.y) * 0.002;
-        for (let dx = -1; dx <= 1; dx += 1) {
-          for (let dy = -1; dy <= 1; dy += 1) {
-            const bucket = grid[(cx + dx) + "," + (cy + dy)] || [];
-            bucket.forEach(function (j) {
-              if (j <= i) {
-                return;
-              }
-              const other = nodes[j];
-              let diffX = item.x - other.x;
-              let diffY = item.y - other.y;
-              let dist2 = diffX * diffX + diffY * diffY || 0.01;
-              const force = 220 / dist2;
-              const dist = Math.sqrt(dist2);
-              diffX /= dist;
-              diffY /= dist;
-              item.vx += diffX * force;
-              item.vy += diffY * force;
-              other.vx -= diffX * force;
-              other.vy -= diffY * force;
-            });
-          }
-        }
-        item.vx += fx;
-        item.vy += fy;
-      });
-      links.forEach(function (pair) {
-        const a = nodes[pair[0]];
-        const b = nodes[pair[1]];
-        const diffX = b.x - a.x;
-        const diffY = b.y - a.y;
-        a.vx += diffX * 0.012;
-        a.vy += diffY * 0.012;
-        b.vx -= diffX * 0.012;
-        b.vy -= diffY * 0.012;
-      });
-      nodes.forEach(function (item) {
-        item.vx *= 0.72;
-        item.vy *= 0.72;
-        item.x += item.vx;
-        item.y += item.vy;
-      });
+      host.appendChild(list);
     }
-    const pos = {};
-    nodes.forEach(function (item) {
-      pos[item.id] = { x: item.x, y: item.y };
-    });
-    state.teiaPos = pos;
-    state.teiaLayoutKey = key;
-  }
-
-  function attachTeiaPan(svg, inner) {
-    let dragging = false;
-    let moved = false;
-    let lastX = 0;
-    let lastY = 0;
-    function apply() {
-      inner.setAttribute(
-        "transform",
-        "translate(" + state.teiaCam.x + " " + state.teiaCam.y + ") scale(" + state.teiaCam.k + ")",
-      );
+    const neighbors = teiaNeighbors(selected.id);
+    host.appendChild(el("p", { class: "teia-k", text: "Vizinhos" }));
+    if (!neighbors.length) {
+      host.appendChild(el("p", { class: "muted", text: "Sem vizinhos neste recorte." }));
+      return;
     }
-    apply();
-    svg.addEventListener("wheel", function (ev) {
-      ev.preventDefault();
-      const rect = svg.getBoundingClientRect();
-      const mx = ((ev.clientX - rect.left) / rect.width) * 1200;
-      const my = ((ev.clientY - rect.top) / rect.height) * 800;
-      const factor = ev.deltaY < 0 ? 1.12 : 0.9;
-      const next = Math.max(0.25, Math.min(4, state.teiaCam.k * factor));
-      const zx = (mx - state.teiaCam.x) / state.teiaCam.k;
-      const zy = (my - state.teiaCam.y) / state.teiaCam.k;
-      state.teiaCam.k = next;
-      state.teiaCam.x = mx - zx * next;
-      state.teiaCam.y = my - zy * next;
-      apply();
-    }, { passive: false });
-    svg.addEventListener("pointerdown", function (ev) {
-      if (ev.button !== 0) {
-        return;
-      }
-      dragging = true;
-      moved = false;
-      lastX = ev.clientX;
-      lastY = ev.clientY;
-      svg.classList.add("dragging");
-      svg.setPointerCapture(ev.pointerId);
-    });
-    svg.addEventListener("pointermove", function (ev) {
-      if (!dragging) {
-        return;
-      }
-      const dx = ev.clientX - lastX;
-      const dy = ev.clientY - lastY;
-      if (Math.abs(dx) + Math.abs(dy) > 3) {
-        moved = true;
-      }
-      lastX = ev.clientX;
-      lastY = ev.clientY;
-      state.teiaCam.x += dx;
-      state.teiaCam.y += dy;
-      apply();
-    });
-    function endDrag() {
-      dragging = false;
-      svg.classList.remove("dragging");
-      svg._teiaMoved = moved;
-    }
-    svg.addEventListener("pointerup", endDrag);
-    svg.addEventListener("pointercancel", endDrag);
-  }
-
-  function renderTeiaCanvas() {
-    const nodes = (state.teia.nodes || []).map(function (item) { return Object.assign({}, item); });
-    const edges = state.teia.edges || [];
-    layoutTeia(nodes, edges);
-    const svg = svgEl("svg", {
-      class: "teia-svg",
-      viewBox: "0 0 1200 800",
-      role: "img",
-    });
-    const inner = svgEl("g", { class: "teia-world" });
-    const needle = (state.teiaQuery || "").trim().toLowerCase();
-    edges.forEach(function (edge) {
-      const a = nodes.find(function (n) { return n.id === edge.source; });
-      const b = nodes.find(function (n) { return n.id === edge.target; });
-      if (!a || !b) {
-        return;
-      }
-      inner.appendChild(svgEl("line", {
-        x1: String(a.x), y1: String(a.y), x2: String(b.x), y2: String(b.y),
-        class: "teia-edge teia-edge-" + (edge.type || "rel"),
+    const nlist = el("div", { class: "teia-nlist" });
+    neighbors.forEach(function (node) {
+      nlist.appendChild(el("button", {
+        type: "button",
+        class: "teia-neighbor",
+        text: teiaTypeLabel(node.type) + " · " + (node.label || node.id),
+        onClick: function () { selectTeiaNode(node.id); },
       }));
     });
-    nodes.forEach(function (item) {
-      const hay = ((item.label || "") + " " + (item.path || "") + " " + (item.id || "")).toLowerCase();
-      const hit = needle && hay.indexOf(needle) !== -1;
-      const dim = needle && !hit;
-      const g = svgEl("g", {
-        class: "teia-node teia-n-" + (item.type || "file") + (hit ? " teia-hit" : "") + (dim ? " teia-dim" : ""),
-      });
-      g.appendChild(svgEl("circle", { cx: String(item.x), cy: String(item.y), r: item.type === "issue" ? "9" : "7" }));
-      g.appendChild(svgEl("text", {
-        x: String(item.x + 12), y: String(item.y + 4),
-        text: String(item.label || item.id || "").slice(0, 42),
-      }));
-      g.addEventListener("click", function (ev) {
-        if (svg._teiaMoved) {
-          return;
-        }
-        ev.stopPropagation();
-        state.teiaSelected = item;
-        render();
-      });
-      inner.appendChild(g);
-    });
-    svg.appendChild(inner);
-    svg.addEventListener("click", function () {
-      if (svg._teiaMoved) {
-        return;
+    host.appendChild(nlist);
+  }
+
+  function teiaDataKey() {
+    const nodes = state.teia.nodes || [];
+    const types = (!state.teiaTypes.length || state.teiaTypes.length >= TEIA_TYPES.length)
+      ? "*"
+      : state.teiaTypes.slice().sort().join(",");
+    return [
+      state.teiaRepo || "*",
+      types,
+      state.teiaQuery || "",
+      String(nodes.length),
+      nodes.length ? nodes[0].id : "",
+      nodes.length ? nodes[nodes.length - 1].id : "",
+      String((state.teia.edges || []).length),
+    ].join("|");
+  }
+
+  function mountTeiaWeb(host) {
+    if (!(state.teia.nodes || []).length) {
+      if (teiaCtl) {
+        teiaCtl.setData([], [], {});
+        teiaKey = "";
       }
-      state.teiaSelected = null;
-      render();
-    });
-    attachTeiaPan(svg, inner);
-    return svg;
+      host.appendChild(el("p", { class: "muted teia-empty", text: "Nenhum nó neste recorte. Importe issues ou aguarde o índice Graphify." }));
+      return;
+    }
+    if (!teiaCanvas) {
+      teiaCanvas = el("canvas", { class: "teia-canvas", id: "teia-web" });
+    }
+    host.appendChild(teiaCanvas);
+    if (!teiaCtl && window.ForgeTeia) {
+      teiaCtl = window.ForgeTeia.create(teiaCanvas, {
+        onSelect: function (id) { selectTeiaNode(id); },
+      });
+    }
+    const key = teiaDataKey();
+    if (teiaCtl && teiaKey !== key) {
+      teiaKey = key;
+      teiaCtl.setData(state.teia.nodes, state.teia.edges, {
+        clusterByRepo: !state.teiaRepo,
+      });
+    }
+    if (teiaCtl) {
+      teiaCtl.setSelected(state.teiaSelected);
+      window.requestAnimationFrame(function () {
+        if (teiaCtl) {
+          teiaCtl.resize();
+        }
+      });
+    }
   }
 
   function renderInvestigacao(root) {
@@ -1468,18 +1475,6 @@
   function renderTeia(root) {
     const vaultEnabled = !!(state.teia && state.teia.vault);
     const indexing = !!state.graphBusy;
-    root.appendChild(el("section", { class: "card card-core" }, [
-      el("div", { class: "card-head" }, [
-        el("span", { class: "icon-box icon-core", text: "F" }),
-        el("h2", { text: "Teia de contexto" }),
-        el("span", {
-          class: vaultEnabled ? "pill pill-ok" : "pill pill-proposed",
-          text: vaultEnabled ? "VAULT" : "DESLIGADO",
-        }),
-      ]),
-      el("p", { text: "Grafo combinado: código Graphify, issues, PRs, notas manuais e vault (se ligado)." }),
-      el("p", { class: "muted", text: "O corpo das notas não entra no payload nem no log. Zoom com a roda; arraste para pan." }),
-    ]));
     if (!canEditNotes()) {
       root.appendChild(el("section", { class: "card" }, [
         el("p", { class: "error", text: "Só editor ou owner lê o vault e o grafo." }),
@@ -1499,12 +1494,7 @@
         root.appendChild(prog);
       }
     }
-    const filters = el("section", { class: "card" }, [
-      el("div", { class: "card-head" }, [
-        el("h2", { text: "Filtros" }),
-        el("span", { class: "pill pill-core", text: "TEIA" }),
-      ]),
-    ]);
+
     const repoSelect = el("select", { id: "teia-repo" });
     repoSelect.appendChild(el("option", { value: "", text: "Todos os repositórios" }));
     state.graphs.forEach(function (g) {
@@ -1516,7 +1506,7 @@
     });
     const q = el("input", {
       id: "teia-query", type: "search", value: state.teiaQuery || "",
-      placeholder: "Buscar e destacar",
+      placeholder: "Buscar",
     });
     const types = el("div", { class: "teia-types" });
     TEIA_TYPES.forEach(function (item) {
@@ -1532,56 +1522,40 @@
         el("span", { text: item.label }),
       ]));
     });
-    filters.appendChild(el("div", { class: "graph-query" }, [
-      el("div", null, [el("label", { text: "Repositório", for: "teia-repo" }), repoSelect]),
-      el("div", null, [el("label", { text: "Busca", for: "teia-query" }), q]),
-      el("button", {
-        type: "button",
-        text: "Aplicar",
-        onClick: function () { applyTeiaFilters(); },
-      }),
-    ]));
-    filters.appendChild(types);
-    root.appendChild(filters);
-
-    if (state.teia.truncated) {
-      root.appendChild(el("p", {
+    const filters = el("div", { class: "teia-filters card" }, [
+      el("div", { class: "teia-filter-head" }, [
+        el("span", { class: "icon-box icon-core", text: "F" }),
+        el("strong", { text: "Teia de contexto" }),
+        el("span", {
+          class: vaultEnabled ? "pill pill-ok" : "pill pill-proposed",
+          text: vaultEnabled ? "VAULT" : "DESLIGADO",
+        }),
+        el("span", { class: "muted teia-count", text: teiaCountText() }),
+      ]),
+      el("div", { class: "graph-query teia-filter-row" }, [
+        el("div", null, [el("label", { text: "Repositório", for: "teia-repo" }), repoSelect]),
+        el("div", null, [el("label", { text: "Busca", for: "teia-query" }), q]),
+        el("button", {
+          type: "button",
+          text: "Aplicar",
+          onClick: function () { applyTeiaFilters(); },
+        }),
+      ]),
+      types,
+    ]);
+    if (state.teia.truncated || state.teia.aggregated) {
+      filters.appendChild(el("p", {
         class: "banner banner-warn teia-trunc",
-        text: "Grafo truncado: mostrando os nós mais ligados a issues e notas.",
+        text: teiaCountText() + (state.teia.aggregated
+          ? ". Agregado por ficheiro; clique num ficheiro para ver classes e funções."
+          : ". Recorte pelos nós mais ligados a issues e notas."),
       }));
     }
 
-    const wrap = el("div", { class: "teia-wrap" });
-    const canvas = el("div", { class: "teia-canvas" });
-    if (!(state.teia.nodes || []).length) {
-      canvas.appendChild(el("p", { class: "muted", text: "Nenhum nó neste recorte. Importe issues ou aguarde o índice Graphify." }));
-    } else {
-      canvas.appendChild(renderTeiaCanvas());
-    }
-    wrap.appendChild(canvas);
-    const panel = el("aside", { class: "teia-panel card" }, [
-      el("h2", { text: "Detalhe" }),
-    ]);
-    const selected = state.teiaSelected;
-    if (!selected) {
-      panel.appendChild(el("p", { class: "muted", text: "Clique num nó para ver o detalhe." }));
-    } else {
-      panel.appendChild(el("p", { class: "pill pill-core", text: selected.type || "" }));
-      panel.appendChild(el("h3", { text: selected.label || selected.id }));
-      if (selected.repo) {
-        panel.appendChild(el("p", { text: selected.repo }));
-      }
-      if (selected.path) {
-        panel.appendChild(el("p", { class: "muted", text: selected.path }));
-      }
-      if (selected.url) {
-        panel.appendChild(safeLink(selected.url, selected.type === "pr" ? "Abrir PR" : selected.type === "file" || selected.type === "class" ? "Abrir no GitHub" : "Abrir issue"));
-      }
-    }
-    wrap.appendChild(panel);
-    root.appendChild(wrap);
+    const panel = el("aside", { class: "teia-panel card", id: "teia-detail" });
+    fillTeiaDetail(panel);
 
-    const graphCard = el("section", { class: "card card-eng" }, [
+    const graphCard = el("section", { class: "card card-eng teia-graphs" }, [
       el("div", { class: "card-head" }, [
         el("h2", { text: "Grafos Graphify" }),
         el("span", { class: "pill pill-eng", text: "OFFLINE" }),
@@ -1595,7 +1569,6 @@
       table.appendChild(el("thead", null, [el("tr", null, [
         el("th", { text: "Repositório" }),
         el("th", { text: "Ref" }),
-        el("th", { text: "Data" }),
         el("th", { text: "Nós" }),
         el("th", { text: "Arestas" }),
       ])]));
@@ -1605,7 +1578,6 @@
         tbody.appendChild(el("tr", null, [
           el("td", { text: g.repo || "" }),
           el("td", { text: ref }),
-          el("td", { text: g.indexed_at || "—" }),
           el("td", { text: String(g.nodes || 0) }),
           el("td", { text: String(g.edges || 0) }),
         ]));
@@ -1622,7 +1594,22 @@
         onClick: function () { refreshGraph(state.teiaRepo || state.graphRepo); },
       }));
     }
-    root.appendChild(graphCard);
+
+    const legend = el("ul", { class: "teia-legend" });
+    TEIA_TYPES.concat([{ id: "function", label: "Funções" }]).forEach(function (item) {
+      legend.appendChild(el("li", { class: "teia-legend-" + item.id }, [
+        el("span", { class: "teia-swatch", "aria-hidden": "true" }),
+        el("span", { text: item.label }),
+      ]));
+    });
+
+    const web = el("div", { class: "teia-web" });
+    web.appendChild(legend);
+    mountTeiaWeb(web);
+
+    const left = el("div", { class: "teia-left" }, [panel, graphCard]);
+    const right = el("div", { class: "teia-right" }, [filters, web]);
+    root.appendChild(el("div", { class: "teia-page" }, [left, right]));
   }
 
   function render() {
@@ -1632,6 +1619,9 @@
     renderSession(session);
     renderNav();
     app.replaceChildren();
+    const teiaOpen = !state.loading && !!state.who && activeTab() === "teia";
+    app.classList.toggle("teia-layout", teiaOpen);
+    document.body.classList.toggle("teia-open", teiaOpen);
     if (state.loading) {
       setPageTitle("Forge");
       app.appendChild(stateCard("loading", "Carregando…"));

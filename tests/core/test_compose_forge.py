@@ -142,8 +142,24 @@ def test_nginx_proxies_api_sets_forwarded_headers_and_csp():
     assert "@sha256:" in FRONTEND_DOCKERFILE
     html = (ROOT / "deploy/frontend/html/index.html").read_text(encoding="utf-8")
     assert "<script src=\"/app.js\"" in html
+    assert '<script src="/vendor/d3-force.js"' in html
+    assert '<script src="/teia.js"' in html
     assert "onclick=" not in html
     js = (ROOT / "deploy/frontend/html/app.js").read_text(encoding="utf-8")
+    teia_js = (ROOT / "deploy/frontend/html/teia.js").read_text(encoding="utf-8")
+    vendor = ROOT / "deploy/frontend/html/vendor/d3-force.js"
+    license_txt = (ROOT / "deploy/frontend/html/vendor/LICENSE").read_text(encoding="utf-8")
+    assert vendor.is_file()
+    assert "ISC" in license_txt
+    assert "d3-force" in license_txt
+    assert "cdn." not in teia_js.lower()
+    assert "unpkg" not in teia_js.lower()
+    assert "jsdelivr" not in teia_js.lower()
+    assert "innerHTML" not in teia_js
+    assert "requestAnimationFrame" in teia_js
+    assert "forceSimulation" in teia_js
+    assert "forceX" in teia_js
+    assert "devicePixelRatio" in teia_js
     assert "innerHTML" not in js
     assert "textContent" in js
     assert "draft-body" in js
@@ -204,6 +220,10 @@ def test_frontend_shell_tabs_and_theme():
     assert "--group-core:" in css
     assert ".pill-ok" in css
     assert ".pill-warn" in css
+    assert ".teia-page" in css
+    assert "340px" in css
+    assert ".teia-web" in css
+    assert "#0E0E10" in css
     assert ".pill-danger" in css
     assert "Playfair Display" in css
     assert "Inter" in css
@@ -250,7 +270,10 @@ def test_frontend_shell_tabs_and_theme():
     assert "/api/graphs" in js
     assert "/api/context-graph" in js
     assert "/api/graphs/status" in js
-    assert "teia-svg" in js
+    assert "teia-canvas" in js
+    assert "ForgeTeia" in js
+    assert "teia-detail" in js
+    assert "clusterByRepo" in js
     assert "truncated" in js
     assert "Indexando" in js
     assert "cdn." not in js.lower()
