@@ -127,3 +127,18 @@ def test_nginx_proxies_api_sets_forwarded_headers_and_csp():
     assert "pending_fields" in js
     assert "fieldsError" in js
     assert "Gerar de novo" in js
+    assert "Publicadas" in js
+    assert "Rascunhos" in js
+    assert "/discard" in js
+    assert "publishedIssueLink" in js
+    assert 'setAttribute("target", "_blank")' in js
+    anchors = re.findall(r'el\("a", \{[^}]+\}', js)
+    assert anchors
+    for spec in anchors:
+        assert 'target: "_blank"' in spec
+        assert 'rel: "noopener noreferrer"' in spec
+    assert "safeLink(state.pending.verification_uri)" in js
+    assert "safeLink(links.issue_url)" in js
+    assert "safeLink(links.pr_url)" in js
+    assert "publishedIssueLink(task.issue_url)" in js
+    assert "safeLink(task.pr_url" in js

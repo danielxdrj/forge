@@ -35,7 +35,8 @@ from forge_core.draft.envfilter import (
 from forge_core.draft.github_gh import GhCli, match_option, names_match
 from forge_core.draft.service import DraftService, ask_confirm, parse_remote, sidecar_path
 from forge_core.draft.template import (
-    ASSIGNEE, PENDING, parse_model_json, render, required_pending, validate_repo,
+    ASSIGNEE, PENDING, SUGGESTION_PREFIX, fill_inferred_sections, parse_model_json,
+    render, required_pending, validate_repo,
 )
 from forge_core.errors import DraftError
 from forge_core.storage import open_repository
@@ -176,11 +177,22 @@ def test_template_order_and_pending_and_no_scope():
 
 
 def test_any_pending_marker_blocks_remote():
-    data = parse_model_json(json.dumps(dict(VALID, criterios=["Teste passa", "[PENDENTE]"])))
-    blocked = required_pending(data, META)
-    assert "criterios" in blocked
+    mixed = parse_model_json(json.dumps(dict(VALID, criterios=["Teste passa", "[PENDENTE]"])))
+    assert mixed["criterios"] == ["Teste passa"]
+    assert "criterios" not in required_pending(mixed, META)
+    raw_pending = dict(VALID, criterios=["[PENDENTE]"])
+    assert "criterios" in required_pending(raw_pending, META)
+    suggested = dict(
+        VALID,
+        comportamento_esperado=[f"{SUGGESTION_PREFIX} aceitar senha valida"],
+        criterios=[f"{SUGGESTION_PREFIX} teste de login passa"],
+    )
+    assert required_pending(suggested, META) == []
     data2 = parse_model_json(json.dumps(dict(VALID, objetivo="corrigir [PENDENTE] depois")))
-    assert "objetivo" in required_pending(data2, META)
+    assert PENDING not in data2["objetivo"]
+    assert "objetivo" not in required_pending(data2, META)
+    empty_obj = dict(VALID, objetivo=PENDING, contexto=PENDING)
+    assert "objetivo" in required_pending(empty_obj, META)
     assert required_pending(parse_model_json(json.dumps(VALID)), META) == []
     data3 = parse_model_json(json.dumps(dict(VALID, observacoes=["ok", "falta [PENDENTE]"])))
     assert "observacoes" in required_pending(data3, META)
@@ -197,6 +209,45 @@ def test_any_pending_marker_blocks_remote():
     assert "observacoes" in required_pending(gap, META)
     labeled = parse_model_json(json.dumps(dict(VALID, situacao_atual="Campo: [PENDENTE]")))
     assert "situacao_atual" in required_pending(labeled, META)
+
+
+def test_short_context_infers_expected_and_acceptance_without_pending():
+    payload = dict(
+        VALID,
+        objetivo="[PENDENTE]",
+        contexto="[PENDENTE]",
+        comportamento_esperado=["[PENDENTE]"],
+        criterios=["[PENDENTE]"],
+    )
+    data = fill_inferred_sections(parse_model_json(json.dumps(payload)),
+                                 "tarefa de teste, solicitado por carlos daniel")
+    assert PENDING not in data["comportamento_esperado"][0]
+    assert PENDING not in data["criterios"][0]
+    assert data["comportamento_esperado"][0].startswith(SUGGESTION_PREFIX)
+    assert data["criterios"][0].startswith(SUGGESTION_PREFIX)
+    assert PENDING not in data["objetivo"]
+    assert "tarefa de teste" in data["contexto"]
+    assert required_pending(data, META) == []
+
+
+def test_empty_context_keeps_objetivo_pending():
+    payload = dict(
+        VALID,
+        objetivo="",
+        contexto="",
+        comportamento_esperado=["[PENDENTE]"],
+        criterios=["[PENDENTE]"],
+    )
+    data = fill_inferred_sections(parse_model_json(json.dumps(payload)), "")
+    assert data["objetivo"] == PENDING
+    assert data["comportamento_esperado"][0].startswith(SUGGESTION_PREFIX)
+    assert data["criterios"][0].startswith(SUGGESTION_PREFIX)
+    assert PENDING not in data["comportamento_esperado"][0]
+    assert PENDING not in data["criterios"][0]
+    blocked = required_pending(data, META)
+    assert "objetivo" in blocked
+    assert "comportamento_esperado" not in blocked
+    assert "criterios" not in blocked
 
 
 def test_title_and_repo_validation():
@@ -631,15 +682,17 @@ def test_yes_does_not_skip_partial_pending_in_list(tmp_path):
     login_gh.select("ana", 1001)
     payload = dict(VALID, criterios=["Teste passa", "falta [PENDENTE] aqui"])
     gh = GhCli(runner=_gh_script(), today=date(2026, 11, 8))
-    err = _Buf()
+    out = _Buf()
     code = draft_run(
         ["draft", "--contexto", "ctx", "--repo", "acme/app", "--output", str(tmp_path / "p.md"),
          "--tipo", "Bug", "--prioridade", "Alta", "--size", "3", "--yes"],
         env, transport=login_gh, provider=FakeLLM(text=json.dumps(payload)), gh=gh,
-        out=_Buf(), err=err, stdin=StringIO(""),
+        out=out, err=_Buf(), stdin=StringIO(""),
     )
-    assert code == 1 and "pending_required" in err.text
-    assert not any(a[1:3] == ["issue", "create"] for a in gh.calls)
+    assert code == 0
+    assert any(a[1:3] == ["issue", "create"] for a in gh.calls)
+    body = (tmp_path / "p.md").read_text(encoding="utf-8")
+    assert PENDING not in body.split("## Critérios de Aceite", 1)[1].split("## ", 1)[0]
 
 
 def test_publish_happy_create_prints_url_not_json(tmp_path):

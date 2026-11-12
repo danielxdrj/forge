@@ -13,6 +13,7 @@ from auth_helpers import TEST_CLIENT_ID, FakeGitHub, bootstrap, person
 from forge_core.agents.provider import ProviderResponse
 from forge_core.draft.github_gh import GhCli
 from forge_core.storage import open_repository
+from forge_core.draft.template import PENDING, SUGGESTION_PREFIX
 from forge_core.storage.drafts import list_task_links
 from forge_core.storage.seed import seed_allowed_repos
 from forge_core.web.app import create_app
@@ -388,7 +389,7 @@ def test_generate_suggests_board_fields_and_confirm_without_extra_draft(tmp_path
     assert ok.json()["issue_url"] == ISSUE_URL
 
 
-def test_confirm_pending_body_returns_pending_fields(tmp_path):
+def test_short_context_infers_sections_and_confirm_passes(tmp_path):
     payload = dict(
         VALID,
         objetivo="[PENDENTE]",
@@ -405,21 +406,45 @@ def test_confirm_pending_body_returns_pending_fields(tmp_path):
         json={"repo": REPO, "context": "tarefa de teste, solicitado por carlos daniel"},
     )
     assert gen.status_code == 200
-    pending = gen.json()["pending"]
-    assert "objetivo" in pending
-    assert "comportamento_esperado" in pending
-    assert "criterios" in pending
-    refused = client.post(
-        f"/api/tasks/{gen.json()['task_id']}/confirm",
+    body = gen.json()
+    assert PENDING not in "\n".join(body["pending"])
+    assert "comportamento_esperado" not in body["pending"]
+    assert "criterios" not in body["pending"]
+    assert SUGGESTION_PREFIX in body["body"]
+    assert PENDING not in body["body"].split("## Comportamento Esperado", 1)[1].split("## ", 1)[0]
+    assert PENDING not in body["body"].split("## Critérios de Aceite", 1)[1].split("## ", 1)[0]
+    ok = client.post(
+        f"/api/tasks/{body['task_id']}/confirm",
         headers=_h(csrf),
-        json={"preview_hash": gen.json()["preview_hash"]},
+        json={"preview_hash": body["preview_hash"]},
+    )
+    assert ok.status_code == 200
+    assert ok.json()["issue_url"] == ISSUE_URL
+
+
+def test_confirm_pending_objetivo_still_blocks(tmp_path):
+    payload = dict(VALID, tipo="Bug", prioridade="Alta", size="3")
+    client, _repo, _ = _app(tmp_path, provider=FakeLLM(json.dumps(payload)))
+    csrf = _login(client)
+    gen = client.post("/api/tasks/generate", headers=_h(csrf), json={"repo": REPO, "context": CONTEXT})
+    task_id = gen.json()["task_id"]
+    edited = gen.json()["body"].replace("Corrigir o login.", PENDING)
+    saved = client.post(
+        f"/api/tasks/{task_id}/draft",
+        headers=_h(csrf),
+        json={**META_OK, "body_md": edited},
+    )
+    assert saved.status_code == 200
+    assert "objetivo" in saved.json()["pending"]
+    refused = client.post(
+        f"/api/tasks/{task_id}/confirm",
+        headers=_h(csrf),
+        json={"preview_hash": saved.json()["preview_hash"]},
     )
     assert refused.status_code == 400
     data = refused.json()
     assert data["error"] == "pending_fields"
     assert "objetivo" in data["fields"]
-    assert "comportamento_esperado" in data["fields"]
-    assert "criterios" in data["fields"]
 
 
 def test_edit_body_updates_preview_hash_and_old_hash_conflicts(tmp_path):
@@ -482,3 +507,67 @@ def test_branch_from_link_without_tree_keeps_url():
     assert _branch_from_link(None) is None
     assert _branch_from_link(SimpleNamespace(url="https://github.com/org/repo/tree/feat-x")) == "feat-x"
     assert _branch_from_link(SimpleNamespace(url="feat-x")) == "feat-x"
+
+
+def test_list_splits_published_and_drafts_discard_is_idempotent(tmp_path):
+    created = {"n": 0}
+    client, repo, _ = _app(tmp_path, gh_opts={"created": created})
+    csrf = _login(client)
+    draft_id = client.post(
+        "/api/tasks/generate", headers=_h(csrf), json={"repo": REPO, "context": CONTEXT},
+    ).json()["task_id"]
+    pub_id = client.post(
+        "/api/tasks/generate", headers=_h(csrf), json={"repo": REPO, "context": CONTEXT},
+    ).json()["task_id"]
+    fields = client.post(f"/api/tasks/{pub_id}/draft", headers=_h(csrf), json=META_OK)
+    client.post(
+        f"/api/tasks/{pub_id}/confirm", headers=_h(csrf),
+        json={"preview_hash": fields.json()["preview_hash"]},
+    )
+
+    listed = client.get("/api/tasks", headers=HOST)
+    assert listed.status_code == 200
+    data = listed.json()
+    published_ids = {t["id"] for t in data["published"]}
+    draft_ids = {t["id"] for t in data["drafts"]}
+    assert pub_id in published_ids and draft_id in draft_ids
+    assert draft_id not in published_ids and pub_id not in draft_ids
+    pub_item = next(t for t in data["published"] if t["id"] == pub_id)
+    assert pub_item["issue_url"] == ISSUE_URL
+
+    discarded = client.post(f"/api/tasks/{draft_id}/discard", headers=_h(csrf), json={})
+    assert discarded.status_code == 200
+    assert discarded.json()["status"] == "cancelado"
+    rows = repo.fetch("SELECT status FROM drafts WHERE task_id = ?", (draft_id,))
+    assert rows and rows[0][0] == "cancelado"
+    audits = repo.fetch("SELECT action FROM audit_log WHERE action = ?", ("draft.discard",))
+    assert audits
+
+    again = client.post(f"/api/tasks/{draft_id}/discard", headers=_h(csrf), json={})
+    assert again.status_code == 200
+    assert again.json()["status"] == "cancelado"
+    count = repo.fetch("SELECT count(*) FROM drafts WHERE task_id = ?", (draft_id,))
+    assert count[0][0] == 1
+
+    listed2 = client.get("/api/tasks", headers=HOST)
+    assert draft_id not in {t["id"] for t in listed2.json()["drafts"]}
+    assert draft_id not in {t["id"] for t in listed2.json()["tasks"]}
+    assert pub_id in {t["id"] for t in listed2.json()["published"]}
+
+    published_discard = client.post(f"/api/tasks/{pub_id}/discard", headers=_h(csrf), json={})
+    assert published_discard.status_code == 409
+    assert published_discard.json()["error"] == "draft_published"
+
+
+def test_discard_requires_editor_and_csrf(tmp_path):
+    client, _repo, _ = _app(tmp_path, editor=False)
+    csrf = _login(client)
+    forbidden = client.post("/api/tasks/x/discard", headers=_h(csrf), json={})
+    assert forbidden.status_code == 403
+    assert forbidden.json()["error"] == "forbidden"
+
+    client2, _repo2, _ = _app(tmp_path / "c")
+    _csrf(client2)
+    no_csrf = client2.post("/api/tasks/x/discard", headers=HOST, json={})
+    assert no_csrf.status_code == 403
+    assert no_csrf.json()["error"] == "csrf"

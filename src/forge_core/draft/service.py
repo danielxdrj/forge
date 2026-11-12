@@ -22,7 +22,8 @@ from .github_gh import (
 )
 from .template import (
     ASSIGNEE, PENDING, PROJECT_NUMBER, PROJECT_OWNER, PROJECT_TITLE,
-    branch_name, parse_model_json, render, required_pending, validate_repo,
+    branch_name, fill_inferred_sections, parse_model_json, render, required_pending,
+    validate_repo,
 )
 
 REMOTE_START = "\n<!-- forge-remote "
@@ -187,7 +188,7 @@ class DraftService:
             raise
         except Exception as exc:
             raise DraftError("provider_error") from exc
-        data = parse_model_json(response.text)
+        data = fill_inferred_sections(parse_model_json(response.text), context)
         meta = _merge_board_suggestions(meta, data, board)
         body = render(data)
         write_exclusive(output, body)

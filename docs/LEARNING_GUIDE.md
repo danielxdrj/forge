@@ -61,11 +61,11 @@ As seções são investigação, automações, log local, conexões e configura�
 
 ## Painel local (ADR-017)
 
-O Compose `docker-compose.forge.yml` sobe `forge_postgres`, `forge_backend` (API JSON em FastAPI) e `forge_frontend` (nginx, `127.0.0.1:8090`). A UI é HTML + JS vanilla em `deploy/frontend/html/` (sem `innerHTML` para texto do LLM). Login por device flow em `/api/auth/*`; a sessão persiste no Postgres (`token_hash`, prazo 7 dias, renovação deslizante) e, na CLI, num arquivo 0600 no volume `forge_cli_home`. Criar tarefa: `/api/repos`, `/api/tasks/generate`, campos do board, `/api/tasks/{id}/confirm`. Testes em `tests/core/test_web_auth.py` e `tests/core/test_web_tasks.py` usam GitHub/Cursor/gh falsos.
+O Compose `docker-compose.forge.yml` sobe `forge_postgres`, `forge_backend` (API JSON em FastAPI) e `forge_frontend` (nginx, `127.0.0.1:8090`). A UI é HTML + JS vanilla em `deploy/frontend/html/` (sem `innerHTML` para texto do LLM). Login por device flow em `/api/auth/*`; a sessão persiste no Postgres (`token_hash`, prazo 7 dias, renovação deslizante) e, na CLI, num arquivo 0600 no volume `forge_cli_home`. Criar tarefa: `/api/repos`, `/api/tasks/generate`, campos do board, `/api/tasks/{id}/confirm`. A lista separa Publicadas (com `task_links` de issue) e Rascunhos; `POST /api/tasks/{id}/discard` cancela o rascunho (status `cancelado`, sem apagar). Testes em `tests/core/test_web_auth.py` e `tests/core/test_web_tasks.py` usam GitHub/Cursor/gh falsos.
 
 ## Rascunho de issue
 
-`src/forge_core/draft/` lê contexto por `ContextSource` (`--contexto` / `--arquivo`, stdin `-`), gera o corpo no template fixo e só então, com confirmação ou `--retomar`, chama o `gh` (dublê em `tests/core/test_draft.py`). O painel web chama o mesmo `DraftService`.
+`src/forge_core/draft/` lê contexto por `ContextSource` (`--contexto` / `--arquivo`, stdin `-`), gera o corpo no template fixo e só então, com confirmação ou `--retomar`, chama o `gh` (dublê em `tests/core/test_draft.py`). O gerador sempre preenche Comportamento esperado e Critérios de aceite (prefixo `_Sugestão (revise):_` quando infere); só Objetivo pode ficar `[PENDENTE]`, e só com contexto vazio. O painel web chama o mesmo `DraftService`.
 
 ## Resolver de issue
 
