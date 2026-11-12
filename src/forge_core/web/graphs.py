@@ -1,4 +1,7 @@
-"""Rotas do índice Graphify. Leitura: editor ou owner. Atualizar: só owner."""
+"""Rotas do índice Graphify. Leitura: editor ou owner. Atualizar: só owner.
+
+O segundo refresh enquanto indexa devolve o progresso (200), sem HTTP 409.
+"""
 from __future__ import annotations
 
 import json
@@ -21,12 +24,16 @@ def register_graph_routes(
 ):
     def _rule(exc: GraphError) -> JSONResponse:
         status = {
-            "busy": 409,
             "not_indexed": 404,
             "repo_not_allowed": 400,
             "gh_missing": 503,
             "gh_not_logged": 503,
             "graphify_missing": 503,
+            "timeout": 504,
+            "too_large": 413,
+            "missing_output": 502,
+            "invalid_json": 502,
+            "schema": 502,
         }.get(exc.code, 400)
         return json_error(status, exc.code, hint=exc.hint or None)
 
@@ -35,7 +42,15 @@ def register_graph_routes(
         principal = need_editor_or_owner(request)
         if isinstance(principal, JSONResponse):
             return principal
-        return {"graphs": indexer.status(), "busy": indexer.busy}
+        progress = indexer.progress()
+        return {"graphs": indexer.status(), **progress}
+
+    @app.get("/api/graphs/status")
+    def api_graph_status(request: Request):
+        principal = need_editor_or_owner(request)
+        if isinstance(principal, JSONResponse):
+            return principal
+        return indexer.progress()
 
     @app.get("/api/graphs/nodes")
     def api_graph_nodes(request: Request, repo: str = "", q: str = ""):
@@ -64,12 +79,15 @@ def register_graph_routes(
         except (ValueError, json.JSONDecodeError, UnicodeDecodeError):
             return json_error(400, "invalid_json")
         try:
-            result = indexer.refresh(repo, reason="manual")
+            result = indexer.request_refresh(repo, reason="manual")
         except GraphError as exc:
             audit(principal.identity_id, "graph.refresh", f"repo:{repo or '*'}", f"error: {exc.code}")
             return _rule(exc)
         except AuthorizationError:
             return json_error(403, "forbidden")
         target = f"repo:{repo}" if repo else "repo:*"
-        audit(principal.identity_id, "graph.refresh", target, "ok")
+        if result.get("accepted"):
+            audit(principal.identity_id, "graph.refresh", target, "ok: started")
+        else:
+            audit(principal.identity_id, "graph.refresh", target, "ok: running")
         return result

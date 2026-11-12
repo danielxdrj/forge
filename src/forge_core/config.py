@@ -28,6 +28,8 @@ _DEFAULT_SESSION_TTL = 7 * 24 * 3600
 _DEFAULT_GRAPH_DIR = "/graphs"
 _DEFAULT_GRAPH_POLL = 3600
 _MAX_GRAPH_POLL = 7 * 24 * 3600
+_DEFAULT_GRAPH_NODE_LIMIT = 500
+_DEFAULT_GRAPH_EDGE_LIMIT = 1500
 
 
 @dataclass(frozen=True)
@@ -49,6 +51,8 @@ class Settings:
     graph_dir: str = _DEFAULT_GRAPH_DIR
     graph_poll_seconds: int = _DEFAULT_GRAPH_POLL
     graphify_bin: str = "graphify"
+    graph_node_limit: int = _DEFAULT_GRAPH_NODE_LIMIT
+    graph_edge_limit: int = _DEFAULT_GRAPH_EDGE_LIMIT
 
 
 def _allow_folders(raw: str) -> tuple[str, ...]:
@@ -172,6 +176,24 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
 
     graphify_bin = env.get("FORGE_GRAPHIFY_BIN", "graphify").strip() or "graphify"
 
+    node_limit = _DEFAULT_GRAPH_NODE_LIMIT
+    node_raw = env.get("FORGE_GRAPH_NODE_LIMIT", str(_DEFAULT_GRAPH_NODE_LIMIT)).strip()
+    try:
+        node_limit = int(node_raw)
+        if node_limit < 50 or node_limit > 5000:
+            problems.append("FORGE_GRAPH_NODE_LIMIT inválido: use um inteiro entre 50 e 5000")
+    except ValueError:
+        problems.append("FORGE_GRAPH_NODE_LIMIT inválido: use um inteiro entre 50 e 5000")
+
+    edge_limit = _DEFAULT_GRAPH_EDGE_LIMIT
+    edge_raw = env.get("FORGE_GRAPH_EDGE_LIMIT", str(_DEFAULT_GRAPH_EDGE_LIMIT)).strip()
+    try:
+        edge_limit = int(edge_raw)
+        if edge_limit < 100 or edge_limit > 20000:
+            problems.append("FORGE_GRAPH_EDGE_LIMIT inválido: use um inteiro entre 100 e 20000")
+    except ValueError:
+        problems.append("FORGE_GRAPH_EDGE_LIMIT inválido: use um inteiro entre 100 e 20000")
+
     if problems:
         raise ConfigError("Configuração inválida:\n- " + "\n- ".join(problems))
     return Settings(
@@ -181,6 +203,7 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
         trust_forwarded=trust_forwarded, trusted_proxies=trusted_proxies,
         obsidian_vault=obsidian_vault, obsidian_allow=obsidian_allow,
         graph_dir=graph_dir, graph_poll_seconds=graph_poll, graphify_bin=graphify_bin,
+        graph_node_limit=node_limit, graph_edge_limit=edge_limit,
     )
 
 

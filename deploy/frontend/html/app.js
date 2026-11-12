@@ -47,8 +47,28 @@
     graphQuery: "",
     graphRepo: "",
     graphNodes: [],
+    graphIndex: { state: "idle", busy: false, reason: "", repos: [] },
+    graphNotice: "",
+    graphPollTimer: null,
+    teia: { nodes: [], edges: [], truncated: false, vault: false },
+    teiaRepo: "",
+    teiaTypes: [],
+    teiaQuery: "",
+    teiaSelected: null,
+    teiaCam: { x: 0, y: 0, k: 1 },
+    teiaPos: {},
+    teiaLayoutKey: "",
     relatedIssues: [],
   };
+  const TEIA_TYPES = [
+    { id: "issue", label: "Issues" },
+    { id: "pr", label: "PRs" },
+    { id: "note", label: "Notas" },
+    { id: "vault", label: "Vault" },
+    { id: "file", label: "Arquivos" },
+    { id: "module", label: "Módulos" },
+    { id: "class", label: "Classes" },
+  ];
 
   function csrfToken() {
     const parts = document.cookie.split(";");
@@ -428,6 +448,10 @@
       no_release: "O repositório não tem release no GitHub.",
       graphify_missing: "graphify não está na imagem.",
       extract_failed: "Falha ao extrair o grafo (modo offline).",
+      missing_output: "Graphify não gravou graph.json.",
+      invalid_json: "graph.json inválido.",
+      schema: "graph.json sem o formato de grafo.",
+      too_large: "Grafo maior que o limite.",
       clone_failed: "Falha ao clonar o repositório para indexar.",
       path_forbidden: "Caminho fora da allowlist do vault.",
       file_too_large: "Arquivo do vault acima do limite.",
@@ -492,6 +516,24 @@
     }
     if (graphQuery) {
       state.graphQuery = graphQuery.value;
+    }
+    const teiaRepo = document.getElementById("teia-repo");
+    const teiaQuery = document.getElementById("teia-query");
+    if (teiaRepo) {
+      state.teiaRepo = teiaRepo.value;
+    }
+    if (teiaQuery) {
+      state.teiaQuery = teiaQuery.value;
+    }
+    const types = [];
+    TEIA_TYPES.forEach(function (item) {
+      const box = document.getElementById("teia-type-" + item.id);
+      if (box && box.checked) {
+        types.push(item.id);
+      }
+    });
+    if (document.getElementById("teia-type-issue")) {
+      state.teiaTypes = types;
     }
   }
 
@@ -922,81 +964,352 @@
     render();
   }
 
+  function stopGraphPoll() {
+    if (state.graphPollTimer) {
+      window.clearInterval(state.graphPollTimer);
+      state.graphPollTimer = null;
+    }
+  }
+
+  function startGraphPoll() {
+    if (state.graphPollTimer) {
+      return;
+    }
+    state.graphPollTimer = window.setInterval(async function () {
+      const res = await api("/api/graphs/status");
+      if (!res.ok) {
+        return;
+      }
+      state.graphIndex = res.data;
+      const running = !!(res.data.busy || res.data.state === "running");
+      state.graphBusy = running;
+      if (!running) {
+        stopGraphPoll();
+        state.graphNotice = "";
+        state.notice = "Índice atualizado.";
+        await loadTeia();
+      }
+      render();
+    }, 2000);
+  }
+
   async function loadTeia() {
     if (!canEditNotes()) {
       return;
     }
-    const vault = await api("/api/vault");
-    if (vault.ok && vault.data.enabled) {
-      const listed = await api("/api/vault/notes");
-      state.vault = {
-        enabled: true,
-        notes: (listed.ok && listed.data.notes) || [],
-        error: "",
-        message: "",
+    const params = new URLSearchParams();
+    if (state.teiaRepo) {
+      params.set("repo", state.teiaRepo);
+    }
+    if (state.teiaTypes && state.teiaTypes.length && state.teiaTypes.length < TEIA_TYPES.length) {
+      params.set("types", state.teiaTypes.join(","));
+    }
+    if (state.teiaQuery) {
+      params.set("q", state.teiaQuery);
+    }
+    const graph = await api("/api/context-graph?" + params.toString());
+    if (graph.ok) {
+      state.teia = {
+        nodes: graph.data.nodes || [],
+        edges: graph.data.edges || [],
+        truncated: !!graph.data.truncated,
+        vault: !!graph.data.vault,
       };
-    } else {
-      const data = vault.data || {};
-      state.vault = {
-        enabled: false,
-        notes: [],
-        error: data.error || "vault_disabled",
-        message: data.message || "",
-      };
+      state.vault.enabled = !!graph.data.vault;
+    } else if (graph.status === 401 || graph.status === 403) {
+      setErrorFromResponse(graph.data);
     }
     const graphs = await api("/api/graphs");
     if (graphs.ok) {
       state.graphs = graphs.data.graphs || [];
-      state.graphBusy = !!graphs.data.busy;
-      if (!state.graphRepo && state.graphs.length) {
+      state.graphIndex = {
+        state: graphs.data.state || "idle",
+        busy: !!graphs.data.busy,
+        reason: graphs.data.reason || "",
+        repos: graphs.data.repos || [],
+      };
+      state.graphBusy = !!(graphs.data.busy || graphs.data.state === "running");
+      if (!state.teiaRepo && state.graphs.length) {
         state.graphRepo = state.graphs[0].repo;
+      }
+      if (state.graphBusy) {
+        state.graphNotice = "Indexando…";
+        startGraphPoll();
       }
     }
   }
 
-  async function openVaultNote(path) {
-    const res = await api("/api/vault/notes/" + path.split("/").map(encodeURIComponent).join("/"));
-    if (!res.ok) {
-      setErrorFromResponse(res.data);
-      return;
-    }
-    state.vaultNote = res.data;
-    render();
-  }
-
-  async function queryGraph() {
-    const repoEl = document.getElementById("graph-repo");
-    const qEl = document.getElementById("graph-query");
-    const repo = repoEl ? repoEl.value : state.graphRepo;
-    const q = qEl ? qEl.value : state.graphQuery;
-    state.graphRepo = repo;
-    state.graphQuery = q;
-    if (!repo || !q) {
-      return;
-    }
-    const res = await api("/api/graphs/nodes?repo=" + encodeURIComponent(repo) + "&q=" + encodeURIComponent(q));
-    if (!res.ok) {
-      setErrorFromResponse(res.data);
-      return;
-    }
-    state.graphNodes = res.data.nodes || [];
+  async function applyTeiaFilters() {
+    snapshotForm();
+    state.teiaSelected = null;
+    state.teiaLayoutKey = "";
+    await loadTeia();
     render();
   }
 
   async function refreshGraph(repo) {
-    state.busy = true;
     state.error = "";
-    render();
     const body = repo ? { repo: repo } : {};
     const res = await api("/api/graphs/refresh", { method: "POST", body: body });
-    state.busy = false;
     if (!res.ok) {
       setErrorFromResponse(res.data);
       return;
     }
-    state.notice = "Atualização do grafo pedida.";
-    await loadTeia();
+    state.graphIndex = res.data;
+    state.graphBusy = !!(res.data.busy || res.data.state === "running");
+    if (state.graphBusy) {
+      state.graphNotice = "Indexando…";
+      startGraphPoll();
+    } else {
+      state.graphNotice = "";
+      state.notice = "Índice atualizado.";
+      await loadTeia();
+    }
     render();
+  }
+
+  function svgEl(tag, attrs, children) {
+    const node = document.createElementNS("http://www.w3.org/2000/svg", tag);
+    if (attrs) {
+      Object.keys(attrs).forEach(function (key) {
+        const value = attrs[key];
+        if (value === null || value === undefined || value === false) {
+          return;
+        }
+        if (key === "text") {
+          node.textContent = value;
+          return;
+        }
+        node.setAttribute(key, value === true ? "" : String(value));
+      });
+    }
+    (children || []).forEach(function (child) {
+      if (child) {
+        node.appendChild(child);
+      }
+    });
+    return node;
+  }
+
+  function layoutTeia(nodes, edges) {
+    const n = nodes.length;
+    if (!n) {
+      return;
+    }
+    const W = 1200;
+    const H = 800;
+    const key = nodes.map(function (item) { return item.id; }).join("|");
+    if (state.teiaLayoutKey === key && Object.keys(state.teiaPos).length) {
+      nodes.forEach(function (item) {
+        const pos = state.teiaPos[item.id];
+        if (pos) {
+          item.x = pos.x;
+          item.y = pos.y;
+        }
+      });
+      return;
+    }
+    const iters = n > 350 ? 24 : n > 150 ? 36 : 48;
+    nodes.forEach(function (item, i) {
+      const angle = (i / n) * Math.PI * 2;
+      const radius = 160 + (i % 7) * 18;
+      item.x = W / 2 + Math.cos(angle) * radius;
+      item.y = H / 2 + Math.sin(angle) * radius;
+      item.vx = 0;
+      item.vy = 0;
+    });
+    const index = {};
+    nodes.forEach(function (item, i) { index[item.id] = i; });
+    const links = [];
+    edges.forEach(function (edge) {
+      const a = index[edge.source];
+      const b = index[edge.target];
+      if (a !== undefined && b !== undefined) {
+        links.push([a, b]);
+      }
+    });
+    const cell = 48;
+    for (let t = 0; t < iters; t += 1) {
+      const grid = {};
+      nodes.forEach(function (item, i) {
+        const cx = Math.floor(item.x / cell);
+        const cy = Math.floor(item.y / cell);
+        const gk = cx + "," + cy;
+        if (!grid[gk]) {
+          grid[gk] = [];
+        }
+        grid[gk].push(i);
+      });
+      nodes.forEach(function (item, i) {
+        const cx = Math.floor(item.x / cell);
+        const cy = Math.floor(item.y / cell);
+        let fx = (W / 2 - item.x) * 0.002;
+        let fy = (H / 2 - item.y) * 0.002;
+        for (let dx = -1; dx <= 1; dx += 1) {
+          for (let dy = -1; dy <= 1; dy += 1) {
+            const bucket = grid[(cx + dx) + "," + (cy + dy)] || [];
+            bucket.forEach(function (j) {
+              if (j <= i) {
+                return;
+              }
+              const other = nodes[j];
+              let diffX = item.x - other.x;
+              let diffY = item.y - other.y;
+              let dist2 = diffX * diffX + diffY * diffY || 0.01;
+              const force = 220 / dist2;
+              const dist = Math.sqrt(dist2);
+              diffX /= dist;
+              diffY /= dist;
+              item.vx += diffX * force;
+              item.vy += diffY * force;
+              other.vx -= diffX * force;
+              other.vy -= diffY * force;
+            });
+          }
+        }
+        item.vx += fx;
+        item.vy += fy;
+      });
+      links.forEach(function (pair) {
+        const a = nodes[pair[0]];
+        const b = nodes[pair[1]];
+        const diffX = b.x - a.x;
+        const diffY = b.y - a.y;
+        a.vx += diffX * 0.012;
+        a.vy += diffY * 0.012;
+        b.vx -= diffX * 0.012;
+        b.vy -= diffY * 0.012;
+      });
+      nodes.forEach(function (item) {
+        item.vx *= 0.72;
+        item.vy *= 0.72;
+        item.x += item.vx;
+        item.y += item.vy;
+      });
+    }
+    const pos = {};
+    nodes.forEach(function (item) {
+      pos[item.id] = { x: item.x, y: item.y };
+    });
+    state.teiaPos = pos;
+    state.teiaLayoutKey = key;
+  }
+
+  function attachTeiaPan(svg, inner) {
+    let dragging = false;
+    let moved = false;
+    let lastX = 0;
+    let lastY = 0;
+    function apply() {
+      inner.setAttribute(
+        "transform",
+        "translate(" + state.teiaCam.x + " " + state.teiaCam.y + ") scale(" + state.teiaCam.k + ")",
+      );
+    }
+    apply();
+    svg.addEventListener("wheel", function (ev) {
+      ev.preventDefault();
+      const rect = svg.getBoundingClientRect();
+      const mx = ((ev.clientX - rect.left) / rect.width) * 1200;
+      const my = ((ev.clientY - rect.top) / rect.height) * 800;
+      const factor = ev.deltaY < 0 ? 1.12 : 0.9;
+      const next = Math.max(0.25, Math.min(4, state.teiaCam.k * factor));
+      const zx = (mx - state.teiaCam.x) / state.teiaCam.k;
+      const zy = (my - state.teiaCam.y) / state.teiaCam.k;
+      state.teiaCam.k = next;
+      state.teiaCam.x = mx - zx * next;
+      state.teiaCam.y = my - zy * next;
+      apply();
+    }, { passive: false });
+    svg.addEventListener("pointerdown", function (ev) {
+      if (ev.button !== 0) {
+        return;
+      }
+      dragging = true;
+      moved = false;
+      lastX = ev.clientX;
+      lastY = ev.clientY;
+      svg.classList.add("dragging");
+      svg.setPointerCapture(ev.pointerId);
+    });
+    svg.addEventListener("pointermove", function (ev) {
+      if (!dragging) {
+        return;
+      }
+      const dx = ev.clientX - lastX;
+      const dy = ev.clientY - lastY;
+      if (Math.abs(dx) + Math.abs(dy) > 3) {
+        moved = true;
+      }
+      lastX = ev.clientX;
+      lastY = ev.clientY;
+      state.teiaCam.x += dx;
+      state.teiaCam.y += dy;
+      apply();
+    });
+    function endDrag() {
+      dragging = false;
+      svg.classList.remove("dragging");
+      svg._teiaMoved = moved;
+    }
+    svg.addEventListener("pointerup", endDrag);
+    svg.addEventListener("pointercancel", endDrag);
+  }
+
+  function renderTeiaCanvas() {
+    const nodes = (state.teia.nodes || []).map(function (item) { return Object.assign({}, item); });
+    const edges = state.teia.edges || [];
+    layoutTeia(nodes, edges);
+    const svg = svgEl("svg", {
+      class: "teia-svg",
+      viewBox: "0 0 1200 800",
+      role: "img",
+    });
+    const inner = svgEl("g", { class: "teia-world" });
+    const needle = (state.teiaQuery || "").trim().toLowerCase();
+    edges.forEach(function (edge) {
+      const a = nodes.find(function (n) { return n.id === edge.source; });
+      const b = nodes.find(function (n) { return n.id === edge.target; });
+      if (!a || !b) {
+        return;
+      }
+      inner.appendChild(svgEl("line", {
+        x1: String(a.x), y1: String(a.y), x2: String(b.x), y2: String(b.y),
+        class: "teia-edge teia-edge-" + (edge.type || "rel"),
+      }));
+    });
+    nodes.forEach(function (item) {
+      const hay = ((item.label || "") + " " + (item.path || "") + " " + (item.id || "")).toLowerCase();
+      const hit = needle && hay.indexOf(needle) !== -1;
+      const dim = needle && !hit;
+      const g = svgEl("g", {
+        class: "teia-node teia-n-" + (item.type || "file") + (hit ? " teia-hit" : "") + (dim ? " teia-dim" : ""),
+      });
+      g.appendChild(svgEl("circle", { cx: String(item.x), cy: String(item.y), r: item.type === "issue" ? "9" : "7" }));
+      g.appendChild(svgEl("text", {
+        x: String(item.x + 12), y: String(item.y + 4),
+        text: String(item.label || item.id || "").slice(0, 42),
+      }));
+      g.addEventListener("click", function (ev) {
+        if (svg._teiaMoved) {
+          return;
+        }
+        ev.stopPropagation();
+        state.teiaSelected = item;
+        render();
+      });
+      inner.appendChild(g);
+    });
+    svg.appendChild(inner);
+    svg.addEventListener("click", function () {
+      if (svg._teiaMoved) {
+        return;
+      }
+      state.teiaSelected = null;
+      render();
+    });
+    attachTeiaPan(svg, inner);
+    return svg;
   }
 
   function renderInvestigacao(root) {
@@ -1153,7 +1466,8 @@
   }
 
   function renderTeia(root) {
-    const vaultEnabled = !!(state.vault && state.vault.enabled);
+    const vaultEnabled = !!(state.teia && state.teia.vault);
+    const indexing = !!state.graphBusy;
     root.appendChild(el("section", { class: "card card-core" }, [
       el("div", { class: "card-head" }, [
         el("span", { class: "icon-box icon-core", text: "F" }),
@@ -1163,8 +1477,8 @@
           text: vaultEnabled ? "VAULT" : "DESLIGADO",
         }),
       ]),
-      el("p", { text: "O vault Obsidian lista notas da allowlist. As notas do Forge continuam no banco." }),
-      el("p", { class: "muted", text: "As notas ficam fora do Git e não substituem o banco do Forge." }),
+      el("p", { text: "Grafo combinado: código Graphify, issues, PRs, notas manuais e vault (se ligado)." }),
+      el("p", { class: "muted", text: "O corpo das notas não entra no payload nem no log. Zoom com a roda; arraste para pan." }),
     ]));
     if (!canEditNotes()) {
       root.appendChild(el("section", { class: "card" }, [
@@ -1172,37 +1486,100 @@
       ]));
       return;
     }
-    const vaultCard = el("section", { class: "card" }, [
-      el("div", { class: "card-head" }, [
-        el("h2", { text: "Obsidian" }),
-        el("span", { class: "pill pill-planned", text: "SOMENTE LEITURA" }),
-      ]),
-    ]);
-    if (!vaultEnabled) {
-      vaultCard.appendChild(el("p", {
-        class: "muted",
-        text: state.vault.message || errorMessage(state.vault.error || "vault_disabled"),
-      }));
-    } else if (!(state.vault.notes || []).length) {
-      vaultCard.appendChild(el("p", { class: "muted", text: "Nenhuma nota .md na allowlist." }));
-    } else {
-      const list = el("div", { class: "note-list" });
-      state.vault.notes.forEach(function (note) {
-        list.appendChild(el("button", {
-          type: "button",
-          class: "note-item",
-          text: (note.title || note.path) + " · " + (note.tags || []).join(" "),
-          onClick: function () { openVaultNote(note.path); },
+    if (state.graphNotice || indexing) {
+      root.appendChild(el("p", { class: "banner banner-info", text: state.graphNotice || "Indexando…" }));
+      const prog = el("ul", { class: "teia-progress" });
+      (state.graphIndex.repos || []).forEach(function (row) {
+        const reason = row.error || row.hint || "";
+        prog.appendChild(el("li", {
+          text: (row.repo || "") + " · " + (row.status || "queued") + (reason ? " (" + reason + ")" : ""),
         }));
       });
-      vaultCard.appendChild(list);
+      if ((state.graphIndex.repos || []).length) {
+        root.appendChild(prog);
+      }
     }
-    if (state.vaultNote) {
-      vaultCard.appendChild(el("h2", { text: state.vaultNote.title || state.vaultNote.path }));
-      vaultCard.appendChild(el("p", { class: "muted", text: (state.vaultNote.links || []).join(", ") }));
-      vaultCard.appendChild(el("pre", { class: "preview", text: state.vaultNote.body || "" }));
+    const filters = el("section", { class: "card" }, [
+      el("div", { class: "card-head" }, [
+        el("h2", { text: "Filtros" }),
+        el("span", { class: "pill pill-core", text: "TEIA" }),
+      ]),
+    ]);
+    const repoSelect = el("select", { id: "teia-repo" });
+    repoSelect.appendChild(el("option", { value: "", text: "Todos os repositórios" }));
+    state.graphs.forEach(function (g) {
+      const opt = el("option", { value: g.repo, text: g.repo });
+      if (state.teiaRepo === g.repo) {
+        opt.selected = true;
+      }
+      repoSelect.appendChild(opt);
+    });
+    const q = el("input", {
+      id: "teia-query", type: "search", value: state.teiaQuery || "",
+      placeholder: "Buscar e destacar",
+    });
+    const types = el("div", { class: "teia-types" });
+    TEIA_TYPES.forEach(function (item) {
+      const checked = !state.teiaTypes.length || state.teiaTypes.indexOf(item.id) !== -1;
+      const box = el("input", {
+        id: "teia-type-" + item.id, type: "checkbox",
+      });
+      if (checked) {
+        box.checked = true;
+      }
+      types.appendChild(el("label", { class: "teia-type", for: "teia-type-" + item.id }, [
+        box,
+        el("span", { text: item.label }),
+      ]));
+    });
+    filters.appendChild(el("div", { class: "graph-query" }, [
+      el("div", null, [el("label", { text: "Repositório", for: "teia-repo" }), repoSelect]),
+      el("div", null, [el("label", { text: "Busca", for: "teia-query" }), q]),
+      el("button", {
+        type: "button",
+        text: "Aplicar",
+        onClick: function () { applyTeiaFilters(); },
+      }),
+    ]));
+    filters.appendChild(types);
+    root.appendChild(filters);
+
+    if (state.teia.truncated) {
+      root.appendChild(el("p", {
+        class: "banner banner-warn teia-trunc",
+        text: "Grafo truncado: mostrando os nós mais ligados a issues e notas.",
+      }));
     }
-    root.appendChild(vaultCard);
+
+    const wrap = el("div", { class: "teia-wrap" });
+    const canvas = el("div", { class: "teia-canvas" });
+    if (!(state.teia.nodes || []).length) {
+      canvas.appendChild(el("p", { class: "muted", text: "Nenhum nó neste recorte. Importe issues ou aguarde o índice Graphify." }));
+    } else {
+      canvas.appendChild(renderTeiaCanvas());
+    }
+    wrap.appendChild(canvas);
+    const panel = el("aside", { class: "teia-panel card" }, [
+      el("h2", { text: "Detalhe" }),
+    ]);
+    const selected = state.teiaSelected;
+    if (!selected) {
+      panel.appendChild(el("p", { class: "muted", text: "Clique num nó para ver o detalhe." }));
+    } else {
+      panel.appendChild(el("p", { class: "pill pill-core", text: selected.type || "" }));
+      panel.appendChild(el("h3", { text: selected.label || selected.id }));
+      if (selected.repo) {
+        panel.appendChild(el("p", { text: selected.repo }));
+      }
+      if (selected.path) {
+        panel.appendChild(el("p", { class: "muted", text: selected.path }));
+      }
+      if (selected.url) {
+        panel.appendChild(safeLink(selected.url, selected.type === "pr" ? "Abrir PR" : selected.type === "file" || selected.type === "class" ? "Abrir no GitHub" : "Abrir issue"));
+      }
+    }
+    wrap.appendChild(panel);
+    root.appendChild(wrap);
 
     const graphCard = el("section", { class: "card card-eng" }, [
       el("div", { class: "card-head" }, [
@@ -1217,16 +1594,17 @@
       const table = el("table");
       table.appendChild(el("thead", null, [el("tr", null, [
         el("th", { text: "Repositório" }),
-        el("th", { text: "Tag" }),
+        el("th", { text: "Ref" }),
         el("th", { text: "Data" }),
         el("th", { text: "Nós" }),
         el("th", { text: "Arestas" }),
       ])]));
       const tbody = el("tbody");
       state.graphs.forEach(function (g) {
+        const ref = g.tag || (g.source === "head" ? ("HEAD " + (g.ref || "")) : (g.ref || g.error || "—"));
         tbody.appendChild(el("tr", null, [
           el("td", { text: g.repo || "" }),
-          el("td", { text: g.tag || g.error || "—" }),
+          el("td", { text: ref }),
           el("td", { text: g.indexed_at || "—" }),
           el("td", { text: String(g.nodes || 0) }),
           el("td", { text: String(g.edges || 0) }),
@@ -1235,41 +1613,13 @@
       table.appendChild(tbody);
       graphCard.appendChild(table);
     }
-    const repoSelect = el("select", { id: "graph-repo" });
-    repoSelect.appendChild(el("option", { value: "", text: "Repositório" }));
-    state.graphs.forEach(function (g) {
-      const opt = el("option", { value: g.repo, text: g.repo });
-      if (state.graphRepo === g.repo) {
-        opt.selected = true;
-      }
-      repoSelect.appendChild(opt);
-    });
-    const q = el("input", { id: "graph-query", type: "text", value: state.graphQuery || "" });
-    graphCard.appendChild(el("div", { class: "graph-query" }, [
-      el("div", null, [el("label", { text: "Repositório", for: "graph-repo" }), repoSelect]),
-      el("div", null, [el("label", { text: "Consulta de nós", for: "graph-query" }), q]),
-      el("button", {
-        type: "button",
-        text: "Consultar",
-        onClick: function () { queryGraph(); },
-      }),
-    ]));
-    if (state.graphNodes.length) {
-      const nodes = el("ul", { class: "pending" });
-      state.graphNodes.forEach(function (node) {
-        nodes.appendChild(el("li", {
-          text: (node.label || node.id) + (node.file ? " · " + node.file : ""),
-        }));
-      });
-      graphCard.appendChild(nodes);
-    }
     if (isOwner()) {
       graphCard.appendChild(el("button", {
         type: "button",
         class: "primary",
-        text: state.busy ? "Aguarde…" : "Atualizar grafo",
-        disabled: state.busy ? "disabled" : null,
-        onClick: function () { refreshGraph(state.graphRepo); },
+        text: indexing ? "Indexando…" : "Atualizar grafo",
+        disabled: indexing ? "disabled" : null,
+        onClick: function () { refreshGraph(state.teiaRepo || state.graphRepo); },
       }));
     }
     root.appendChild(graphCard);

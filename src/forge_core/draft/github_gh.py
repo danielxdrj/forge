@@ -136,6 +136,18 @@ query($owner: String!, $name: String!, $number: Int!) {
 }
 """
 
+DEFAULT_HEAD_QUERY = """
+query($owner: String!, $name: String!) {
+  repository(owner: $owner, name: $name) {
+    defaultBranchRef {
+      name
+      target { oid }
+    }
+  }
+}
+"""
+_SHA = re.compile(r"^[a-fA-F0-9]{7,64}$")
+
 DONE_STATUS_ALIASES = frozenset({
     "done", "concluido", "concluído", "pronto", "finished", "complete", "completed",
 })
@@ -260,7 +272,7 @@ class GhCli:
         self._run(["repo", "clone", repo, dest])
 
     def clone_repo_at(self, repo: str, dest: str, tag: str) -> None:
-        """Clona só a tag de release (`git clone --branch TAG`). Sem token no env."""
+        """Clona uma tag de release ou a branch padrão (`git clone --branch REF`). Sem token no env."""
         tag = (tag or "").strip()
         if not tag or tag.startswith("-") or ".." in tag or "\x00" in tag:
             raise DraftError("gh_error")
@@ -281,6 +293,30 @@ class GhCli:
         if not tag:
             raise DraftError("no_release")
         return tag
+
+    def default_branch_head(self, repo: str) -> tuple[str, str]:
+        """Branch padrão e SHA do HEAD. Somente leitura (GraphQL). Sem token no env."""
+        owner, _, name = (repo or "").partition("/")
+        if not owner or not name or "/" in name:
+            raise DraftError("gh_error")
+        text = self._run([
+            "api", "graphql",
+            "-F", f"owner={owner}",
+            "-F", f"name={name}",
+            "-f", f"query={DEFAULT_HEAD_QUERY}",
+        ])
+        payload = _json(text)
+        ref = (((payload.get("data") or {}).get("repository") or {}).get("defaultBranchRef") or {})
+        if not isinstance(ref, dict):
+            raise DraftError("gh_error")
+        branch = str(ref.get("name") or "").strip()
+        target = ref.get("target") if isinstance(ref.get("target"), dict) else {}
+        sha = str(target.get("oid") or "").strip()
+        if not branch or branch.startswith("-") or ".." in branch or "\x00" in branch:
+            raise DraftError("gh_error")
+        if not _SHA.fullmatch(sha):
+            raise DraftError("gh_error")
+        return branch, sha
 
     def list_issues(self, repo: str, limit: int = 50) -> list[IssueRef]:
         cap = max(1, min(int(limit), 100))

@@ -17,6 +17,7 @@ from ..connections.probes import ConnectionProbes
 from ..connections.service import ConnectionService
 from ..connections.vault import ConnectionsVault
 from ..errors import AuthenticationError, AuthorizationError, DraftError
+from ..graphs.context import ContextGraph
 from ..graphs.indexer import GraphIndexer
 from ..issues.importer import CompletedIssueImporter
 from ..logging import redact
@@ -24,6 +25,7 @@ from ..notes.service import NoteService
 from ..obsidian.vault import ObsidianVault
 from ..storage.sql import SqlRepository
 from .connections import register_connection_routes
+from .context_graph import register_context_graph_routes
 from .graphs import register_graph_routes
 from .issues import register_issue_import_routes
 from .notes import register_note_routes
@@ -104,6 +106,7 @@ def create_app(
     graphs = graph_indexer if graph_indexer is not None else GraphIndexer(
         repo, settings, gh=gh, on_poll=lambda reason: issues.run(reason=reason),
     )
+    context_graph = ContextGraph(repo, settings, obsidian_vault)
     app = FastAPI(title="Forge", docs_url=None, redoc_url=None, openapi_url=None)
     app.state.repo = repo
     app.state.store = store
@@ -114,6 +117,7 @@ def create_app(
     app.state.notes = notes
     app.state.obsidian = obsidian_vault
     app.state.graphs = graphs
+    app.state.context_graph = context_graph
     app.state.issues = issues
 
     def _audit(actor: str, action: str, target: str, result: str) -> None:
@@ -479,6 +483,12 @@ def create_app(
         need_editor_or_owner=_need_editor_or_owner,
         need_owner=_need_owner,
         audit=_audit,
+    )
+    register_context_graph_routes(
+        app,
+        context_graph,
+        json_error=_json_error,
+        need_editor_or_owner=_need_editor_or_owner,
     )
     register_issue_import_routes(
         app,

@@ -98,6 +98,8 @@ def test_backend_is_read_only_with_run_secrets_tmpfs():
     assert "FORGE_OBSIDIAN_ALLOW:" in backend
     assert "FORGE_GRAPH_DIR: /graphs" in backend
     assert "FORGE_GRAPH_POLL_SECONDS:" in backend
+    assert "FORGE_GRAPH_NODE_LIMIT:" in backend
+    assert "FORGE_GRAPH_EDGE_LIMIT:" in backend
     assert 'GRAPHIFY_BACKEND: "none"' in backend
     assert "forge_graphs:/graphs" in backend
     assert 'ObsidianVault:/vault:ro' in COMPOSE
@@ -243,8 +245,14 @@ def test_frontend_shell_tabs_and_theme():
     assert "issue-select" in js
     assert "/api/notes" in js
     assert "Atualizar grafo" in js
-    assert "/api/vault" in js
+    assert "vault_disabled" in js
     assert "/api/graphs" in js
+    assert "/api/context-graph" in js
+    assert "/api/graphs/status" in js
+    assert "teia-svg" in js
+    assert "truncated" in js
+    assert "Indexando" in js
+    assert "cdn." not in js.lower()
     assert "Salvar nota" in js
     assert "note-body" in js
     assert "Importar issues concluídas" in js

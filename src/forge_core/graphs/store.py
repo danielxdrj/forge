@@ -6,7 +6,15 @@ from pathlib import Path
 
 QUERY_MAX = 200
 RESULT_LIMIT = 50
-GRAPH_MAX_BYTES = 32 * 1024 * 1024
+GRAPH_MAX_BYTES = 96 * 1024 * 1024
+
+
+class GraphFileError(Exception):
+    """Falha ao copiar/validar graph.json. Código fixo; sem conteúdo."""
+
+    def __init__(self, code: str):
+        super().__init__(code)
+        self.code = code
 
 
 def slug_for(repo: str) -> str:
@@ -38,13 +46,52 @@ def write_meta(root: Path, repo: str, meta: dict) -> None:
     tmp.replace(path)
 
 
+def locate_graph_json(*roots: Path) -> Path | None:
+    """Primeiro graph.json regular (não symlink) sob os destinos do extract."""
+    for root in roots:
+        if root is None:
+            continue
+        for candidate in (root / "graphify-out" / "graph.json", root / "graph.json"):
+            try:
+                if candidate.is_file() and not candidate.is_symlink():
+                    return candidate
+            except OSError:
+                continue
+    return None
+
+
+def inspect_graph_file(path: Path) -> str | None:
+    """Código de erro ou None. Nunca lê o conteúdo para log."""
+    try:
+        size = path.stat().st_size
+    except OSError:
+        return "missing_output"
+    if size > GRAPH_MAX_BYTES:
+        return "too_large"
+    if size < 2:
+        return "invalid_json"
+    try:
+        data = json.loads(path.read_bytes().decode("utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return "invalid_json"
+    if not isinstance(data, dict):
+        return "schema"
+    graph = data.get("graph") if isinstance(data.get("graph"), dict) else data
+    if not isinstance(graph, dict) or "nodes" not in graph:
+        return "schema"
+    return None
+
+
 def copy_graph(src: Path, root: Path, repo: str) -> Path:
+    reason = inspect_graph_file(src)
+    if reason:
+        raise GraphFileError(reason)
     dest_dir = repo_dir(root, repo)
     dest_dir.mkdir(parents=True, exist_ok=True)
     dest = dest_dir / "graph.json"
     data = src.read_bytes()
     if len(data) > GRAPH_MAX_BYTES:
-        raise ValueError("graph_too_large")
+        raise GraphFileError("too_large")
     tmp = dest_dir / ".graph.tmp"
     tmp.write_bytes(data)
     tmp.replace(dest)
@@ -55,7 +102,7 @@ def graph_counts(root: Path, repo: str) -> tuple[int, int]:
     data = load_graph(root, repo)
     if data is None:
         return 0, 0
-    nodes, edges = _nodes_edges(data)
+    nodes, edges = nodes_edges(data)
     return len(nodes), len(edges)
 
 
@@ -73,6 +120,16 @@ def load_graph(root: Path, repo: str) -> dict | None:
     return data if isinstance(data, dict) else None
 
 
+def graph_mtime_ns(root: Path, repo: str) -> int:
+    path = repo_dir(root, repo) / "graph.json"
+    try:
+        if path.is_file() and not path.is_symlink():
+            return int(path.stat().st_mtime_ns)
+    except OSError:
+        return 0
+    return 0
+
+
 def nodes_for_files(root: Path, repo: str, files: list[str], limit: int = 12) -> list[dict]:
     """Nós cujo arquivo coincide com a lista (sem embeddings)."""
     want = {f.replace("\\", "/").casefold() for f in files if str(f).strip()}
@@ -81,13 +138,13 @@ def nodes_for_files(root: Path, repo: str, files: list[str], limit: int = 12) ->
     data = load_graph(root, repo)
     if data is None:
         return []
-    nodes, _edges = _nodes_edges(data)
+    nodes, _edges = nodes_edges(data)
     out: list[dict] = []
     seen: set[str] = set()
     for node in nodes:
         if not isinstance(node, dict):
             continue
-        path = str(node.get("file") or node.get("path") or "").replace("\\", "/")
+        path = _node_file(node)
         if not path:
             continue
         key = path.casefold()
@@ -111,7 +168,7 @@ def query_nodes(root: Path, repo: str, question: str) -> list[dict]:
     data = load_graph(root, repo)
     if data is None:
         return []
-    nodes, _edges = _nodes_edges(data)
+    nodes, _edges = nodes_edges(data)
     want = needle.casefold()
     out: list[dict] = []
     for node in nodes:
@@ -126,10 +183,14 @@ def query_nodes(root: Path, repo: str, question: str) -> list[dict]:
     return out
 
 
-def _nodes_edges(data: dict) -> tuple[list, list]:
+def nodes_edges(data: dict) -> tuple[list, list]:
     graph = data.get("graph") if isinstance(data.get("graph"), dict) else data
     nodes = graph.get("nodes") if isinstance(graph, dict) else None
-    edges = graph.get("edges") if isinstance(graph, dict) else None
+    edges = None
+    if isinstance(graph, dict):
+        edges = graph.get("edges")
+        if edges is None:
+            edges = graph.get("links")
     if isinstance(nodes, dict):
         nodes = list(nodes.values())
     if isinstance(edges, dict):
@@ -141,8 +202,16 @@ def _nodes_edges(data: dict) -> tuple[list, list]:
     return nodes, edges
 
 
+def _nodes_edges(data: dict) -> tuple[list, list]:
+    return nodes_edges(data)
+
+
+def _node_file(node: dict) -> str:
+    return str(node.get("file") or node.get("path") or node.get("source_file") or "").replace("\\", "/")
+
+
 def _node_terms(node: dict) -> list[str]:
-    keys = ("id", "label", "name", "type", "kind", "file", "path")
+    keys = ("id", "label", "name", "type", "kind", "file", "path", "source_file")
     terms = []
     for key in keys:
         value = node.get(key)
@@ -157,5 +226,5 @@ def _public_node(node: dict) -> dict:
         "id": str(node.get("id") or ""),
         "label": str(node.get("label") or node.get("name") or node.get("id") or ""),
         "kind": str(node.get("kind") or node.get("type") or ""),
-        "file": str(node.get("file") or node.get("path") or ""),
+        "file": _node_file(node),
     }

@@ -574,6 +574,82 @@ a { color: var(--link); }
 .graph-query { display: flex; gap: 0.5rem; align-items: end; flex-wrap: wrap; }
 .graph-query > * { flex: 1 1 10rem; }
 
+.banner-info {
+  background: var(--group-core-bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0.55rem 0.8rem;
+}
+.banner-warn {
+  background: var(--warn-bg);
+  color: var(--warn);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0.55rem 0.8rem;
+}
+
+.teia-wrap {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(14rem, 18rem);
+  gap: 1rem;
+  align-items: start;
+}
+.teia-canvas {
+  position: relative;
+  height: min(70vh, 40rem);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-elevated);
+  overflow: hidden;
+}
+.teia-svg { width: 100%; height: 100%; display: block; cursor: grab; }
+.teia-svg.dragging { cursor: grabbing; }
+.teia-edge {
+  stroke: var(--border-strong);
+  stroke-width: 1;
+}
+.teia-node { cursor: pointer; }
+.teia-node text {
+  fill: var(--fg);
+  font-size: 11px;
+  font-family: var(--font-body);
+  pointer-events: none;
+}
+.teia-n-issue circle { fill: var(--group-tasks); }
+.teia-n-pr circle { fill: var(--group-delivery); }
+.teia-n-note circle { fill: var(--group-eng); }
+.teia-n-vault circle { fill: var(--group-core); }
+.teia-n-file circle { fill: var(--group-ops); }
+.teia-n-module circle { fill: var(--group-auto); }
+.teia-n-class circle { fill: var(--group-sec); }
+.teia-hit circle { stroke: var(--accent); stroke-width: 3; }
+.teia-dim { opacity: 0.22; }
+.teia-panel { min-height: 12rem; }
+.teia-types {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem 0.85rem;
+  margin-top: 0.75rem;
+}
+.teia-type {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+.teia-progress {
+  margin: 0 0 1rem;
+  padding-left: 1.2rem;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+@media (max-width: 860px) {
+  .teia-wrap { grid-template-columns: 1fr; }
+}
+
 @media (max-width: 860px) {
   .notes-grid { grid-template-columns: 1fr; }
   .investigacao-split { grid-template-columns: 1fr; }

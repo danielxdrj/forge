@@ -1,7 +1,8 @@
 """Indexa os 5 repositórios allowlistados com Graphify offline e um lock de exclusão.
 
-`graphify extract <clone> --code-only` + `GRAPHIFY_BACKEND=none`. Sem token no env.
-O poll e o botão do owner não correm ao mesmo tempo.
+`graphify extract <clone> --code-only --out <dir>` + `GRAPHIFY_BACKEND=none`. Sem token no env.
+Sem release, cai no HEAD da branch padrão. O poll e o botão do owner não correm ao mesmo tempo:
+o segundo pedido devolve o progresso (sem HTTP 409).
 """
 from __future__ import annotations
 
@@ -13,6 +14,7 @@ import subprocess
 import tempfile
 import threading
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 
 from ..config import Settings
@@ -44,6 +46,14 @@ class GraphError(ForgeError):
         self.hint = hint
 
 
+@dataclass(frozen=True)
+class GraphRef:
+    kind: str
+    ref: str
+    tag: str | None
+    commit: str
+
+
 class GraphIndexer:
     def __init__(
         self,
@@ -63,9 +73,11 @@ class GraphIndexer:
         self._on_poll = on_poll
         self._root = Path(settings.graph_dir)
         self._lock = threading.Lock()
+        self._progress_lock = threading.Lock()
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._busy = False
+        self._progress: dict = {"state": "idle", "reason": "", "repos": []}
 
     @property
     def busy(self) -> bool:
@@ -92,11 +104,13 @@ class GraphIndexer:
             full = f"{item.owner}/{item.repo_name}"
             meta = store.read_meta(self._root, full) or {}
             nodes, edges = 0, 0
-            if meta.get("tag"):
+            if meta.get("tag") or meta.get("commit") or meta.get("ref") or meta.get("source"):
                 nodes, edges = store.graph_counts(self._root, full)
             out.append({
                 "repo": full,
                 "tag": meta.get("tag") or None,
+                "ref": meta.get("ref") or meta.get("tag") or None,
+                "source": meta.get("source") or None,
                 "commit": meta.get("commit") or None,
                 "indexed_at": meta.get("indexed_at") or None,
                 "nodes": int(meta.get("nodes") or nodes or 0),
@@ -104,6 +118,16 @@ class GraphIndexer:
                 "error": meta.get("error") or None,
             })
         return out
+
+    def progress(self) -> dict:
+        with self._progress_lock:
+            repos = [dict(row) for row in self._progress.get("repos") or []]
+            state = self._progress.get("state") or "idle"
+            reason = self._progress.get("reason") or ""
+        busy = self._busy or self._lock.locked()
+        if busy and state != "running":
+            state = "running"
+        return {"state": state, "busy": busy, "reason": reason, "repos": repos}
 
     def query(self, repo: str, question: str) -> dict:
         full = self._require_repo(repo)
@@ -114,20 +138,86 @@ class GraphIndexer:
         return {"repo": full, "query": (question or "").strip()[: store.QUERY_MAX], "nodes": nodes}
 
     def refresh(self, repo: str | None = None, *, reason: str = "manual") -> dict:
-        """Reindexa um repo ou todos. Recusa se já houver uma corrida (`busy`)."""
+        """Reindexa (bloqueante). Se já houver corrida, devolve o progresso — sem `busy`."""
+        target = self._require_repo(repo) if repo else None
         if not self._lock.acquire(blocking=False):
-            raise GraphError("busy")
+            return self._busy_payload()
         self._busy = True
-        log.info("graph.refresh reason=%s", reason)
+        self._begin_progress(target, reason)
         try:
-            force = reason == "manual"
-            if repo:
-                result = self._refresh_one(self._require_repo(repo), force=force)
-                return {"repos": [result]}
-            return {"repos": self._refresh_all(force=force)}
+            return self._run(target, reason)
         finally:
-            self._busy = False
+            self._finish()
+
+    def request_refresh(self, repo: str | None = None, *, reason: str = "manual") -> dict:
+        """Inicia em segundo plano ou devolve o progresso atual. Nunca levanta `busy`."""
+        target = self._require_repo(repo) if repo else None
+        if not self._lock.acquire(blocking=False):
+            return self._busy_payload()
+        self._busy = True
+        self._begin_progress(target, reason)
+        thread = threading.Thread(
+            target=self._run_in_thread, args=(target, reason),
+            name="forge-graph-refresh", daemon=True,
+        )
+        thread.start()
+        payload = self.progress()
+        payload["accepted"] = True
+        return payload
+
+    def _run_in_thread(self, repo: str | None, reason: str) -> None:
+        try:
+            self._run(repo, reason)
+        except GraphError as exc:
+            log.info("graph.refresh result=error:%s", exc.code)
+            if repo:
+                self._record_error(repo, exc.code, exc.hint)
+                self._set_progress(repo, "error", error=exc.code, hint=exc.hint or None)
+        except Exception:
+            log.info("graph.refresh result=error:internal")
+        finally:
+            self._finish()
+
+    def _busy_payload(self) -> dict:
+        payload = self.progress()
+        payload["busy"] = True
+        payload["state"] = "running"
+        payload["accepted"] = False
+        return payload
+
+    def _begin_progress(self, repo: str | None, reason: str) -> None:
+        if repo:
+            targets = [repo]
+        else:
+            targets = [f"{row.owner}/{row.repo_name}" for row in list_active_allowed_repos(self._repo)]
+        with self._progress_lock:
+            self._progress = {
+                "state": "running",
+                "reason": reason,
+                "repos": [{"repo": name, "status": "queued"} for name in targets],
+            }
+
+    def _set_progress(self, repo: str, status: str, **extra) -> None:
+        with self._progress_lock:
+            for row in self._progress.get("repos") or []:
+                if row.get("repo") == repo:
+                    row["status"] = status
+                    for key, value in extra.items():
+                        if value is not None:
+                            row[key] = value
+                        elif key in row:
+                            row.pop(key, None)
+                    break
+
+    def _finish(self) -> None:
+        with self._progress_lock:
+            if self._progress.get("state") == "running":
+                self._progress["state"] = "idle"
+        self._busy = False
+        try:
             self._lock.release()
+        except RuntimeError:
+            pass
 
     def _loop(self) -> None:
         try:
@@ -158,37 +248,52 @@ class GraphIndexer:
             code = getattr(exc, "code", None) or "internal"
             log.info("graph.poll extra=error:%s", code)
 
-    def _refresh_all(self, *, force: bool) -> list[dict]:
+    def _run(self, repo: str | None, reason: str) -> dict:
+        force = reason == "manual"
+        log.info("graph.refresh reason=%s", reason)
+        if repo:
+            targets = [repo]
+        else:
+            targets = [f"{row.owner}/{row.repo_name}" for row in list_active_allowed_repos(self._repo)]
         results = []
-        for item in list_active_allowed_repos(self._repo):
-            full = f"{item.owner}/{item.repo_name}"
+        for full in targets:
             try:
                 results.append(self._refresh_one(full, force=force))
             except GraphError as exc:
-                self._record_error(full, exc.code)
-                results.append({"repo": full, "status": "error", "error": exc.code})
-        return results
+                self._record_error(full, exc.code, exc.hint)
+                self._set_progress(full, "error", error=exc.code, hint=exc.hint or None)
+                row = {"repo": full, "status": "error", "error": exc.code}
+                if exc.hint:
+                    row["hint"] = exc.hint
+                results.append(row)
+        return {"state": "idle", "busy": False, "reason": reason, "repos": results}
 
     def _refresh_one(self, repo: str, *, force: bool) -> dict:
-        tag = self._latest_tag(repo)
+        self._set_progress(repo, "running")
+        source = self._resolve_ref(repo)
         meta = store.read_meta(self._root, repo) or {}
-        if not force and meta.get("tag") == tag and not meta.get("error"):
-            log.info("graph.index repo=%s tag=%s result=unchanged", repo, tag)
-            return {"repo": repo, "status": "unchanged", "tag": tag}
+        if not force and self._unchanged(meta, source):
+            log.info("graph.index repo=%s ref=%s result=unchanged", repo, source.ref)
+            row = {
+                "repo": repo, "status": "unchanged", "tag": source.tag,
+                "ref": source.ref, "source": source.kind, "commit": source.commit or meta.get("commit"),
+            }
+            self._set_progress(repo, "unchanged", tag=source.tag, ref=source.ref, commit=row["commit"])
+            return row
         clone = None
         try:
-            clone = self._clone(repo, tag)
-            graph_src = self._extract(clone)
-            try:
-                dest = store.copy_graph(graph_src, self._root, repo)
-            except (OSError, ValueError) as exc:
-                raise GraphError("extract_failed") from exc
+            clone = self._clone(repo, source.ref)
+            dest = self._extract_to_volume(clone, repo)
             digest = hashlib.sha256(dest.read_bytes()).hexdigest()
             nodes, edges = store.graph_counts(self._root, repo)
-            commit = self._commit_of(clone)
+            commit = source.commit or self._commit_of(clone)
+            if not commit:
+                commit = self._commit_of(clone)
             payload = {
                 "repo": repo,
-                "tag": tag,
+                "tag": source.tag,
+                "ref": source.ref,
+                "source": source.kind,
                 "commit": commit,
                 "indexed_at": self._now(),
                 "nodes": nodes,
@@ -198,23 +303,44 @@ class GraphIndexer:
             }
             store.write_meta(self._root, repo, payload)
             log.info(
-                "graph.index repo=%s tag=%s hash=%s nodes=%s edges=%s result=ok",
-                repo, tag, digest[:16], nodes, edges,
+                "graph.index repo=%s ref=%s hash=%s nodes=%s edges=%s result=ok",
+                repo, source.ref, digest[:16], nodes, edges,
             )
-            return {"repo": repo, "status": "ok", "tag": tag, "nodes": nodes, "edges": edges}
+            row = {
+                "repo": repo, "status": "ok", "tag": source.tag, "ref": source.ref,
+                "source": source.kind, "nodes": nodes, "edges": edges, "commit": commit,
+            }
+            self._set_progress(repo, "done", tag=source.tag, ref=source.ref, commit=commit)
+            return row
         finally:
             if clone is not None:
                 shutil.rmtree(clone.parent, ignore_errors=True)
 
-    def _latest_tag(self, repo: str) -> str:
+    def _unchanged(self, meta: dict, source: GraphRef) -> bool:
+        if meta.get("error"):
+            return False
+        if source.kind == "release":
+            return bool(source.tag) and meta.get("tag") == source.tag
+        return bool(source.commit) and meta.get("commit") == source.commit and meta.get("source") == "head"
+
+    def _resolve_ref(self, repo: str) -> GraphRef:
         if self._gh is None:
             raise GraphError("gh_missing")
         try:
-            return self._gh.latest_release_tag(repo)
+            tag = self._gh.latest_release_tag(repo)
+            return GraphRef("release", tag, tag, "")
         except DraftError as exc:
-            if exc.code in {"no_release", "gh_missing", "gh_not_logged", "gh_error", "timeout"}:
+            if exc.code != "no_release":
+                if exc.code in {"gh_missing", "gh_not_logged", "gh_error", "timeout"}:
+                    raise GraphError(exc.code) from exc
+                raise GraphError("gh_error") from exc
+        try:
+            branch, sha = self._gh.default_branch_head(repo)
+        except DraftError as exc:
+            if exc.code in {"gh_missing", "gh_not_logged", "gh_error", "timeout"}:
                 raise GraphError(exc.code) from exc
             raise GraphError("gh_error") from exc
+        return GraphRef("head", branch, None, sha)
 
     def _clone(self, repo: str, tag: str) -> Path:
         if self._gh is None:
@@ -229,11 +355,17 @@ class GraphIndexer:
             raise GraphError("clone_failed")
         return dest
 
-    def _extract(self, clone: Path) -> Path:
-        argv = [self._settings.graphify_bin, "extract", str(clone), "--code-only"]
+    def _extract_to_volume(self, clone: Path, repo: str) -> Path:
+        out_root = clone.parent / "gf-out"
+        out_root.mkdir(parents=True, exist_ok=True)
+        argv = [
+            self._settings.graphify_bin, "extract", str(clone),
+            "--code-only", "--out", str(out_root),
+        ]
         env = filter_env(os.environ, GRAPHIFY_ENV_ALLOW)
         env["GRAPHIFY_BACKEND"] = "none"
         env["GRAPHIFY_QUERY_LOG_DISABLE"] = "1"
+        env["GRAPHIFY_OUT"] = str(out_root)
         run = self._runner or subprocess.run
         try:
             proc = run(
@@ -244,14 +376,30 @@ class GraphIndexer:
             raise GraphError("graphify_missing") from exc
         except subprocess.TimeoutExpired as exc:
             raise GraphError("timeout") from exc
-        if proc.returncode != 0:
-            raise GraphError("extract_failed")
-        graph = clone / "graphify-out" / "graph.json"
-        if not graph.is_file():
-            raise GraphError("extract_failed")
-        log.info("graph.extract path=%s hash=%s", "graphify-out/graph.json",
-                 hashlib.sha256(graph.read_bytes()).hexdigest()[:16])
-        return graph
+        found = store.locate_graph_json(out_root, clone)
+        if found is None:
+            if proc.returncode != 0:
+                raise GraphError("extract_failed", hint=f"exit_code={proc.returncode}")
+            raise GraphError("missing_output")
+        reason = store.inspect_graph_file(found)
+        if reason:
+            size = 0
+            try:
+                size = found.stat().st_size
+            except OSError:
+                pass
+            if reason == "too_large":
+                log.info("graph.index repo=%s result=error:too_large bytes=%s", repo, size)
+            raise GraphError(reason)
+        try:
+            dest = store.copy_graph(found, self._root, repo)
+        except store.GraphFileError as exc:
+            raise GraphError(exc.code) from exc
+        except OSError:
+            raise GraphError("extract_failed", hint="write_failed") from None
+        digest = hashlib.sha256(dest.read_bytes()).hexdigest()
+        log.info("graph.extract path=%s hash=%s", "graph.json", digest[:16])
+        return dest
 
     def _commit_of(self, clone: Path) -> str:
         env = filter_env(os.environ, GH_ENV_ALLOW)
@@ -268,14 +416,21 @@ class GraphIndexer:
             return ""
         return (proc.stdout or b"").decode("utf-8", "replace").strip()[:64]
 
-    def _record_error(self, repo: str, code: str) -> None:
+    def _record_error(self, repo: str, code: str, hint: str = "") -> None:
         meta = store.read_meta(self._root, repo) or {"repo": repo}
         meta["error"] = code
+        if hint:
+            meta["error_hint"] = hint
+        else:
+            meta.pop("error_hint", None)
         try:
             store.write_meta(self._root, repo, meta)
         except OSError:
             pass
-        log.info("graph.index repo=%s result=error:%s", repo, code)
+        if hint:
+            log.info("graph.index repo=%s result=error:%s detail=%s", repo, code, hint)
+        else:
+            log.info("graph.index repo=%s result=error:%s", repo, code)
 
     def _require_repo(self, repo: str) -> str:
         name = (repo or "").strip()

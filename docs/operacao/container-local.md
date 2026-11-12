@@ -32,6 +32,8 @@ CI e testes unitários **não** chamam GitHub nem Cursor reais.
 | `FORGE_OBSIDIAN_ALLOW` | pastas relativas permitidas, separadas por vírgula (ex.: `Forge,Projetos`). Sem ela o vault fica desligado |
 | `FORGE_GRAPH_DIR` | diretório dos `graph.json` no container (padrão `/graphs`, volume `forge_graphs`) |
 | `FORGE_GRAPH_POLL_SECONDS` | intervalo do poll de releases (padrão `3600`; `0` desliga o loop e mantém só o passo na subida) |
+| `FORGE_GRAPH_NODE_LIMIT` | teto de nós da Teia combinada (padrão `500`, entre 50 e 5000) |
+| `FORGE_GRAPH_EDGE_LIMIT` | teto de arestas da Teia combinada (padrão `1500`, entre 100 e 20000) |
 
 A senha **não** vai para arquivo no repositório. O Postgres lê `secrets.environment`. O `forge_backend` é `read_only: true`; Compose v2 recusa `secrets.environment` nesse caso (`file is the sole supported option`). **Plano B:** tmpfs em `/run/secrets` (mode 0700, uid/gid 1000); o entrypoint grava as senhas da env em arquivos 0600 nesse tmpfs e remove as variáveis do processo antes do uvicorn. O código continua lendo de arquivo. Residual: `docker inspect` ainda mostra a env configurada no serviço. Ainda precisa ser validado no Windows (Docker Desktop).
 
@@ -88,7 +90,7 @@ Start-Process 'http://127.0.0.1:8090'
 ```
 
 1. **Entrar com GitHub**: a página mostra o `user_code` e o link de verificação. Autorize no GitHub; a página consulta `/api` sozinha.
-2. `/api/auth/whoami` (via UI) lista login e papéis (pills na barra superior). Sem `editor`, a tela de tarefas explica que o owner não basta. A barra esquerda troca Tarefas, Investigação (notas manuais por issue), Teia de contexto (vault Obsidian + grafos) e, só para o papel **owner**, Conexões.
+2. `/api/auth/whoami` (via UI) lista login e papéis (pills na barra superior). Sem `editor`, a tela de tarefas explica que o owner não basta. A barra esquerda troca Tarefas, Investigação (notas manuais por issue), Teia de contexto (grafo combinado em `/api/context-graph`) e, só para o papel **owner**, Conexões.
 3. **Nova tarefa**: escolha um repositório da allowlist (org `ferreiraeborzone`), cole o contexto escrito (máx. 64 KiB; sem imagem) e **Gerar rascunho**.
 4. Confira a pré-visualização. Comportamento esperado e Critérios de aceite vêm preenchidos mesmo com contexto curto, com prefixo `_Sugestão (revise):_` quando forem inferência. Só Objetivo pode ficar `[PENDENTE]`, e só se o contexto estiver vazio. Edite o corpo na própria prévia (textarea) ou complemente o contexto e **Gerar de novo**. Tipo, prioridade e size vêm sugeridos pelo gerador (opções do board IT Backlog, projeto 13); troque só se quiser. Se `/api/board/fields` falhar (ex.: gh sem escopo `project`), a tela mostra o erro real, não selects vazios.
 5. **Confirmar e publicar**: o backend recusa se o `preview_hash` mudou (`409 diff_changed`) ou se ainda houver `[PENDENTE]` real (`400 pending_fields`). Sugestões `_Sugestão (revise):_` não bloqueiam. Issue, item do board e branch entram em `task_links`. Se falhar no meio, **Confirmar** de novo retoma; não duplica a issue.
@@ -100,7 +102,7 @@ O token GitHub não é gravado. A sessão Forge vai num cookie HttpOnly, SameSit
 
 Notas manuais da aba **Investigação** ficam no Postgres do Forge (`investigation_notes`). Não dependem do vault. Editor ou owner cria/edita/apaga; o `audit_log` registra só `note:{id}` e `bytes=N`, nunca o corpo.
 
-O vault Obsidian é opcional. Sem `FORGE_OBSIDIAN_VAULT` ou sem `FORGE_OBSIDIAN_ALLOW`, `/api/vault` e a aba Teia mostram **desligado**; o resto do painel continua.
+O vault Obsidian é opcional. Sem `FORGE_OBSIDIAN_VAULT` ou sem `FORGE_OBSIDIAN_ALLOW`, `/api/vault` e a Teia omitem nós de vault; notas manuais, issues, PRs e o código Graphify continuam. A aba Teia chama `GET /api/context-graph` (editor ou owner; 401/403 para os demais): nós de arquivo/módulo/classe, issues concluídas, PRs, notas manuais e, se o vault estiver ligado, só título e caminho relativo das notas da allowlist (`realpath`, sem symlink, sem corpo). Arestas: issue→arquivos tocados, issue→PR, nota→issue, `[[links]]` entre notas permitidas, imports/calls do Graphify. Grafos grandes agregam funções (e classes, se ainda passar do teto) e cortam em `FORGE_GRAPH_NODE_LIMIT` / `FORGE_GRAPH_EDGE_LIMIT`, com `truncated: true`. A UI desenha o grafo em SVG (força com teto de iterações, zoom na roda, pan no arraste, painel ao clicar). Sem CDN; CSP `'self'`.
 
 ### Bind mount no Windows (caminho de exemplo)
 
@@ -124,7 +126,7 @@ A API lista e lê `.md` só dentro da allowlist: `realpath`, sem seguir symlink 
 
 O backend instala `graphifyy==0.9.106` (comando `graphify`) e roda só `graphify extract <clone> --code-only` com `GRAPHIFY_BACKEND=none` (offline, sem chave, sem LLM). A saída (`graph.json` + metadados: tag, commit, data, nós/arestas) vai ao volume `forge_graphs` montado em `/graphs`.
 
-Na subida e a cada `FORGE_GRAPH_POLL_SECONDS` (padrão 1 h), o backend consulta a tag de release mais recente de cada um dos 5 repositórios ativos da allowlist via `gh` da sessão já logada no volume `forge_cli_home`. **Não** há `GH_TOKEN` / `GITHUB_TOKEN` no compose nem nos logs. Se a tag mudou, reclona e reindexa. Um lock impede duas corridas juntas. O papel **owner** tem o botão **Atualizar grafo** (`POST /api/graphs/refresh`, CSRF + `audit_log`). Editor ou owner lê o status e consulta nós em `/api/graphs*`. O front não fala com o Graphify nem com o disco.
+Na subida e a cada `FORGE_GRAPH_POLL_SECONDS` (padrão 1 h), o backend consulta a tag de release mais recente de cada um dos 5 repositórios ativos da allowlist via `gh` da sessão já logada no volume `forge_cli_home`. **Não** há `GH_TOKEN` / `GITHUB_TOKEN` no compose nem nos logs. Se a tag mudou, reclona e reindexa. Sem release, cai no HEAD da branch padrão (`gh` GraphQL somente leitura: nome da branch + SHA); o poll reindexa quando o SHA muda. O extract usa `graphify extract <clone> --code-only --out <dir>` (cwd no clone) e copia `graph.json` para o volume; se falhar, o log traz o motivo curto (`missing_output`, `invalid_json`, `schema`, `too_large`, `exit_code=N`, `timeout`) sem conteúdo, sem caminho fora do volume e sem segredo. Um lock impede duas corridas juntas: o segundo **Atualizar grafo** devolve 200 com o progresso (`queued`/`running`/`done`/`error`) em `GET /api/graphs/status`, a UI mostra «Indexando…» e desliga o botão. O papel **owner** dispara `POST /api/graphs/refresh` (CSRF + `audit_log`). Editor ou owner lê o status e a Teia. O front não fala com o Graphify nem com o disco.
 
 O mesmo poll também importa issues **fechadas** e as que estão na coluna Done do board IT Backlog (projeto 13), só dos 5 repositórios da allowlist. A leitura é `gh` na sessão já logada: `issue list/view`, `pr view` e GraphQL. **Não** cria nem edita issue, PR ou item do board. O corpo passa por redação (tokens `ghp_`/`gho_`/`github_pat_`, chaves AWS, JWT, `password=`/`senha:`/`token=`, connection string com credencial, chave privada) **antes** de gravar. Upsert em Postgres por `repo+number` (reimportar atualiza). Sem vault, o registro vive só no banco. Com `FORGE_OBSIDIAN_VAULT` e pasta `Forge/` gravável, cada issue vira `Forge/<repo>/<número>.md` (helper atômico, `realpath`, sem symlink). O papel **owner** tem o botão **Importar issues concluídas** na Investigação (`POST /api/completed-issues/import`, CSRF + `audit_log` com contagens, sem corpo). Editor ou owner lê semelhantes em `GET /api/completed-issues?issue=owner/repo#n`. O rascunho de tarefa cita as top 5 no markdown e no prompt do modelo; notas do vault **não** entram no prompt.
 
@@ -205,8 +207,9 @@ Guarde o dump fora do Git. Restaure só em ambiente de teste.
 | `forge-init: segredo ausente/vazio` | Defina as três senhas no ambiente **antes** do primeiro `up` (volume novo) |
 | `forge-web: segredo ausente` | O entrypoint não materializou `/run/secrets` a partir da env; conferir tmpfs `/run/secrets` e as variáveis `FORGE_PG_*_PASSWORD` |
 | Conexões desligada / `vault_disabled` | Falta `FORGE_CONNECTIONS_KEY` no ambiente do compose; gerar Fernet (comando acima), exportar e recriar o `forge_backend` |
-| Teia / vault Obsidian desligado | Falta `FORGE_OBSIDIAN_VAULT` ou `FORGE_OBSIDIAN_ALLOW`, ou o bind mount não está em `/vault`. Notas manuais em Investigação continuam |
-| Grafo `not_indexed` / `no_release` | Ainda não houve extract, ou o repo não tem release. Owner: **Atualizar grafo**. Confira `gh auth status` no container |
+| Teia / vault Obsidian desligado | Falta `FORGE_OBSIDIAN_VAULT` ou `FORGE_OBSIDIAN_ALLOW`, ou o bind mount não está em `/vault`. A Teia segue com issues, PRs, notas e código |
+| Grafo `not_indexed` / extract falhou | Ainda não houve extract, ou o `graph.json` foi recusado (`missing_output` / `too_large` / `schema`). Owner: **Atualizar grafo**. Repo sem release usa o HEAD da branch padrão. Confira `gh auth status` no container |
+| Teia mostra «Indexando…» | Já há um extract em curso; o botão fica desligado e `GET /api/graphs/status` lista o progresso por repo |
 | Investigação sem issues concluídas | Owner: **Importar issues concluídas** (ou esperar o poll). Confira `gh auth status` no container. Sem vault, o registro fica só no Postgres |
 | `vault_invalid` | A chave não é Fernet (32 bytes em Base64 URL). Gere outra e recadastre os segredos das conexões |
 | `forbidden` em salvar conexão | Falta papel `owner`. Listar/testar exige `editor` ou `owner` |
