@@ -71,6 +71,8 @@ services:
       FORGE_GRAPH_NODE_LIMIT: ${FORGE_GRAPH_NODE_LIMIT:-500}
       FORGE_GRAPH_EDGE_LIMIT: ${FORGE_GRAPH_EDGE_LIMIT:-1500}
       FORGE_GRAPH_EXTRACT_TIMEOUT: ${FORGE_GRAPH_EXTRACT_TIMEOUT:-1800}
+      FORGE_ENGINE: ${FORGE_ENGINE:-claude}
+      FORGE_CLAUDE_BIN: /usr/local/bin/claude
       GRAPHIFY_BACKEND: "none"
       GRAPHIFY_QUERY_LOG_DISABLE: "1"
       HOME: /home/forge
@@ -78,6 +80,7 @@ services:
       XDG_DATA_HOME: /home/forge/.local/share
     volumes:
       - forge_cli_home:/home/forge
+      - forge_claude:/home/forge/.claude
       - forge_graphs:/graphs
       # Vault Obsidian (opcional). O vault inteiro entra somente leitura em /vault;
       # só Forge/ é remontada por cima com escrita (helper da fase 2). Caminho Windows
@@ -117,4 +120,5 @@ secrets:
 volumes:
   forge_pgdata:
   forge_cli_home:
+  forge_claude:
   forge_graphs:

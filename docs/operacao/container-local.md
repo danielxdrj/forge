@@ -67,7 +67,10 @@ docker compose -f docker-compose.forge.yml exec forge_backend gh auth login -s p
 # se o login já existir sem o escopo:
 docker compose -f docker-compose.forge.yml exec forge_backend gh auth refresh -s project
 docker compose -f docker-compose.forge.yml exec forge_backend cursor-agent login
+docker compose -f docker-compose.forge.yml exec forge_backend claude
 ```
+
+Login Claude Code: assinatura (sem `ANTHROPIC_API_KEY`). Credenciais em `forge_claude` (`~/.claude`, uid 1000).
 
 Siga o device flow que o comando mostrar. Sem `GH_TOKEN` / `GITHUB_TOKEN`. O `gh` grava o token **em texto puro** no volume `forge_cli_home`. Risco aceito: é um volume Docker próprio desta instalação. **Nunca** monte o keyring, `HOME` ou `%APPDATA%` do host.
 

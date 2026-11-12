@@ -15,7 +15,8 @@ from ..errors import AuthenticationError, AuthorizationError, ConfigError, Draft
 from ..storage.sql import open_repository
 from ..tasks.service import TaskService
 from .context import resolve_source
-from .cursor_cli import CursorCliAdapter, diagnose_cursor_cli, resolve_cursor_model
+from .cursor_cli import diagnose_cursor_cli, resolve_cursor_model
+from .engine import select_engine_adapter
 from .github_gh import GhCli
 from .service import DraftService, ask_confirm, read_draft_sidecar
 from .template import validate_repo
@@ -115,10 +116,10 @@ def run(argv: list[str], env: Mapping[str, str] | None = None, transport: Transp
         flow = DeviceFlow(settings.github_client_id, transport or UrllibTransport())
         store = AuthStore(repo_db, verify=flow.identity)
         tasks = TaskService(repo_db)
-        adapter = provider or CursorCliAdapter(
+        adapter = provider or select_engine_adapter(
+            env,
             model=model or None,
             timeout=int(env.get("FORGE_CURSOR_TIMEOUT", "120") or 120),
-            env=env,
         )
         gh_cli = gh if gh is not None else GhCli(
             bin_path=env.get("FORGE_GH_BIN", "gh").strip() or "gh", env=env,

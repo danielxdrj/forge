@@ -29,10 +29,10 @@ def main() -> int:
         with psycopg.connect(settings.database_migration_url) as conn:
             bootstrap_grants(conn, app_role, readonly_role)
         seed_allowed_repos(repo)
-        from ..draft.cursor_cli import CursorCliAdapter
+        from ..draft.engine import select_engine_adapter
         from ..draft.github_gh import GhCli
 
-        provider = CursorCliAdapter()
+        provider = select_engine_adapter()
         gh_cli = GhCli(bin_path=os.environ.get("FORGE_GH_BIN", "gh").strip() or "gh")
         app = create_app(repo, settings, provider=provider, gh=gh_cli)
         indexer = getattr(app.state, "graphs", None)

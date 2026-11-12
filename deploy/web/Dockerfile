@@ -7,6 +7,8 @@ FROM python:3.12-slim@sha256:4840d514c583a4d3d8cad3940e68dee6f0f6f3635c12fcd0a3d
 ARG TARGETARCH
 ARG GH_VERSION=2.81.0
 ARG CURSOR_AGENT_VERSION=2026.11.10-731fb78
+ARG NODE_VERSION=22.21.1
+ARG CLAUDE_CODE_VERSION=2.1.322
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates curl git tar util-linux \
@@ -32,12 +34,23 @@ RUN set -eux; \
     tar --strip-components=1 -xzf /tmp/cursor.tgz -C /opt/cursor-agent; \
     ln -sf /opt/cursor-agent/cursor-agent /usr/local/bin/cursor-agent; \
     ln -sf /opt/cursor-agent/cursor-agent /usr/local/bin/agent; \
-    rm -rf /tmp/gh.tgz /tmp/cursor.tgz "/tmp/gh_${GH_VERSION}_linux_${GH_ARCH}"; \
-    chmod 0755 /usr/local/bin/gh /opt/cursor-agent/cursor-agent
+    case "${TARGETARCH}" in \
+      amd64) NODE_ARCH=x64; NODE_SHA=219a152ea859861d75adea578bdec3dce8143853c13c5187f40c40e77b0143b2 ;; \
+      arm64) NODE_ARCH=arm64; NODE_SHA=c86830dedf77f8941faa6c5a9c863bdfdd1927a336a46943decc06a38f80bfb2 ;; \
+      *) echo "arquitetura não suportada: ${TARGETARCH}"; exit 1 ;; \
+    esac; \
+    curl -fsSL -o /tmp/node.tgz \
+      "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${NODE_ARCH}.tar.gz"; \
+    echo "${NODE_SHA}  /tmp/node.tgz" | sha256sum -c -; \
+    tar -xzf /tmp/node.tgz -C /usr/local --strip-components=1; \
+    rm -rf /tmp/gh.tgz /tmp/cursor.tgz /tmp/node.tgz "/tmp/gh_${GH_VERSION}_linux_${GH_ARCH}"; \
+    npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"; \
+    npm cache clean --force; \
+    chmod 0755 /usr/local/bin/gh /opt/cursor-agent/cursor-agent /usr/local/bin/claude
 
 RUN useradd --uid 1000 --create-home --home-dir /home/forge --shell /usr/sbin/nologin forge \
-    && mkdir -p /etc/forge/config /graphs \
-    && chown -R forge:forge /etc/forge /graphs
+    && mkdir -p /etc/forge/config /graphs /home/forge/.claude \
+    && chown -R forge:forge /etc/forge /graphs /home/forge
 
 WORKDIR /opt/forge
 COPY pyproject.toml README.md ./
@@ -62,6 +75,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     FORGE_CONFIG_DIR=/etc/forge/config \
     FORGE_GH_BIN=/usr/local/bin/gh \
     FORGE_CURSOR_AGENT=/usr/local/bin/cursor-agent \
+    FORGE_CLAUDE_BIN=/usr/local/bin/claude \
+    FORGE_ENGINE=claude \
     GRAPHIFY_BACKEND=none \
     GRAPHIFY_QUERY_LOG_DISABLE=1 \
     PATH=/usr/local/bin:/home/forge/.local/bin:/usr/sbin:/usr/bin:/bin

@@ -165,6 +165,8 @@ def create_app(
             "gh_not_logged": 503,
             "busy": 409,
             "cursor_cli_missing": 503,
+            "claude_cli_missing": 503,
+            "claude_cli_error": 502,
             "provider_error": 502,
             "forbidden": 403,
         }.get(code, 400)
