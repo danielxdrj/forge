@@ -21,6 +21,7 @@ from pathlib import Path
 from ...errors import ForgeError
 
 APPEND_ONLY = ("audit_log", "task_history", "task_changes", "agent_runs", "approval_consumptions", "grant_consumptions", "dispatch_requests")
+WRITER_MAY_DELETE = frozenset({"connections", "connection_hosts"})
 _ROLE = re.compile(r"^[a-z_][a-z0-9_]{0,62}$")
 SCRIPT = Path(__file__).with_name("postgres_roles.sql")
 
@@ -86,8 +87,12 @@ def _postcheck(cur, role: str) -> list[str]:
                 raise ReprovisionError("writer_grant_missing")
     cur.execute("SELECT tablename FROM pg_tables WHERE schemaname = 'public'")
     for (table,) in cur.fetchall():
-        cur.execute("SELECT has_table_privilege(%s, %s, 'DELETE') OR has_table_privilege(%s, %s, 'TRUNCATE')",
-                    (role, f"public.{table}", role, f"public.{table}"))
+        cur.execute("SELECT has_table_privilege(%s, %s, 'TRUNCATE')", (role, f"public.{table}"))
+        if cur.fetchone()[0]:
+            raise ReprovisionError("writer_delete_unexpected")
+        if table in WRITER_MAY_DELETE:
+            continue
+        cur.execute("SELECT has_table_privilege(%s, %s, 'DELETE')", (role, f"public.{table}"))
         if cur.fetchone()[0]:
             raise ReprovisionError("writer_delete_unexpected")
     checks += ["append_only_no_update_delete_truncate", "writer_no_delete_truncate"]

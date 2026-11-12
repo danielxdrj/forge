@@ -33,6 +33,7 @@
     errorDetail: null,
     notice: "",
     busy: false,
+    loading: true,
   };
 
   function csrfToken() {
@@ -201,6 +202,10 @@
 
   function isEditor() {
     return !!(state.who && Array.isArray(state.who.roles) && state.who.roles.indexOf("editor") !== -1);
+  }
+
+  function isOwner() {
+    return !!(state.who && Array.isArray(state.who.roles) && state.who.roles.indexOf("owner") !== -1);
   }
 
   async function loadEditorData() {
@@ -387,6 +392,7 @@
       gh_missing: "gh não está disponível no container.",
       gh_not_logged: "gh não está autenticado no container.",
       board_fields: "Não foi possível ler as opções do board.",
+      api_unreachable: "Não foi possível falar com a API. Recarregue a página.",
     };
     let text = map[code] || code;
     const fields = detail && Array.isArray(detail.fields) ? detail.fields : [];
@@ -399,22 +405,112 @@
     return text;
   }
 
+  function activeTab() {
+    const hash = (window.location.hash || "").replace(/^#/, "");
+    if (hash === "investigacao" || hash === "teia") {
+      return hash;
+    }
+    return "tarefas";
+  }
+
+  function setPageTitle(text) {
+    const node = document.getElementById("page-title");
+    if (node) {
+      node.textContent = text;
+    }
+    document.title = text === "FORGE" ? "FORGE" : "FORGE · " + text;
+  }
+
+  function snapshotForm() {
+    const repo = document.getElementById("repo");
+    const context = document.getElementById("context");
+    if (repo) {
+      state.form.repo = repo.value;
+    }
+    if (context) {
+      state.form.context = context.value;
+    }
+    if (state.draft && document.getElementById("draft-body")) {
+      const payload = currentDraftPayload();
+      state.draft.body = payload.body_md;
+    }
+  }
+
+  function renderNav() {
+    const tab = activeTab();
+    document.querySelectorAll("[data-nav]").forEach(function (link) {
+      const name = link.getAttribute("data-nav");
+      link.classList.toggle("current", name === tab);
+    });
+    const conn = document.getElementById("nav-conexoes");
+    if (conn) {
+      if (isOwner()) {
+        conn.removeAttribute("hidden");
+      } else {
+        conn.setAttribute("hidden", "");
+      }
+    }
+  }
+
+  function rolePill(role) {
+    const cls = "pill pill-role pill-role-" + role;
+    return el("span", { class: cls, text: role });
+  }
+
+  function statusPill(draftStatus, status) {
+    const left = draftStatus || "";
+    const right = status || "";
+    const label = left && right ? left + " / " + right : (left || right || "—");
+    const key = (left || right).toLowerCase();
+    let kind = "muted";
+    if (key.indexOf("publicado") !== -1) {
+      kind = "ok";
+    } else if (key.indexOf("rascunho") !== -1) {
+      kind = "warn";
+    } else if (key.indexOf("confirmado") !== -1) {
+      kind = "ok";
+    } else if (key.indexOf("cancelado") !== -1) {
+      kind = "danger";
+    }
+    return el("span", { class: "pill pill-" + kind, text: label });
+  }
+
+  function stateCard(kind, title, detail) {
+    const cls = kind === "error" ? "banner banner-error" : "card state-card";
+    const children = [el("p", { class: kind === "error" ? "" : "muted", text: title })];
+    if (detail) {
+      children.push(el("p", { class: "muted", text: detail }));
+    }
+    return el("section", { class: cls }, children);
+  }
+
   function renderSession(target) {
     target.replaceChildren();
     if (state.who) {
-      target.appendChild(el("span", { text: "Login: " + state.who.login + " · papéis: " + (state.who.roles.join(", ") || "nenhum") }));
-      target.appendChild(el("button", { type: "button", text: "Sair", onClick: function () { logout(); } }));
+      target.appendChild(el("span", { class: "session-login", text: state.who.login }));
+      const roles = (state.who.roles || []).map(rolePill);
+      if (!roles.length) {
+        roles.push(el("span", { class: "pill pill-muted", text: "nenhum" }));
+      }
+      target.appendChild(el("span", { class: "session-roles" }, roles));
+      target.appendChild(el("button", { type: "button", class: "btn-sair", text: "Sair", onClick: function () { logout(); } }));
       return;
     }
     target.appendChild(el("span", { class: "muted", text: "Não autenticado" }));
   }
 
   function renderLogin(root) {
-    const box = el("section", null, [el("h2", { text: "Entrar" })]);
+    const box = el("section", { class: "card card-core" }, [
+      el("div", { class: "card-head" }, [
+        el("span", { class: "icon-box icon-core", text: "F" }),
+        el("h2", { text: "Entrar" }),
+        el("span", { class: "pill pill-existing", text: "INTEGRAÇÃO EXISTENTE" }),
+      ]),
+    ]);
     if (state.pending && state.pending.user_code) {
       box.appendChild(el("p", { text: "Abra o GitHub e informe o código:" }));
       box.appendChild(el("p", null, [safeLink(state.pending.verification_uri)]));
-      box.appendChild(el("p", { class: "code", text: state.pending.user_code }));
+      box.appendChild(el("p", { class: "code login-code", text: state.pending.user_code }));
       box.appendChild(el("p", { class: "muted", text: "Aguardando autorização no GitHub…" }));
     } else {
       box.appendChild(el("button", {
@@ -459,13 +555,19 @@
 
   function renderEditor(root) {
     if (!isEditor()) {
-      root.appendChild(el("section", null, [
+      root.appendChild(el("section", { class: "card" }, [
         el("p", { class: "error", text: "Só quem tem o papel editor pode criar tarefas. O owner não implica editor; peça grant --role editor." }),
       ]));
       return;
     }
 
-    const form = el("section", null, [el("h2", { text: "Nova tarefa" })]);
+    const form = el("section", { class: "card card-tasks" }, [
+      el("div", { class: "card-head" }, [
+        el("span", { class: "icon-box icon-tasks", text: "A" }),
+        el("h2", { text: "Nova tarefa" }),
+        el("span", { class: "pill pill-tasks", text: "GESTÃO DE TAREFAS" }),
+      ]),
+    ]);
     const repo = el("select", { id: "repo" });
     state.repos.forEach(function (item) {
       const opt = el("option", { value: item.full_name, text: item.full_name });
@@ -490,7 +592,12 @@
     root.appendChild(form);
 
     if (state.draft) {
-      const preview = el("section", null, [el("h2", { text: "Pré-visualização" })]);
+      const preview = el("section", { class: "card card-tasks" }, [
+        el("div", { class: "card-head" }, [
+          el("span", { class: "icon-box icon-tasks", text: "A" }),
+          el("h2", { text: "Pré-visualização" }),
+        ]),
+      ]);
       const pending = pendingList(state.draft.pending);
       if (pending) {
         preview.appendChild(pending);
@@ -542,7 +649,12 @@
   }
 
   function renderTaskView(title, tasks, kind) {
-    const list = el("section", { class: "task-view" }, [el("h2", { text: title })]);
+    const list = el("section", { class: "card task-view card-tasks" }, [
+      el("div", { class: "card-head" }, [
+        el("span", { class: "icon-box icon-delivery", text: "C" }),
+        el("h2", { text: title }),
+      ]),
+    ]);
     if (!tasks.length) {
       list.appendChild(el("p", {
         class: "muted",
@@ -567,7 +679,7 @@
       const cells = [
         el("td", { text: task.repo || "" }),
         el("td", { text: task.title || "" }),
-        el("td", { text: (task.draft_status || "") + " / " + (task.status || "") }),
+        el("td", null, [statusPill(task.draft_status, task.status)]),
       ];
       if (kind === "published") {
         cells.push(el("td", null, [publishedIssueLink(task.issue_url)]));
@@ -588,32 +700,118 @@
     return list;
   }
 
+  function sourceCard(letter, iconClass, name, detail) {
+    return el("button", {
+      type: "button",
+      class: "source-card",
+      disabled: "disabled",
+    }, [
+      el("span", { class: "icon-box " + iconClass, text: letter }),
+      el("span", { class: "source-name", text: name }),
+      el("span", { class: "muted", text: detail }),
+      el("span", { class: "pill pill-planned", text: "INTEGRAÇÃO PLANEJADA" }),
+    ]);
+  }
+
+  function renderInvestigacao(root) {
+    root.appendChild(el("section", { class: "card card-eng" }, [
+      el("div", { class: "card-head" }, [
+        el("span", { class: "icon-box icon-eng", text: "B" }),
+        el("h2", { text: "Investigação" }),
+        el("span", { class: "pill pill-proposed", text: "EM CONSTRUÇÃO" }),
+      ]),
+      el("p", { text: "Esta área vai reunir evidências de uma issue sem alterar os sistemas consultados." }),
+      el("p", { class: "muted", text: "Em construção. O seletor e as fontes ainda não consultam a API." }),
+    ]));
+    root.appendChild(el("section", { class: "card" }, [
+      el("h2", { text: "Issue" }),
+      el("label", { text: "Issue do GitHub", for: "issue-select" }),
+      el("select", { id: "issue-select", disabled: "disabled" }, [
+        el("option", { value: "", text: "Selecione uma issue" }),
+      ]),
+      el("p", { class: "muted", text: "O seletor fica desligado até a etapa de investigação." }),
+    ]));
+    const sources = el("section", { class: "card" }, [
+      el("div", { class: "card-head" }, [
+        el("h2", { text: "Fontes" }),
+        el("span", { class: "pill pill-planned", text: "SOMENTE LEITURA" }),
+      ]),
+      el("div", { class: "source-grid" }, [
+        sourceCard("B", "icon-eng", "Código", "Repositório Git"),
+        sourceCard("D", "icon-ops", "Portainer", "Containers"),
+        sourceCard("F", "icon-core", "Banco", "MySQL / PostgreSQL"),
+        sourceCard("F", "icon-core", "FTP", "FTP / SFTP"),
+      ]),
+    ]);
+    root.appendChild(sources);
+  }
+
+  function renderTeia(root) {
+    root.appendChild(el("section", { class: "card card-core" }, [
+      el("div", { class: "card-head" }, [
+        el("span", { class: "icon-box icon-core", text: "F" }),
+        el("h2", { text: "Teia de contexto" }),
+        el("span", { class: "pill pill-proposed", text: "EM CONSTRUÇÃO" }),
+      ]),
+      el("p", { text: "O vault Obsidian vai guardar notas, vínculos e o mapa de contexto da investigação." }),
+      el("p", { class: "muted", text: "As notas ficam fora do Git e não substituem o banco do Forge. Esta tela ainda não está ligada ao vault." }),
+    ]));
+  }
+
   function render() {
+    snapshotForm();
     const session = document.getElementById("session");
     const app = document.getElementById("app");
     renderSession(session);
+    renderNav();
     app.replaceChildren();
+    if (state.loading) {
+      setPageTitle("Forge");
+      app.appendChild(stateCard("loading", "Carregando…"));
+      return;
+    }
     if (state.error) {
-      app.appendChild(el("p", { class: "error", text: errorMessage(state.error, state.errorDetail) }));
+      app.appendChild(el("p", { class: "banner banner-error error", text: errorMessage(state.error, state.errorDetail) }));
     }
     if (state.notice) {
-      app.appendChild(el("p", { class: "ok", text: state.notice }));
+      app.appendChild(el("p", { class: "banner banner-ok ok", text: state.notice }));
     }
     if (!state.who) {
+      setPageTitle("Entrar");
       renderLogin(app);
       return;
     }
+    const tab = activeTab();
+    if (tab === "investigacao") {
+      setPageTitle("Investigação");
+      renderInvestigacao(app);
+      return;
+    }
+    if (tab === "teia") {
+      setPageTitle("Teia de contexto");
+      renderTeia(app);
+      return;
+    }
+    setPageTitle("Tarefas");
     renderEditor(app);
   }
 
   async function boot() {
-    await api("/api/health");
-    await loadWhoami();
-    if (isEditor()) {
-      await loadEditorData();
+    state.loading = true;
+    render();
+    try {
+      await api("/api/health");
+      await loadWhoami();
+      if (isEditor()) {
+        await loadEditorData();
+      }
+    } catch (err) {
+      state.error = "api_unreachable";
     }
+    state.loading = false;
     render();
   }
 
+  window.addEventListener("hashchange", function () { render(); });
   boot();
 })();

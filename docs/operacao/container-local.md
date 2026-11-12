@@ -27,6 +27,7 @@ CI e testes unitários **não** chamam GitHub nem Cursor reais.
 | `FORGE_FRONTEND_HOST_PORT` | origem do navegador (padrão `8090`). O compose interpola essa porta em `FORGE_WEB_HOSTS`. Se você definir `FORGE_WEB_HOSTS` à mão, inclua `127.0.0.1:<porta>` e `localhost:<porta>` |
 | `FORGE_SESSION_TTL_SECONDS` | prazo da sessão web/CLI (padrão 7 dias; mínimo 60, máximo 604800) |
 | `FORGE_CURSOR_MODEL` | opcional; modelo da assinatura Cursor (sem default de custo) |
+| `FORGE_CONNECTIONS_KEY` | chave Fernet da área Conexões (opcional). Sem ela o painel sobe, mas `/conexoes` fica desligada |
 
 A senha **não** vai para arquivo no repositório. O Postgres lê `secrets.environment`. O `forge_backend` é `read_only: true`; Compose v2 recusa `secrets.environment` nesse caso (`file is the sole supported option`). **Plano B:** tmpfs em `/run/secrets` (mode 0700, uid/gid 1000); o entrypoint grava as senhas da env em arquivos 0600 nesse tmpfs e remove as variáveis do processo antes do uvicorn. O código continua lendo de arquivo. Residual: `docker inspect` ainda mostra a env configurada no serviço. Ainda precisa ser validado no Windows (Docker Desktop).
 
@@ -43,6 +44,7 @@ $env:FORGE_PG_READONLY_PASSWORD = '<SEGREDO>'
 $env:FORGE_GITHUB_CLIENT_ID = '<CLIENT_ID_PUBLICO_DO_OAUTH_APP>'
 # opcional: $env:FORGE_PG_HOST_PORT = '5434'
 # opcional: $env:FORGE_CURSOR_MODEL = '<MODELO_DA_ASSINATURA>'
+# opcional, área Conexões: $env:FORGE_CONNECTIONS_KEY = (python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())")
 Set-Location <CAMINHO_DO_REPO>
 docker compose -f docker-compose.forge.yml up -d --build
 ```
@@ -82,13 +84,36 @@ Start-Process 'http://127.0.0.1:8090'
 ```
 
 1. **Entrar com GitHub**: a página mostra o `user_code` e o link de verificação. Autorize no GitHub; a página consulta `/api` sozinha.
-2. `/api/auth/whoami` (via UI) lista login e papéis. Sem `editor`, a tela de tarefas explica que o owner não basta.
+2. `/api/auth/whoami` (via UI) lista login e papéis (pills na barra superior). Sem `editor`, a tela de tarefas explica que o owner não basta. A barra esquerda troca Tarefas, Investigação (em construção), Teia de contexto (em construção) e, só para o papel **owner**, Conexões.
 3. **Nova tarefa**: escolha um repositório da allowlist (org `ferreiraeborzone`), cole o contexto escrito (máx. 64 KiB; sem imagem) e **Gerar rascunho**.
 4. Confira a pré-visualização. Comportamento esperado e Critérios de aceite vêm preenchidos mesmo com contexto curto, com prefixo `_Sugestão (revise):_` quando forem inferência. Só Objetivo pode ficar `[PENDENTE]`, e só se o contexto estiver vazio. Edite o corpo na própria prévia (textarea) ou complemente o contexto e **Gerar de novo**. Tipo, prioridade e size vêm sugeridos pelo gerador (opções do board IT Backlog, projeto 13); troque só se quiser. Se `/api/board/fields` falhar (ex.: gh sem escopo `project`), a tela mostra o erro real, não selects vazios.
 5. **Confirmar e publicar**: o backend recusa se o `preview_hash` mudou (`409 diff_changed`) ou se ainda houver `[PENDENTE]` real (`400 pending_fields`). Sugestões `_Sugestão (revise):_` não bloqueiam. Issue, item do board e branch entram em `task_links`. Se falhar no meio, **Confirmar** de novo retoma; não duplica a issue.
 6. A lista tem duas visões: **Publicadas** (com link da issue, nova aba) e **Rascunhos** (nunca publicados). **Descartar** um rascunho faz `POST /api/tasks/{id}/discard` (CSRF + editor), muda o status para `cancelado` sem apagar e registra no `audit_log`. Rascunhos cancelados saem da visão padrão.
 
 O token GitHub não é gravado. A sessão Forge vai num cookie HttpOnly, SameSite=Strict, Path=/, prazo padrão 7 dias (renovação deslizante) e na tabela `sessions` (`token_hash`). CSRF: cookie legível `forge_csrf` + cabeçalho `X-CSRF-Token` em todo não-GET. Sem script inline (CSP `default-src 'self'`).
+
+## Área Conexões (`/conexoes`)
+
+Cadastro de MySQL, Postgres, FTP, SFTP e Portainer, com vários hosts por conexão (rótulo + ordem; um host preferido). Só o papel **owner** cria, edita ou apaga. **Editor** (ou owner) lista e testa. O teste tenta o host preferido e depois os demais, ~5 s cada, e diz qual funcionou ou por que cada um falhou. O front só chama `/api/connections*`; o segredo nunca volta na API (`secret_set: true/false`) e a tela só permite substituí-lo.
+
+### Gerar a chave
+
+```powershell
+python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+```
+
+Bash: o mesmo comando. Guarde o valor fora do Git. Nome da variável: **`FORGE_CONNECTIONS_KEY`**. No container o entrypoint grava `/run/secrets/forge_connections_key` (0600 no tmpfs) e **remove a variável do processo**. O backend lê só `FORGE_SECRET_CONNECTIONS_KEY_FILE` (caminho), nunca um arquivo de config do repositório. Sem chave, a área informa que está desligada; o resto do painel continua no ar.
+
+No compose, a chave é opcional (`${FORGE_CONNECTIONS_KEY:-}`). Defina-a no ambiente **antes** do `up`, como as senhas do Postgres. O `forge_backend` continua `read_only` + tmpfs `/run/secrets` (plano B); não use `secrets.file` nem monte o keyring/`HOME`/`docker.sock`.
+
+### Rotação
+
+1. Gere uma chave nova (comando acima).
+2. Recadastre o segredo de **cada** conexão na tela (a chave antiga não descriptografa o ciphertext anterior).
+3. Exporte `FORGE_CONNECTIONS_KEY` com o valor novo e recrie o `forge_backend` (`up -d --force-recreate forge_backend`). A senha do Postgres no volume **não** muda com isso.
+4. Não deixe a chave antiga nem a nova em arquivo versionado, log ou dump publicado.
+
+O ciphertext em `connections.secret_ciphertext` é Fernet. `forge_readonly` pode SELECT nessa coluna (é cifrada); não vê o valor em claro. A API e o `audit_log` não gravam o segredo.
 
 ## HeidiSQL e DBeaver (somente leitura)
 
@@ -128,6 +153,9 @@ Guarde o dump fora do Git. Restaure só em ambiente de teste.
 | `Bind for 0.0.0.0:5433 failed` / porta em uso | Outro Postgres (compose de dev). `down` nele ou `FORGE_PG_HOST_PORT` |
 | `forge-init: segredo ausente/vazio` | Defina as três senhas no ambiente **antes** do primeiro `up` (volume novo) |
 | `forge-web: segredo ausente` | O entrypoint não materializou `/run/secrets` a partir da env; conferir tmpfs `/run/secrets` e as variáveis `FORGE_PG_*_PASSWORD` |
+| Conexões desligada / `vault_disabled` | Falta `FORGE_CONNECTIONS_KEY` no ambiente do compose; gerar Fernet (comando acima), exportar e recriar o `forge_backend` |
+| `vault_invalid` | A chave não é Fernet (32 bytes em Base64 URL). Gere outra e recadastre os segredos das conexões |
+| `forbidden` em salvar conexão | Falta papel `owner`. Listar/testar exige `editor` ou `owner` |
 | `forge-auth: FORGE_DATABASE_URL é obrigatória` | Comando rodou **fora** do container. Dentro, os arquivos de segredo preenchem a URL |
 | `host_rejected` | Host fora da allowlist. Se mudou `FORGE_FRONTEND_HOST_PORT`, o compose já interpola em `FORGE_WEB_HOSTS`; se você definiu `FORGE_WEB_HOSTS` à mão, inclua a porta nova |
 | `csrf` | Recarregue a página e tente de novo (cookie `forge_csrf` + cabeçalho `X-CSRF-Token`) |

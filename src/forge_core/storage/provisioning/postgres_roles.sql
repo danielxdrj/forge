@@ -15,5 +15,7 @@ GRANT SELECT ON schema_migrations TO <PAPEL_APP>;
 -- sessions: INSERT com expires_at na criação; renovação deslizante é INSERT em session_renewals.
 GRANT SELECT, INSERT ON identities, bootstrap_owner, role_grants, role_revocations, sessions, session_revocations, session_renewals, approval_grants, grant_consumptions, dispatch_requests, task_links TO <PAPEL_APP>;
 GRANT USAGE ON SEQUENCE role_grants_id_seq, approval_grants_id_seq TO <PAPEL_APP>;
--- Sem DELETE em nenhuma tabela: projeto e repositório são desativados (active=0), nunca apagados.
+-- Conexões: cadastro substituível (CRUD). DELETE só nestas duas tabelas.
+GRANT SELECT, INSERT, UPDATE, DELETE ON connections, connection_hosts TO <PAPEL_APP>;
+-- Sem DELETE nas demais: projeto e repositório são desativados (active=0), nunca apagados.
 -- Sem UPDATE/DELETE/TRUNCATE em audit_log e sem ser dono de nenhuma tabela.

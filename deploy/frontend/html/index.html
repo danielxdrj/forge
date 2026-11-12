@@ -3,15 +3,87 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Forge</title>
+  <title>FORGE</title>
+  <script src="/theme.js"></script>
   <link rel="stylesheet" href="/app.css">
   <script src="/app.js" defer></script>
 </head>
 <body>
-  <header>
-    <h1>Forge</h1>
-    <div id="session"></div>
-  </header>
-  <main id="app"></main>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <span class="logo" aria-hidden="true">F<span class="logo-amp">&amp;</span>B</span>
+        <div class="brand-text">
+          <strong>FORGE</strong>
+          <span class="brand-sub">painel local</span>
+        </div>
+      </div>
+      <nav id="nav">
+        <a href="/#tarefas" class="nav-item current" data-nav="tarefas">
+          <span class="nav-icon nav-icon-tasks" aria-hidden="true">
+            <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="2.5" y="2.5" width="11" height="11" rx="2"></rect>
+              <path d="M5 8.2l2 2 4-4.2"></path>
+            </svg>
+          </span>
+          <span>Tarefas</span>
+        </a>
+        <a href="/#investigacao" class="nav-item" data-nav="investigacao">
+          <span class="nav-icon nav-icon-eng" aria-hidden="true">
+            <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="7" cy="7" r="4.2"></circle>
+              <path d="M10.4 10.4L14 14"></path>
+            </svg>
+          </span>
+          <span>Investigação</span>
+        </a>
+        <a href="/#teia" class="nav-item" data-nav="teia">
+          <span class="nav-icon nav-icon-core" aria-hidden="true">
+            <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="8" cy="3.5" r="1.6"></circle>
+              <circle cx="3.5" cy="12.2" r="1.6"></circle>
+              <circle cx="12.5" cy="12.2" r="1.6"></circle>
+              <path d="M7.2 4.8L4.6 10.6M8.8 4.8l2.6 5.8M5.2 12.2h5.6"></path>
+            </svg>
+          </span>
+          <span>Teia de contexto</span>
+        </a>
+        <a href="/conexoes" class="nav-item" data-nav="conexoes" id="nav-conexoes" hidden>
+          <span class="nav-icon nav-icon-ops" aria-hidden="true">
+            <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M6 2.5v3.5M10 2.5v3.5M4.5 6h7v2.4a3.5 3.5 0 01-7 0V6zM8 12.2V14"></path>
+            </svg>
+          </span>
+          <span>Conexões</span>
+        </a>
+      </nav>
+      <div class="sidebar-bottom">
+        <button type="button" id="theme-toggle" class="theme-toggle" aria-pressed="false" aria-label="Ativar modo escuro">
+          <span class="theme-toggle-sun" aria-hidden="true">
+            <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+              <circle cx="8" cy="8" r="2.4"></circle>
+              <path d="M8 1.6v1.6M8 12.8v1.6M1.6 8h1.6M12.8 8h1.6M3.4 3.4l1.1 1.1M11.5 11.5l1.1 1.1M12.6 3.4l-1.1 1.1M4.5 11.5l-1.1 1.1"></path>
+            </svg>
+          </span>
+          <span class="theme-toggle-moon" aria-hidden="true">
+            <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12.6 10.2A5.2 5.2 0 016 3.4 5.4 5.4 0 0012.6 10.2z"></path>
+            </svg>
+          </span>
+          <span class="theme-toggle-text">Modo escuro</span>
+        </button>
+        <p class="sidebar-note">Camada de produtividade. Sem dependência operacional da empresa.</p>
+      </div>
+    </aside>
+    <div class="workspace">
+      <header class="topbar">
+        <div class="topbar-title">
+          <h1 id="page-title">Tarefas</h1>
+        </div>
+        <div id="session" class="session"></div>
+      </header>
+      <main id="app"></main>
+    </div>
+  </div>
 </body>
 </html>
