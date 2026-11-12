@@ -35,6 +35,9 @@ def main() -> int:
         provider = CursorCliAdapter()
         gh_cli = GhCli(bin_path=os.environ.get("FORGE_GH_BIN", "gh").strip() or "gh")
         app = create_app(repo, settings, provider=provider, gh=gh_cli)
+        indexer = getattr(app.state, "graphs", None)
+        if indexer is not None:
+            indexer.start()
         import uvicorn
 
         uvicorn.run(app, host="0.0.0.0", port=8091, workers=1)

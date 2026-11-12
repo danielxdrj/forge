@@ -17,9 +17,15 @@ from ..connections.probes import ConnectionProbes
 from ..connections.service import ConnectionService
 from ..connections.vault import ConnectionsVault
 from ..errors import AuthenticationError, AuthorizationError, DraftError
+from ..graphs.indexer import GraphIndexer
 from ..logging import redact
+from ..notes.service import NoteService
+from ..obsidian.vault import ObsidianVault
 from ..storage.sql import SqlRepository
 from .connections import register_connection_routes
+from .graphs import register_graph_routes
+from .notes import register_note_routes
+from .obsidian import register_obsidian_routes
 from .pending import PendingLogin, PendingStore
 from .security import (
     CSRF_COOKIE,
@@ -69,6 +75,8 @@ def create_app(
     drafts_dir: Path | None = None,
     vault: ConnectionsVault | None = None,
     probes: ConnectionProbes | None = None,
+    obsidian: ObsidianVault | None = None,
+    graph_indexer: GraphIndexer | None = None,
 ) -> FastAPI:
     if not settings.github_client_id:
         raise ValueError("FORGE_GITHUB_CLIENT_ID é obrigatória para o painel web")
@@ -83,6 +91,9 @@ def create_app(
     panel = WebTaskService(repo, tasks, provider, gh, drafts_dir=drafts_dir)
     connections_vault = vault if vault is not None else ConnectionsVault.from_env()
     connections = ConnectionService(repo, store, connections_vault, probes)
+    notes = NoteService(repo, store)
+    obsidian_vault = obsidian if obsidian is not None else ObsidianVault.from_settings(settings)
+    graphs = graph_indexer if graph_indexer is not None else GraphIndexer(repo, settings, gh=gh)
     app = FastAPI(title="Forge", docs_url=None, redoc_url=None, openapi_url=None)
     app.state.repo = repo
     app.state.store = store
@@ -90,6 +101,9 @@ def create_app(
     app.state.require_editor = require_editor
     app.state.panel = panel
     app.state.connections = connections
+    app.state.notes = notes
+    app.state.obsidian = obsidian_vault
+    app.state.graphs = graphs
 
     def _audit(actor: str, action: str, target: str, result: str) -> None:
         repo.record_audit(actor, action, target, redact(result))
@@ -261,6 +275,15 @@ def create_app(
             return principal
         return _json_error(403, "forbidden")
 
+    def _need_editor_or_owner(request: Request) -> Principal | JSONResponse:
+        principal = _need_principal(request)
+        if isinstance(principal, JSONResponse):
+            return principal
+        ident = principal.identity_id
+        if store.has_role(ident, "editor") or store.has_role(ident, "owner"):
+            return principal
+        return _json_error(403, "forbidden")
+
     @app.middleware("http")
     async def _secure(request: Request, call_next):
         peer = request.client.host if request.client else None
@@ -423,6 +446,27 @@ def create_app(
         need_principal=_need_principal,
         need_owner=_need_owner,
         need_reader=_need_connection_reader,
+    )
+    register_note_routes(
+        app,
+        notes,
+        json_error=_json_error,
+        need_editor_or_owner=_need_editor_or_owner,
+        gh=gh,
+    )
+    register_obsidian_routes(
+        app,
+        obsidian_vault,
+        json_error=_json_error,
+        need_editor_or_owner=_need_editor_or_owner,
+    )
+    register_graph_routes(
+        app,
+        graphs,
+        json_error=_json_error,
+        need_editor_or_owner=_need_editor_or_owner,
+        need_owner=_need_owner,
+        audit=_audit,
     )
 
     return app

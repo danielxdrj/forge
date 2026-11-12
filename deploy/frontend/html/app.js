@@ -34,6 +34,19 @@
     notice: "",
     busy: false,
     loading: true,
+    issues: [],
+    issuesError: "",
+    selectedIssue: "",
+    notes: [],
+    selectedNoteId: "",
+    noteForm: { title: "", body: "" },
+    vault: { enabled: false, notes: [], error: "", message: "" },
+    vaultNote: null,
+    graphs: [],
+    graphBusy: false,
+    graphQuery: "",
+    graphRepo: "",
+    graphNodes: [],
   };
 
   function csrfToken() {
@@ -197,6 +210,12 @@
     if (isEditor()) {
       await loadEditorData();
     }
+    if (canEditNotes() && activeTab() === "investigacao") {
+      await loadInvestigacao();
+    }
+    if (canEditNotes() && activeTab() === "teia") {
+      await loadTeia();
+    }
     render();
   }
 
@@ -206,6 +225,10 @@
 
   function isOwner() {
     return !!(state.who && Array.isArray(state.who.roles) && state.who.roles.indexOf("owner") !== -1);
+  }
+
+  function canEditNotes() {
+    return isEditor() || isOwner();
   }
 
   async function loadEditorData() {
@@ -393,6 +416,20 @@
       gh_not_logged: "gh não está autenticado no container.",
       board_fields: "Não foi possível ler as opções do board.",
       api_unreachable: "Não foi possível falar com a API. Recarregue a página.",
+      vault_disabled: "Vault Obsidian desligado: defina FORGE_OBSIDIAN_VAULT e FORGE_OBSIDIAN_ALLOW.",
+      invalid_issue: "Issue inválida. Use owner/repo#número da allowlist.",
+      invalid_title: "Título da nota inválido (1 a 200 caracteres).",
+      invalid_body: "Corpo da nota inválido.",
+      body_too_large: "Nota maior que 64 KiB.",
+      not_found: "Registro não encontrado.",
+      busy: "O índice do grafo já está em execução.",
+      not_indexed: "Este repositório ainda não tem grafo.",
+      no_release: "O repositório não tem release no GitHub.",
+      graphify_missing: "graphify não está na imagem.",
+      extract_failed: "Falha ao extrair o grafo (modo offline).",
+      clone_failed: "Falha ao clonar o repositório para indexar.",
+      path_forbidden: "Caminho fora da allowlist do vault.",
+      file_too_large: "Arquivo do vault acima do limite.",
     };
     let text = map[code] || code;
     const fields = detail && Array.isArray(detail.fields) ? detail.fields : [];
@@ -433,6 +470,26 @@
     if (state.draft && document.getElementById("draft-body")) {
       const payload = currentDraftPayload();
       state.draft.body = payload.body_md;
+    }
+    const issue = document.getElementById("issue-select");
+    if (issue) {
+      state.selectedIssue = issue.value;
+    }
+    const noteTitle = document.getElementById("note-title");
+    const noteBody = document.getElementById("note-body");
+    if (noteTitle) {
+      state.noteForm.title = noteTitle.value;
+    }
+    if (noteBody) {
+      state.noteForm.body = noteBody.value;
+    }
+    const graphRepo = document.getElementById("graph-repo");
+    const graphQuery = document.getElementById("graph-query");
+    if (graphRepo) {
+      state.graphRepo = graphRepo.value;
+    }
+    if (graphQuery) {
+      state.graphQuery = graphQuery.value;
     }
   }
 
@@ -713,49 +770,429 @@
     ]);
   }
 
+  async function loadInvestigacao() {
+    if (!canEditNotes()) {
+      return;
+    }
+    const issues = await api("/api/issues");
+    if (issues.ok) {
+      state.issues = issues.data.issues || [];
+      state.issuesError = issues.data.error ? errorMessage(issues.data.error, issues.data) : "";
+    } else {
+      state.issues = [];
+      state.issuesError = errorMessage((issues.data && issues.data.error) || "gh_error", issues.data);
+    }
+    if (state.selectedIssue) {
+      const found = state.issues.some(function (item) { return item.issue_key === state.selectedIssue; });
+      if (!found) {
+        state.selectedIssue = "";
+      }
+    }
+    await loadNotes();
+  }
+
+  async function loadNotes() {
+    if (!canEditNotes()) {
+      return;
+    }
+    const path = state.selectedIssue
+      ? "/api/notes?issue=" + encodeURIComponent(state.selectedIssue)
+      : "/api/notes";
+    const res = await api(path);
+    if (res.ok) {
+      state.notes = res.data.notes || [];
+    } else {
+      state.notes = [];
+    }
+  }
+
+  async function selectIssue(value) {
+    state.selectedIssue = value;
+    state.selectedNoteId = "";
+    state.noteForm = { title: "", body: "" };
+    await loadNotes();
+    render();
+  }
+
+  async function openNote(noteId) {
+    const res = await api("/api/notes/" + encodeURIComponent(noteId));
+    if (!res.ok) {
+      setErrorFromResponse(res.data);
+      return;
+    }
+    state.selectedNoteId = noteId;
+    state.selectedIssue = res.data.issue_key || state.selectedIssue;
+    state.noteForm.title = res.data.title || "";
+    state.noteForm.body = res.data.body || "";
+    render();
+  }
+
+  function newNote() {
+    state.selectedNoteId = "";
+    state.noteForm = { title: "", body: "" };
+    render();
+  }
+
+  async function saveNote() {
+    if (!state.selectedIssue) {
+      setError("invalid_issue");
+      return;
+    }
+    const titleEl = document.getElementById("note-title");
+    const bodyEl = document.getElementById("note-body");
+    const title = titleEl ? titleEl.value : state.noteForm.title;
+    const body = bodyEl ? bodyEl.value : state.noteForm.body;
+    state.noteForm.title = title;
+    state.noteForm.body = body;
+    state.busy = true;
+    state.error = "";
+    render();
+    const payload = { issue_key: state.selectedIssue, title: title, body: body };
+    const path = state.selectedNoteId
+      ? "/api/notes/" + encodeURIComponent(state.selectedNoteId)
+      : "/api/notes";
+    const res = await api(path, { method: "POST", body: payload });
+    state.busy = false;
+    if (!res.ok) {
+      setErrorFromResponse(res.data);
+      return;
+    }
+    state.selectedNoteId = res.data.id;
+    state.noteForm.title = res.data.title || title;
+    state.noteForm.body = res.data.body || body;
+    state.notice = "Nota salva.";
+    await loadNotes();
+    render();
+  }
+
+  async function deleteNote() {
+    if (!state.selectedNoteId) {
+      return;
+    }
+    state.busy = true;
+    state.error = "";
+    render();
+    const res = await api("/api/notes/" + encodeURIComponent(state.selectedNoteId) + "/delete", {
+      method: "POST",
+      body: {},
+    });
+    state.busy = false;
+    if (!res.ok) {
+      setErrorFromResponse(res.data);
+      return;
+    }
+    state.selectedNoteId = "";
+    state.noteForm = { title: "", body: "" };
+    state.notice = "Nota apagada.";
+    await loadNotes();
+    render();
+  }
+
+  async function loadTeia() {
+    if (!canEditNotes()) {
+      return;
+    }
+    const vault = await api("/api/vault");
+    if (vault.ok && vault.data.enabled) {
+      const listed = await api("/api/vault/notes");
+      state.vault = {
+        enabled: true,
+        notes: (listed.ok && listed.data.notes) || [],
+        error: "",
+        message: "",
+      };
+    } else {
+      const data = vault.data || {};
+      state.vault = {
+        enabled: false,
+        notes: [],
+        error: data.error || "vault_disabled",
+        message: data.message || "",
+      };
+    }
+    const graphs = await api("/api/graphs");
+    if (graphs.ok) {
+      state.graphs = graphs.data.graphs || [];
+      state.graphBusy = !!graphs.data.busy;
+      if (!state.graphRepo && state.graphs.length) {
+        state.graphRepo = state.graphs[0].repo;
+      }
+    }
+  }
+
+  async function openVaultNote(path) {
+    const res = await api("/api/vault/notes/" + path.split("/").map(encodeURIComponent).join("/"));
+    if (!res.ok) {
+      setErrorFromResponse(res.data);
+      return;
+    }
+    state.vaultNote = res.data;
+    render();
+  }
+
+  async function queryGraph() {
+    const repoEl = document.getElementById("graph-repo");
+    const qEl = document.getElementById("graph-query");
+    const repo = repoEl ? repoEl.value : state.graphRepo;
+    const q = qEl ? qEl.value : state.graphQuery;
+    state.graphRepo = repo;
+    state.graphQuery = q;
+    if (!repo || !q) {
+      return;
+    }
+    const res = await api("/api/graphs/nodes?repo=" + encodeURIComponent(repo) + "&q=" + encodeURIComponent(q));
+    if (!res.ok) {
+      setErrorFromResponse(res.data);
+      return;
+    }
+    state.graphNodes = res.data.nodes || [];
+    render();
+  }
+
+  async function refreshGraph(repo) {
+    state.busy = true;
+    state.error = "";
+    render();
+    const body = repo ? { repo: repo } : {};
+    const res = await api("/api/graphs/refresh", { method: "POST", body: body });
+    state.busy = false;
+    if (!res.ok) {
+      setErrorFromResponse(res.data);
+      return;
+    }
+    state.notice = "Atualização do grafo pedida.";
+    await loadTeia();
+    render();
+  }
+
   function renderInvestigacao(root) {
     root.appendChild(el("section", { class: "card card-eng" }, [
       el("div", { class: "card-head" }, [
         el("span", { class: "icon-box icon-eng", text: "B" }),
         el("h2", { text: "Investigação" }),
-        el("span", { class: "pill pill-proposed", text: "EM CONSTRUÇÃO" }),
+        el("span", { class: "pill pill-eng", text: "NOTAS" }),
       ]),
-      el("p", { text: "Esta área vai reunir evidências de uma issue sem alterar os sistemas consultados." }),
-      el("p", { class: "muted", text: "Em construção. O seletor e as fontes ainda não consultam a API." }),
+      el("p", { text: "Notas manuais por issue, no banco do Forge. Independente do vault Obsidian." }),
+      el("p", { class: "muted", text: "Markdown aparece como texto. O corpo da nota não vai para o log." }),
     ]));
-    root.appendChild(el("section", { class: "card" }, [
+    if (!canEditNotes()) {
+      root.appendChild(el("section", { class: "card" }, [
+        el("p", { class: "error", text: "Só editor ou owner vê as notas da investigação." }),
+      ]));
+      return;
+    }
+    const issueBox = el("section", { class: "card" }, [
       el("h2", { text: "Issue" }),
       el("label", { text: "Issue do GitHub", for: "issue-select" }),
-      el("select", { id: "issue-select", disabled: "disabled" }, [
-        el("option", { value: "", text: "Selecione uma issue" }),
+    ]);
+    const select = el("select", {
+      id: "issue-select",
+      onChange: function (ev) { selectIssue(ev.target.value); },
+    });
+    select.appendChild(el("option", { value: "", text: "Selecione uma issue" }));
+    state.issues.forEach(function (item) {
+      const label = item.issue_key + (item.title ? " — " + item.title : "");
+      const opt = el("option", { value: item.issue_key, text: label });
+      if (state.selectedIssue === item.issue_key) {
+        opt.selected = true;
+      }
+      select.appendChild(opt);
+    });
+    issueBox.appendChild(select);
+    if (state.issuesError) {
+      issueBox.appendChild(el("p", { class: "muted", text: state.issuesError }));
+    }
+    root.appendChild(issueBox);
+
+    const notesCard = el("section", { class: "card card-eng" }, [
+      el("div", { class: "card-head" }, [
+        el("h2", { text: "Notas" }),
+        el("span", { class: "pill pill-eng", text: "FORGE" }),
       ]),
-      el("p", { class: "muted", text: "O seletor fica desligado até a etapa de investigação." }),
+    ]);
+    const list = el("div", { class: "note-list" });
+    if (!state.notes.length) {
+      list.appendChild(el("p", { class: "muted", text: "Nenhuma nota nesta issue." }));
+    }
+    state.notes.forEach(function (note) {
+      list.appendChild(el("button", {
+        type: "button",
+        class: "note-item" + (state.selectedNoteId === note.id ? " active" : ""),
+        text: (note.title || "(sem título)") + " · " + note.size + " B",
+        onClick: function () { openNote(note.id); },
+      }));
+    });
+    const editor = el("div", null, [
+      el("label", { text: "Título", for: "note-title" }),
+      el("input", { id: "note-title", type: "text", maxlength: "200", value: state.noteForm.title || "" }),
+      el("label", { text: "Corpo (markdown, exibido como texto)", for: "note-body" }),
+    ]);
+    const noteBody = el("textarea", { id: "note-body", class: "preview" });
+    noteBody.value = state.noteForm.body || "";
+    editor.appendChild(noteBody);
+    editor.appendChild(el("div", { class: "row" }, [
+      el("button", {
+        type: "button",
+        class: "primary",
+        text: state.busy ? "Aguarde…" : (state.selectedNoteId ? "Salvar nota" : "Criar nota"),
+        disabled: state.busy ? "disabled" : null,
+        onClick: function () { saveNote(); },
+      }),
+      el("button", {
+        type: "button",
+        text: "Nova nota",
+        disabled: state.busy ? "disabled" : null,
+        onClick: function () { newNote(); },
+      }),
+      state.selectedNoteId ? el("button", {
+        type: "button",
+        class: "danger",
+        text: "Apagar",
+        disabled: state.busy ? "disabled" : null,
+        onClick: function () { deleteNote(); },
+      }) : null,
     ]));
+    notesCard.appendChild(el("div", { class: "notes-grid" }, [list, editor]));
+    root.appendChild(notesCard);
+
     const sources = el("section", { class: "card" }, [
       el("div", { class: "card-head" }, [
         el("h2", { text: "Fontes" }),
         el("span", { class: "pill pill-planned", text: "SOMENTE LEITURA" }),
       ]),
+      el("p", { class: "muted", text: "Em construção: as outras fontes ainda não consultam a API." }),
       el("div", { class: "source-grid" }, [
         sourceCard("B", "icon-eng", "Código", "Repositório Git"),
         sourceCard("D", "icon-ops", "Portainer", "Containers"),
         sourceCard("F", "icon-core", "Banco", "MySQL / PostgreSQL"),
         sourceCard("F", "icon-core", "FTP", "FTP / SFTP"),
+        sourceCard("F", "icon-core", "Obsidian", "Vault (aba Teia)"),
       ]),
     ]);
     root.appendChild(sources);
   }
 
   function renderTeia(root) {
+    const vaultEnabled = !!(state.vault && state.vault.enabled);
     root.appendChild(el("section", { class: "card card-core" }, [
       el("div", { class: "card-head" }, [
         el("span", { class: "icon-box icon-core", text: "F" }),
         el("h2", { text: "Teia de contexto" }),
-        el("span", { class: "pill pill-proposed", text: "EM CONSTRUÇÃO" }),
+        el("span", {
+          class: vaultEnabled ? "pill pill-ok" : "pill pill-proposed",
+          text: vaultEnabled ? "VAULT" : "DESLIGADO",
+        }),
       ]),
-      el("p", { text: "O vault Obsidian vai guardar notas, vínculos e o mapa de contexto da investigação." }),
-      el("p", { class: "muted", text: "As notas ficam fora do Git e não substituem o banco do Forge. Esta tela ainda não está ligada ao vault." }),
+      el("p", { text: "O vault Obsidian lista notas da allowlist. As notas do Forge continuam no banco." }),
+      el("p", { class: "muted", text: "As notas ficam fora do Git e não substituem o banco do Forge." }),
     ]));
+    if (!canEditNotes()) {
+      root.appendChild(el("section", { class: "card" }, [
+        el("p", { class: "error", text: "Só editor ou owner lê o vault e o grafo." }),
+      ]));
+      return;
+    }
+    const vaultCard = el("section", { class: "card" }, [
+      el("div", { class: "card-head" }, [
+        el("h2", { text: "Obsidian" }),
+        el("span", { class: "pill pill-planned", text: "SOMENTE LEITURA" }),
+      ]),
+    ]);
+    if (!vaultEnabled) {
+      vaultCard.appendChild(el("p", {
+        class: "muted",
+        text: state.vault.message || errorMessage(state.vault.error || "vault_disabled"),
+      }));
+    } else if (!(state.vault.notes || []).length) {
+      vaultCard.appendChild(el("p", { class: "muted", text: "Nenhuma nota .md na allowlist." }));
+    } else {
+      const list = el("div", { class: "note-list" });
+      state.vault.notes.forEach(function (note) {
+        list.appendChild(el("button", {
+          type: "button",
+          class: "note-item",
+          text: (note.title || note.path) + " · " + (note.tags || []).join(" "),
+          onClick: function () { openVaultNote(note.path); },
+        }));
+      });
+      vaultCard.appendChild(list);
+    }
+    if (state.vaultNote) {
+      vaultCard.appendChild(el("h2", { text: state.vaultNote.title || state.vaultNote.path }));
+      vaultCard.appendChild(el("p", { class: "muted", text: (state.vaultNote.links || []).join(", ") }));
+      vaultCard.appendChild(el("pre", { class: "preview", text: state.vaultNote.body || "" }));
+    }
+    root.appendChild(vaultCard);
+
+    const graphCard = el("section", { class: "card card-eng" }, [
+      el("div", { class: "card-head" }, [
+        el("h2", { text: "Grafos Graphify" }),
+        el("span", { class: "pill pill-eng", text: "OFFLINE" }),
+      ]),
+      el("p", { class: "muted", text: "Índice de código dos 5 repositórios da allowlist. Sem LLM." }),
+    ]);
+    if (!state.graphs.length) {
+      graphCard.appendChild(el("p", { class: "muted", text: "Nenhum grafo ainda." }));
+    } else {
+      const table = el("table");
+      table.appendChild(el("thead", null, [el("tr", null, [
+        el("th", { text: "Repositório" }),
+        el("th", { text: "Tag" }),
+        el("th", { text: "Data" }),
+        el("th", { text: "Nós" }),
+        el("th", { text: "Arestas" }),
+      ])]));
+      const tbody = el("tbody");
+      state.graphs.forEach(function (g) {
+        tbody.appendChild(el("tr", null, [
+          el("td", { text: g.repo || "" }),
+          el("td", { text: g.tag || g.error || "—" }),
+          el("td", { text: g.indexed_at || "—" }),
+          el("td", { text: String(g.nodes || 0) }),
+          el("td", { text: String(g.edges || 0) }),
+        ]));
+      });
+      table.appendChild(tbody);
+      graphCard.appendChild(table);
+    }
+    const repoSelect = el("select", { id: "graph-repo" });
+    repoSelect.appendChild(el("option", { value: "", text: "Repositório" }));
+    state.graphs.forEach(function (g) {
+      const opt = el("option", { value: g.repo, text: g.repo });
+      if (state.graphRepo === g.repo) {
+        opt.selected = true;
+      }
+      repoSelect.appendChild(opt);
+    });
+    const q = el("input", { id: "graph-query", type: "text", value: state.graphQuery || "" });
+    graphCard.appendChild(el("div", { class: "graph-query" }, [
+      el("div", null, [el("label", { text: "Repositório", for: "graph-repo" }), repoSelect]),
+      el("div", null, [el("label", { text: "Consulta de nós", for: "graph-query" }), q]),
+      el("button", {
+        type: "button",
+        text: "Consultar",
+        onClick: function () { queryGraph(); },
+      }),
+    ]));
+    if (state.graphNodes.length) {
+      const nodes = el("ul", { class: "pending" });
+      state.graphNodes.forEach(function (node) {
+        nodes.appendChild(el("li", {
+          text: (node.label || node.id) + (node.file ? " · " + node.file : ""),
+        }));
+      });
+      graphCard.appendChild(nodes);
+    }
+    if (isOwner()) {
+      graphCard.appendChild(el("button", {
+        type: "button",
+        class: "primary",
+        text: state.busy ? "Aguarde…" : "Atualizar grafo",
+        disabled: state.busy ? "disabled" : null,
+        onClick: function () { refreshGraph(state.graphRepo); },
+      }));
+    }
+    root.appendChild(graphCard);
   }
 
   function render() {
@@ -805,6 +1242,12 @@
       if (isEditor()) {
         await loadEditorData();
       }
+      if (canEditNotes() && activeTab() === "investigacao") {
+        await loadInvestigacao();
+      }
+      if (canEditNotes() && activeTab() === "teia") {
+        await loadTeia();
+      }
     } catch (err) {
       state.error = "api_unreachable";
     }
@@ -812,6 +1255,15 @@
     render();
   }
 
-  window.addEventListener("hashchange", function () { render(); });
+  window.addEventListener("hashchange", async function () {
+    const tab = activeTab();
+    if (tab === "investigacao" && canEditNotes()) {
+      await loadInvestigacao();
+    }
+    if (tab === "teia" && canEditNotes()) {
+      await loadTeia();
+    }
+    render();
+  });
   boot();
 })();

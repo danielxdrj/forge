@@ -534,6 +534,34 @@ a { color: var(--link); }
 
 .source-card .source-name { font-weight: 650; color: var(--fg); }
 
+.notes-grid {
+  display: grid;
+  grid-template-columns: minmax(12rem, 18rem) 1fr;
+  gap: 1rem;
+  margin-top: 0.6rem;
+}
+
+.note-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.note-item {
+  text-align: left;
+  width: 100%;
+  margin: 0;
+}
+
+.note-item.active { border-color: var(--accent); }
+
+.graph-query { display: flex; gap: 0.5rem; align-items: end; flex-wrap: wrap; }
+.graph-query > * { flex: 1 1 10rem; }
+
+@media (max-width: 860px) {
+  .notes-grid { grid-template-columns: 1fr; }
+}
+
 .login-code {
   display: inline-block;
   padding: 0.45rem 0.8rem;

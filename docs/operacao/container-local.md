@@ -28,6 +28,10 @@ CI e testes unitários **não** chamam GitHub nem Cursor reais.
 | `FORGE_SESSION_TTL_SECONDS` | prazo da sessão web/CLI (padrão 7 dias; mínimo 60, máximo 604800) |
 | `FORGE_CURSOR_MODEL` | opcional; modelo da assinatura Cursor (sem default de custo) |
 | `FORGE_CONNECTIONS_KEY` | chave Fernet da área Conexões (opcional). Sem ela o painel sobe, mas `/conexoes` fica desligada |
+| `FORGE_OBSIDIAN_VAULT` | caminho **dentro do container** do vault Obsidian (ex.: `/vault`). Sem isto, ou sem allowlist, a Teia mostra o vault desligado; notas manuais e o restante do painel seguem |
+| `FORGE_OBSIDIAN_ALLOW` | pastas relativas permitidas, separadas por vírgula (ex.: `Forge,Projetos`). Sem ela o vault fica desligado |
+| `FORGE_GRAPH_DIR` | diretório dos `graph.json` no container (padrão `/graphs`, volume `forge_graphs`) |
+| `FORGE_GRAPH_POLL_SECONDS` | intervalo do poll de releases (padrão `3600`; `0` desliga o loop e mantém só o passo na subida) |
 
 A senha **não** vai para arquivo no repositório. O Postgres lê `secrets.environment`. O `forge_backend` é `read_only: true`; Compose v2 recusa `secrets.environment` nesse caso (`file is the sole supported option`). **Plano B:** tmpfs em `/run/secrets` (mode 0700, uid/gid 1000); o entrypoint grava as senhas da env em arquivos 0600 nesse tmpfs e remove as variáveis do processo antes do uvicorn. O código continua lendo de arquivo. Residual: `docker inspect` ainda mostra a env configurada no serviço. Ainda precisa ser validado no Windows (Docker Desktop).
 
@@ -84,13 +88,55 @@ Start-Process 'http://127.0.0.1:8090'
 ```
 
 1. **Entrar com GitHub**: a página mostra o `user_code` e o link de verificação. Autorize no GitHub; a página consulta `/api` sozinha.
-2. `/api/auth/whoami` (via UI) lista login e papéis (pills na barra superior). Sem `editor`, a tela de tarefas explica que o owner não basta. A barra esquerda troca Tarefas, Investigação (em construção), Teia de contexto (em construção) e, só para o papel **owner**, Conexões.
+2. `/api/auth/whoami` (via UI) lista login e papéis (pills na barra superior). Sem `editor`, a tela de tarefas explica que o owner não basta. A barra esquerda troca Tarefas, Investigação (notas manuais por issue), Teia de contexto (vault Obsidian + grafos) e, só para o papel **owner**, Conexões.
 3. **Nova tarefa**: escolha um repositório da allowlist (org `ferreiraeborzone`), cole o contexto escrito (máx. 64 KiB; sem imagem) e **Gerar rascunho**.
 4. Confira a pré-visualização. Comportamento esperado e Critérios de aceite vêm preenchidos mesmo com contexto curto, com prefixo `_Sugestão (revise):_` quando forem inferência. Só Objetivo pode ficar `[PENDENTE]`, e só se o contexto estiver vazio. Edite o corpo na própria prévia (textarea) ou complemente o contexto e **Gerar de novo**. Tipo, prioridade e size vêm sugeridos pelo gerador (opções do board IT Backlog, projeto 13); troque só se quiser. Se `/api/board/fields` falhar (ex.: gh sem escopo `project`), a tela mostra o erro real, não selects vazios.
 5. **Confirmar e publicar**: o backend recusa se o `preview_hash` mudou (`409 diff_changed`) ou se ainda houver `[PENDENTE]` real (`400 pending_fields`). Sugestões `_Sugestão (revise):_` não bloqueiam. Issue, item do board e branch entram em `task_links`. Se falhar no meio, **Confirmar** de novo retoma; não duplica a issue.
 6. A lista tem duas visões: **Publicadas** (com link da issue, nova aba) e **Rascunhos** (nunca publicados). **Descartar** um rascunho faz `POST /api/tasks/{id}/discard` (CSRF + editor), muda o status para `cancelado` sem apagar e registra no `audit_log`. Rascunhos cancelados saem da visão padrão.
 
 O token GitHub não é gravado. A sessão Forge vai num cookie HttpOnly, SameSite=Strict, Path=/, prazo padrão 7 dias (renovação deslizante) e na tabela `sessions` (`token_hash`). CSRF: cookie legível `forge_csrf` + cabeçalho `X-CSRF-Token` em todo não-GET. Sem script inline (CSP `default-src 'self'`).
+
+## Vault Obsidian e grafos Graphify
+
+Notas manuais da aba **Investigação** ficam no Postgres do Forge (`investigation_notes`). Não dependem do vault. Editor ou owner cria/edita/apaga; o `audit_log` registra só `note:{id}` e `bytes=N`, nunca o corpo.
+
+O vault Obsidian é opcional. Sem `FORGE_OBSIDIAN_VAULT` ou sem `FORGE_OBSIDIAN_ALLOW`, `/api/vault` e a aba Teia mostram **desligado**; o resto do painel continua.
+
+### Bind mount no Windows (caminho de exemplo)
+
+O vault **inteiro** entra somente leitura em `/vault`. Só a pasta `Forge/` é remontada por cima com escrita (o helper de escrita da fase 2 recusa qualquer outro destino). **Não** monte o keyring, `HOME`/`APPDATA` nem `docker.sock`.
+
+O caminho real no Windows ainda não está fechado. Exemplo para descomentar em `docker-compose.forge.yml` e ajustar:
+
+```yaml
+# - "C:/Users/<USER>/Documents/ObsidianVault:/vault:ro"
+# - "C:/Users/<USER>/Documents/ObsidianVault/Forge:/vault/Forge"
+```
+
+```powershell
+$env:FORGE_OBSIDIAN_VAULT = '/vault'
+$env:FORGE_OBSIDIAN_ALLOW = 'Forge,Projetos'
+```
+
+A API lista e lê `.md` só dentro da allowlist: `realpath`, sem seguir symlink para fora, com teto de tamanho e de quantidade. O log guarda caminho relativo e hash, nunca o texto. Escrita (fase 2) só em `Forge/`, nome sanitizado, arquivo temporário + `replace`.
+
+### Volume `forge_graphs` e poll de release
+
+O backend instala `graphifyy==0.9.106` (comando `graphify`) e roda só `graphify extract <clone> --code-only` com `GRAPHIFY_BACKEND=none` (offline, sem chave, sem LLM). A saída (`graph.json` + metadados: tag, commit, data, nós/arestas) vai ao volume `forge_graphs` montado em `/graphs`.
+
+Na subida e a cada `FORGE_GRAPH_POLL_SECONDS` (padrão 1 h), o backend consulta a tag de release mais recente de cada um dos 5 repositórios ativos da allowlist via `gh` da sessão já logada no volume `forge_cli_home`. **Não** há `GH_TOKEN` / `GITHUB_TOKEN` no compose nem nos logs. Se a tag mudou, reclona e reindexa. Um lock impede duas corridas juntas. O papel **owner** tem o botão **Atualizar grafo** (`POST /api/graphs/refresh`, CSRF + `audit_log`). Editor ou owner lê o status e consulta nós em `/api/graphs*`. O front não fala com o Graphify nem com o disco.
+
+### Riscos e mitigações
+
+| Risco | Mitigação |
+| --- | --- |
+| Ler pastas do vault além da allowlist | `FORGE_OBSIDIAN_ALLOW` + `realpath` + recusa de symlink; sem allowlist a API fica desligada |
+| Escrita fora de `Forge/` | overlay RW só nessa pasta; helper recusa nome com barra/`..` e grava atômico |
+| Vazamento do corpo da nota | `audit_log` e logs só com id/tamanho ou path/hash; UI com `textContent` |
+| Graphify chamar LLM ou rede | `GRAPHIFY_BACKEND=none` + `--code-only`; testes dublê de `gh`/`graphify`/rede |
+| Token GitHub no ambiente | `gh` usa a sessão do volume; `GH_TOKEN`/`GITHUB_TOKEN` fora do compose e do filtro de env |
+| Volume de grafo no rootfs read-only | named volume `forge_graphs` em `/graphs` (uid 1000 na imagem) |
+| Montar demais do host | proibido keyring, `HOME`/`APPDATA`, `docker.sock` |
 
 ## Área Conexões (`/conexoes`)
 
@@ -154,6 +200,8 @@ Guarde o dump fora do Git. Restaure só em ambiente de teste.
 | `forge-init: segredo ausente/vazio` | Defina as três senhas no ambiente **antes** do primeiro `up` (volume novo) |
 | `forge-web: segredo ausente` | O entrypoint não materializou `/run/secrets` a partir da env; conferir tmpfs `/run/secrets` e as variáveis `FORGE_PG_*_PASSWORD` |
 | Conexões desligada / `vault_disabled` | Falta `FORGE_CONNECTIONS_KEY` no ambiente do compose; gerar Fernet (comando acima), exportar e recriar o `forge_backend` |
+| Teia / vault Obsidian desligado | Falta `FORGE_OBSIDIAN_VAULT` ou `FORGE_OBSIDIAN_ALLOW`, ou o bind mount não está em `/vault`. Notas manuais em Investigação continuam |
+| Grafo `not_indexed` / `no_release` | Ainda não houve extract, ou o repo não tem release. Owner: **Atualizar grafo**. Confira `gh auth status` no container |
 | `vault_invalid` | A chave não é Fernet (32 bytes em Base64 URL). Gere outra e recadastre os segredos das conexões |
 | `forbidden` em salvar conexão | Falta papel `owner`. Listar/testar exige `editor` ou `owner` |
 | `forge-auth: FORGE_DATABASE_URL é obrigatória` | Comando rodou **fora** do container. Dentro, os arquivos de segredo preenchem a URL |

@@ -114,14 +114,14 @@ class GhCli:
     def _env_os(self) -> dict[str, str]:
         return filter_env(self._env or os.environ, GH_ENV_ALLOW)
 
-    def _run(self, args: list[str], *, cwd: str | None = None) -> str:
+    def _run(self, args: list[str], *, cwd: str | None = None, timeout: int | None = None) -> str:
         argv = [self.bin, *args]
         self.calls.append(argv)
         run = self._runner or subprocess.run
         try:
             proc = run(
                 argv, cwd=cwd, env=self._env_os(), capture_output=True, check=False,
-                shell=False, timeout=self.timeout,
+                shell=False, timeout=timeout or self.timeout,
             )
         except FileNotFoundError as exc:
             raise DraftError("gh_missing") from exc
@@ -135,6 +135,8 @@ class GhCli:
             err = (proc.stderr or b"").decode("utf-8", "replace").lower()
             if "project" in err and ("scope" in err or "403" in err or "resource not accessible" in err):
                 raise DraftError("project_scope", "gh auth refresh -s project")
+            if "release not found" in err or "no releases found" in err:
+                raise DraftError("no_release")
             raise DraftError("gh_error")
         return text
 
@@ -192,6 +194,51 @@ class GhCli:
 
     def clone_repo(self, repo: str, dest: str) -> None:
         self._run(["repo", "clone", repo, dest])
+
+    def clone_repo_at(self, repo: str, dest: str, tag: str) -> None:
+        """Clona só a tag de release (`git clone --branch TAG`). Sem token no env."""
+        tag = (tag or "").strip()
+        if not tag or tag.startswith("-") or ".." in tag or "\x00" in tag:
+            raise DraftError("gh_error")
+        self._run(
+            ["repo", "clone", repo, dest, "--", "--branch", tag, "--depth", "1", "--single-branch"],
+            timeout=180,
+        )
+
+    def latest_release_tag(self, repo: str) -> str:
+        try:
+            text = self._run(["release", "view", "--repo", repo, "--json", "tagName,targetCommitish"])
+        except DraftError:
+            raise
+        data = _json(text)
+        if not isinstance(data, dict):
+            raise DraftError("no_release")
+        tag = str(data.get("tagName") or "").strip()
+        if not tag:
+            raise DraftError("no_release")
+        return tag
+
+    def list_issues(self, repo: str, limit: int = 50) -> list[IssueRef]:
+        cap = max(1, min(int(limit), 100))
+        text = self._run([
+            "issue", "list", "--repo", repo, "--limit", str(cap),
+            "--state", "all", "--json", "number,title,url,state",
+        ])
+        data = _json(text)
+        if not isinstance(data, list):
+            raise DraftError("gh_error")
+        out: list[IssueRef] = []
+        for item in data:
+            if not isinstance(item, dict):
+                continue
+            try:
+                out.append(IssueRef(
+                    int(item["number"]), str(item.get("url") or ""),
+                    item.get("title"), item.get("state"),
+                ))
+            except (KeyError, TypeError, ValueError):
+                continue
+        return out
 
     def list_issue_branches(self, repo: str, number: int) -> list[str]:
         text = self._run(["issue", "develop", str(number), "--repo", repo, "--list"])

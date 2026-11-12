@@ -36,14 +36,15 @@ RUN set -eux; \
     chmod 0755 /usr/local/bin/gh /opt/cursor-agent/cursor-agent
 
 RUN useradd --uid 1000 --create-home --home-dir /home/forge --shell /usr/sbin/nologin forge \
-    && mkdir -p /etc/forge/config \
-    && chown -R forge:forge /etc/forge
+    && mkdir -p /etc/forge/config /graphs \
+    && chown -R forge:forge /etc/forge /graphs
 
 WORKDIR /opt/forge
 COPY pyproject.toml README.md ./
 COPY src ./src
 RUN pip install --no-cache-dir --upgrade pip \
     && pip install --no-cache-dir ".[postgres,web]" \
+    && pip install --no-cache-dir "graphifyy==0.9.106" \
     && rm -rf /root/.cache/pip
 
 COPY deploy/web/entrypoint.sh /entrypoint.sh
@@ -61,6 +62,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     FORGE_CONFIG_DIR=/etc/forge/config \
     FORGE_GH_BIN=/usr/local/bin/gh \
     FORGE_CURSOR_AGENT=/usr/local/bin/cursor-agent \
+    GRAPHIFY_BACKEND=none \
+    GRAPHIFY_QUERY_LOG_DISABLE=1 \
     PATH=/usr/local/bin:/home/forge/.local/bin:/usr/sbin:/usr/bin:/bin
 
 EXPOSE 8091

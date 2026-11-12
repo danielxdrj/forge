@@ -17,6 +17,7 @@ def test_compose_project_and_three_container_names():
     assert COMPOSE.count("container_name:") == 3
     assert "forge_pgdata" in COMPOSE
     assert "forge_cli_home" in COMPOSE
+    assert "forge_graphs" in COMPOSE
 
 
 def test_ports_are_loopback_only_frontend_8090_backend_not_published():
@@ -24,10 +25,13 @@ def test_ports_are_loopback_only_frontend_8090_backend_not_published():
     assert "127.0.0.1:${FORGE_PG_HOST_PORT:-5433}:5432" in COMPOSE
     assert "8091:8091" not in COMPOSE
     assert "0.0.0.0" not in COMPOSE
-    for match in re.finditer(r'-\s*"([^"]+)"', COMPOSE):
-        mapping = match.group(1)
-        if mapping.count(":") >= 2:
-            assert mapping.startswith("127.0.0.1:"), mapping
+    for line in COMPOSE.splitlines():
+        if line.lstrip().startswith("#"):
+            continue
+        for match in re.finditer(r'-\s*"([^"]+)"', line):
+            mapping = match.group(1)
+            if mapping.count(":") >= 2:
+                assert mapping.startswith("127.0.0.1:"), mapping
 
 
 def test_no_host_keyring_home_or_docker_sock_mounts():
@@ -71,6 +75,9 @@ def test_postgres_image_is_pinned_by_digest():
 
 def test_backend_dockerfile_runs_as_user_forge():
     assert re.search(r"(?m)^USER forge\s*$", BACKEND_DOCKERFILE)
+    assert "graphifyy==0.9.106" in BACKEND_DOCKERFILE
+    assert "GRAPHIFY_BACKEND=none" in BACKEND_DOCKERFILE
+    assert "mkdir -p /etc/forge/config /graphs" in BACKEND_DOCKERFILE
 
 
 def test_backend_is_read_only_with_run_secrets_tmpfs():
@@ -87,6 +94,14 @@ def test_backend_is_read_only_with_run_secrets_tmpfs():
     assert "FORGE_WEB_HOSTS:" in backend
     assert "FORGE_FRONTEND_HOST_PORT:-8090" in backend
     assert "FORGE_SESSION_TTL_SECONDS:" in backend
+    assert "FORGE_OBSIDIAN_VAULT:" in backend
+    assert "FORGE_OBSIDIAN_ALLOW:" in backend
+    assert "FORGE_GRAPH_DIR: /graphs" in backend
+    assert "FORGE_GRAPH_POLL_SECONDS:" in backend
+    assert 'GRAPHIFY_BACKEND: "none"' in backend
+    assert "forge_graphs:/graphs" in backend
+    assert 'ObsidianVault:/vault:ro' in COMPOSE
+    assert 'ObsidianVault/Forge:/vault/Forge' in COMPOSE
 
 
 def test_shell_and_dockerfiles_have_no_cr():
@@ -226,6 +241,12 @@ def test_frontend_shell_tabs_and_theme():
     assert 'id="session"' in html
     assert "Em construção" in js
     assert "issue-select" in js
+    assert "/api/notes" in js
+    assert "Atualizar grafo" in js
+    assert "/api/vault" in js
+    assert "/api/graphs" in js
+    assert "Salvar nota" in js
+    assert "note-body" in js
     assert "Código" in js
     assert "Portainer" in js
     assert "Banco" in js
