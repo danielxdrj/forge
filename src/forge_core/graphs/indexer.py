@@ -53,12 +53,14 @@ class GraphIndexer:
         gh: GhCli | None = None,
         runner: Runner | None = None,
         clock: Callable[[], str] | None = None,
+        on_poll: Callable[[str], None] | None = None,
     ):
         self._repo = repo
         self._settings = settings
         self._gh = gh
         self._runner = runner
         self._clock = clock
+        self._on_poll = on_poll
         self._root = Path(settings.graph_dir)
         self._lock = threading.Lock()
         self._stop = threading.Event()
@@ -134,6 +136,7 @@ class GraphIndexer:
             log.info("graph.poll result=error:%s", exc.code)
         except Exception:
             log.info("graph.poll result=error:internal")
+        self._call_on_poll("startup")
         interval = self._settings.graph_poll_seconds
         if interval <= 0:
             return
@@ -144,6 +147,16 @@ class GraphIndexer:
                 log.info("graph.poll result=error:%s", exc.code)
             except Exception:
                 log.info("graph.poll result=error:internal")
+            self._call_on_poll("poll")
+
+    def _call_on_poll(self, reason: str) -> None:
+        if self._on_poll is None:
+            return
+        try:
+            self._on_poll(reason)
+        except Exception as exc:
+            code = getattr(exc, "code", None) or "internal"
+            log.info("graph.poll extra=error:%s", code)
 
     def _refresh_all(self, *, force: bool) -> list[dict]:
         results = []

@@ -118,13 +118,15 @@ $env:FORGE_OBSIDIAN_VAULT = '/vault'
 $env:FORGE_OBSIDIAN_ALLOW = 'Forge,Projetos'
 ```
 
-A API lista e lê `.md` só dentro da allowlist: `realpath`, sem seguir symlink para fora, com teto de tamanho e de quantidade. O log guarda caminho relativo e hash, nunca o texto. Escrita (fase 2) só em `Forge/`, nome sanitizado, arquivo temporário + `replace`.
+A API lista e lê `.md` só dentro da allowlist: `realpath`, sem seguir symlink para fora, com teto de tamanho e de quantidade. O log guarda caminho relativo e hash, nunca o texto. Escrita só em `Forge/` (notas de issues concluídas em `Forge/<repo>/<número>.md`): nome sanitizado, pastas intermediárias só sob `Forge/`, arquivo temporário + `replace`.
 
 ### Volume `forge_graphs` e poll de release
 
 O backend instala `graphifyy==0.9.106` (comando `graphify`) e roda só `graphify extract <clone> --code-only` com `GRAPHIFY_BACKEND=none` (offline, sem chave, sem LLM). A saída (`graph.json` + metadados: tag, commit, data, nós/arestas) vai ao volume `forge_graphs` montado em `/graphs`.
 
 Na subida e a cada `FORGE_GRAPH_POLL_SECONDS` (padrão 1 h), o backend consulta a tag de release mais recente de cada um dos 5 repositórios ativos da allowlist via `gh` da sessão já logada no volume `forge_cli_home`. **Não** há `GH_TOKEN` / `GITHUB_TOKEN` no compose nem nos logs. Se a tag mudou, reclona e reindexa. Um lock impede duas corridas juntas. O papel **owner** tem o botão **Atualizar grafo** (`POST /api/graphs/refresh`, CSRF + `audit_log`). Editor ou owner lê o status e consulta nós em `/api/graphs*`. O front não fala com o Graphify nem com o disco.
+
+O mesmo poll também importa issues **fechadas** e as que estão na coluna Done do board IT Backlog (projeto 13), só dos 5 repositórios da allowlist. A leitura é `gh` na sessão já logada: `issue list/view`, `pr view` e GraphQL. **Não** cria nem edita issue, PR ou item do board. O corpo passa por redação (tokens `ghp_`/`gho_`/`github_pat_`, chaves AWS, JWT, `password=`/`senha:`/`token=`, connection string com credencial, chave privada) **antes** de gravar. Upsert em Postgres por `repo+number` (reimportar atualiza). Sem vault, o registro vive só no banco. Com `FORGE_OBSIDIAN_VAULT` e pasta `Forge/` gravável, cada issue vira `Forge/<repo>/<número>.md` (helper atômico, `realpath`, sem symlink). O papel **owner** tem o botão **Importar issues concluídas** na Investigação (`POST /api/completed-issues/import`, CSRF + `audit_log` com contagens, sem corpo). Editor ou owner lê semelhantes em `GET /api/completed-issues?issue=owner/repo#n`. O rascunho de tarefa cita as top 5 no markdown e no prompt do modelo; notas do vault **não** entram no prompt.
 
 ### Riscos e mitigações
 
@@ -135,6 +137,8 @@ Na subida e a cada `FORGE_GRAPH_POLL_SECONDS` (padrão 1 h), o backend consulta 
 | Vazamento do corpo da nota | `audit_log` e logs só com id/tamanho ou path/hash; UI com `textContent` |
 | Graphify chamar LLM ou rede | `GRAPHIFY_BACKEND=none` + `--code-only`; testes dublê de `gh`/`graphify`/rede |
 | Token GitHub no ambiente | `gh` usa a sessão do volume; `GH_TOKEN`/`GITHUB_TOKEN` fora do compose e do filtro de env |
+| Segredo no corpo da issue importada | redação antes de gravar/usar; `audit_log` e logs só com repo/número/bytes/hash |
+| Importador escrever no GitHub | só comandos de leitura (`issue list/view`, `pr view`, GraphQL query); testes recusam create/edit |
 | Volume de grafo no rootfs read-only | named volume `forge_graphs` em `/graphs` (uid 1000 na imagem) |
 | Montar demais do host | proibido keyring, `HOME`/`APPDATA`, `docker.sock` |
 
@@ -181,6 +185,7 @@ Rascunhos e vínculos depois de criar uma tarefa:
 ```sql
 SELECT id, task_id, repo, status, preview_hash, created_at FROM drafts ORDER BY created_at;
 SELECT id, task_id, kind, repo, number, url, board_item_id, created_at FROM task_links ORDER BY created_at;
+SELECT repo, number, title, closed_at, url, imported_at FROM completed_issues ORDER BY repo, number;
 ```
 
 ## Backup
@@ -202,6 +207,7 @@ Guarde o dump fora do Git. Restaure só em ambiente de teste.
 | Conexões desligada / `vault_disabled` | Falta `FORGE_CONNECTIONS_KEY` no ambiente do compose; gerar Fernet (comando acima), exportar e recriar o `forge_backend` |
 | Teia / vault Obsidian desligado | Falta `FORGE_OBSIDIAN_VAULT` ou `FORGE_OBSIDIAN_ALLOW`, ou o bind mount não está em `/vault`. Notas manuais em Investigação continuam |
 | Grafo `not_indexed` / `no_release` | Ainda não houve extract, ou o repo não tem release. Owner: **Atualizar grafo**. Confira `gh auth status` no container |
+| Investigação sem issues concluídas | Owner: **Importar issues concluídas** (ou esperar o poll). Confira `gh auth status` no container. Sem vault, o registro fica só no Postgres |
 | `vault_invalid` | A chave não é Fernet (32 bytes em Base64 URL). Gere outra e recadastre os segredos das conexões |
 | `forbidden` em salvar conexão | Falta papel `owner`. Listar/testar exige `editor` ou `owner` |
 | `forge-auth: FORGE_DATABASE_URL é obrigatória` | Comando rodou **fora** do container. Dentro, os arquivos de segredo preenchem a URL |

@@ -73,6 +73,37 @@ def load_graph(root: Path, repo: str) -> dict | None:
     return data if isinstance(data, dict) else None
 
 
+def nodes_for_files(root: Path, repo: str, files: list[str], limit: int = 12) -> list[dict]:
+    """Nós cujo arquivo coincide com a lista (sem embeddings)."""
+    want = {f.replace("\\", "/").casefold() for f in files if str(f).strip()}
+    if not want:
+        return []
+    data = load_graph(root, repo)
+    if data is None:
+        return []
+    nodes, _edges = _nodes_edges(data)
+    out: list[dict] = []
+    seen: set[str] = set()
+    for node in nodes:
+        if not isinstance(node, dict):
+            continue
+        path = str(node.get("file") or node.get("path") or "").replace("\\", "/")
+        if not path:
+            continue
+        key = path.casefold()
+        if key not in want and not any(key.endswith("/" + w) or w.endswith("/" + key) for w in want):
+            continue
+        public = _public_node(node)
+        ident = public.get("id") or f"{public.get('file')}:{public.get('label')}"
+        if ident in seen:
+            continue
+        seen.add(ident)
+        out.append(public)
+        if len(out) >= limit:
+            break
+    return out
+
+
 def query_nodes(root: Path, repo: str, question: str) -> list[dict]:
     needle = (question or "").strip()
     if not needle or len(needle) > QUERY_MAX:

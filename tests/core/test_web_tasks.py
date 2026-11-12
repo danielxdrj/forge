@@ -14,6 +14,7 @@ from forge_core.agents.provider import ProviderResponse
 from forge_core.draft.github_gh import GhCli
 from forge_core.storage import open_repository
 from forge_core.draft.template import PENDING, SUGGESTION_PREFIX
+from forge_core.issues.store import upsert
 from forge_core.storage.drafts import list_task_links
 from forge_core.storage.seed import seed_allowed_repos
 from forge_core.web.app import create_app
@@ -557,6 +558,35 @@ def test_list_splits_published_and_drafts_discard_is_idempotent(tmp_path):
     published_discard = client.post(f"/api/tasks/{pub_id}/discard", headers=_h(csrf), json={})
     assert published_discard.status_code == 409
     assert published_discard.json()["error"] == "draft_published"
+
+
+def test_generate_cites_related_completed_issues_not_vault_notes(tmp_path):
+    vault_secret = "VAULT_NOTE_FORA_DO_PROMPT_xyz"
+    (tmp_path / "vault" / "Forge").mkdir(parents=True)
+    (tmp_path / "vault" / "Forge" / "segredo.md").write_text("# " + vault_secret, encoding="utf-8")
+    llm = FakeLLM()
+    client, repo, _ = _app(tmp_path, provider=llm)
+    upsert(repo, {
+        "repo": REPO, "number": 34, "title": "fix: login recusa senha",
+        "body": "tela de autenticacao com senha valida",
+        "labels": {"names": ["Bug"]},
+        "prs": [{"number": 12, "url": "https://github.com/ferreiraeborzone/site/pull/12", "files": ["auth.py"]}],
+        "closed_at": "2026-11-01T00:00:00Z",
+        "url": "https://github.com/ferreiraeborzone/site/issues/34",
+    })
+    csrf = _login(client)
+    gen = client.post("/api/tasks/generate", headers=_h(csrf), json={"repo": REPO, "context": CONTEXT})
+    assert gen.status_code == 200
+    body = gen.json()["body"]
+    assert "## Issues relacionadas" in body
+    assert "ferreiraeborzone/site#34" in body
+    assert "https://github.com/ferreiraeborzone/site/issues/34" in body
+    assert vault_secret not in body
+    assert llm.prompts
+    prompt = llm.prompts[0]
+    assert "ISSUES_CONCLUIDAS_RELACIONADAS" in prompt
+    assert vault_secret not in prompt
+    assert "Forge/segredo" not in prompt
 
 
 def test_discard_requires_editor_and_csrf(tmp_path):

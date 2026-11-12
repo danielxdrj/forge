@@ -47,6 +47,7 @@
     graphQuery: "",
     graphRepo: "",
     graphNodes: [],
+    relatedIssues: [],
   };
 
   function csrfToken() {
@@ -430,6 +431,7 @@
       clone_failed: "Falha ao clonar o repositório para indexar.",
       path_forbidden: "Caminho fora da allowlist do vault.",
       file_too_large: "Arquivo do vault acima do limite.",
+      issues_import: "Falha ao importar issues concluídas.",
     };
     let text = map[code] || code;
     const fields = detail && Array.isArray(detail.fields) ? detail.fields : [];
@@ -789,6 +791,7 @@
       }
     }
     await loadNotes();
+    await loadRelated();
   }
 
   async function loadNotes() {
@@ -811,6 +814,37 @@
     state.selectedNoteId = "";
     state.noteForm = { title: "", body: "" };
     await loadNotes();
+    await loadRelated();
+    render();
+  }
+
+  async function loadRelated() {
+    if (!canEditNotes() || !state.selectedIssue) {
+      state.relatedIssues = [];
+      return;
+    }
+    const res = await api("/api/completed-issues?issue=" + encodeURIComponent(state.selectedIssue));
+    if (res.ok) {
+      state.relatedIssues = res.data.issues || [];
+    } else {
+      state.relatedIssues = [];
+    }
+  }
+
+  async function importCompletedIssues() {
+    state.busy = true;
+    state.error = "";
+    render();
+    const res = await api("/api/completed-issues/import", { method: "POST", body: {} });
+    state.busy = false;
+    if (!res.ok) {
+      setErrorFromResponse(res.data);
+      return;
+    }
+    const imported = res.data.imported || 0;
+    const updated = res.data.updated || 0;
+    state.notice = "Issues concluídas: " + imported + " novas, " + updated + " atualizadas.";
+    await loadInvestigacao();
     render();
   }
 
@@ -1002,6 +1036,17 @@
     if (state.issuesError) {
       issueBox.appendChild(el("p", { class: "muted", text: state.issuesError }));
     }
+    if (isOwner()) {
+      issueBox.appendChild(el("div", { class: "row" }, [
+        el("button", {
+          type: "button",
+          class: "primary",
+          text: state.busy ? "Aguarde…" : "Importar issues concluídas",
+          disabled: state.busy ? "disabled" : null,
+          onClick: function () { importCompletedIssues(); },
+        }),
+      ]));
+    }
     root.appendChild(issueBox);
 
     const notesCard = el("section", { class: "card card-eng" }, [
@@ -1053,7 +1098,42 @@
       }) : null,
     ]));
     notesCard.appendChild(el("div", { class: "notes-grid" }, [list, editor]));
-    root.appendChild(notesCard);
+    const relatedCard = el("section", { class: "card card-eng" }, [
+      el("div", { class: "card-head" }, [
+        el("h2", { text: "Issues relacionadas" }),
+        el("span", { class: "pill pill-eng", text: "CONCLUÍDAS" }),
+      ]),
+    ]);
+    if (!state.selectedIssue) {
+      relatedCard.appendChild(el("p", { class: "muted", text: "Selecione uma issue para ver concluídas semelhantes." }));
+    } else if (!state.relatedIssues.length) {
+      relatedCard.appendChild(el("p", { class: "muted", text: "Nenhuma issue concluída semelhante. Owner pode importar o board." }));
+    } else {
+      const relatedList = el("div", { class: "note-list" });
+      state.relatedIssues.forEach(function (item) {
+        const key = item.issue_key || ((item.repo || "") + "#" + item.number);
+        const title = item.title || key;
+        const block = el("div", { class: "related-item" }, [
+          safeLink(item.url, key + " — " + title),
+        ]);
+        (item.prs || []).forEach(function (pr) {
+          if (!pr) {
+            return;
+          }
+          const files = (pr.files || []).slice(0, 6).join(", ");
+          block.appendChild(safeLink(pr.url, "PR #" + pr.number + (files ? ": " + files : "")));
+        });
+        (item.nodes || []).slice(0, 6).forEach(function (node) {
+          block.appendChild(el("p", {
+            class: "muted",
+            text: (node.label || node.id || "") + (node.file ? " · " + node.file : ""),
+          }));
+        });
+        relatedList.appendChild(block);
+      });
+      relatedCard.appendChild(relatedList);
+    }
+    root.appendChild(el("div", { class: "investigacao-split" }, [notesCard, relatedCard]));
 
     const sources = el("section", { class: "card" }, [
       el("div", { class: "card-head" }, [

@@ -1,1 +1,1 @@
-"""Leitura do vault Obsidian (allowlist + realpath). Escrita só em Forge/, fase 2."""
+"""Leitura do vault Obsidian (allowlist + realpath). Escrita atômica só em Forge/."""

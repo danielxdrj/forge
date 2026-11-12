@@ -18,12 +18,14 @@ from ..connections.service import ConnectionService
 from ..connections.vault import ConnectionsVault
 from ..errors import AuthenticationError, AuthorizationError, DraftError
 from ..graphs.indexer import GraphIndexer
+from ..issues.importer import CompletedIssueImporter
 from ..logging import redact
 from ..notes.service import NoteService
 from ..obsidian.vault import ObsidianVault
 from ..storage.sql import SqlRepository
 from .connections import register_connection_routes
 from .graphs import register_graph_routes
+from .issues import register_issue_import_routes
 from .notes import register_note_routes
 from .obsidian import register_obsidian_routes
 from .pending import PendingLogin, PendingStore
@@ -77,6 +79,7 @@ def create_app(
     probes: ConnectionProbes | None = None,
     obsidian: ObsidianVault | None = None,
     graph_indexer: GraphIndexer | None = None,
+    issue_importer: CompletedIssueImporter | None = None,
 ) -> FastAPI:
     if not settings.github_client_id:
         raise ValueError("FORGE_GITHUB_CLIENT_ID é obrigatória para o painel web")
@@ -88,12 +91,19 @@ def create_app(
     from ..tasks.service import TaskService
 
     tasks = TaskService(repo)
-    panel = WebTaskService(repo, tasks, provider, gh, drafts_dir=drafts_dir)
+    panel = WebTaskService(
+        repo, tasks, provider, gh, drafts_dir=drafts_dir, graph_dir=settings.graph_dir,
+    )
     connections_vault = vault if vault is not None else ConnectionsVault.from_env()
     connections = ConnectionService(repo, store, connections_vault, probes)
     notes = NoteService(repo, store)
     obsidian_vault = obsidian if obsidian is not None else ObsidianVault.from_settings(settings)
-    graphs = graph_indexer if graph_indexer is not None else GraphIndexer(repo, settings, gh=gh)
+    issues = issue_importer if issue_importer is not None else CompletedIssueImporter(
+        repo, settings, gh=gh,
+    )
+    graphs = graph_indexer if graph_indexer is not None else GraphIndexer(
+        repo, settings, gh=gh, on_poll=lambda reason: issues.run(reason=reason),
+    )
     app = FastAPI(title="Forge", docs_url=None, redoc_url=None, openapi_url=None)
     app.state.repo = repo
     app.state.store = store
@@ -104,6 +114,7 @@ def create_app(
     app.state.notes = notes
     app.state.obsidian = obsidian_vault
     app.state.graphs = graphs
+    app.state.issues = issues
 
     def _audit(actor: str, action: str, target: str, result: str) -> None:
         repo.record_audit(actor, action, target, redact(result))
@@ -148,6 +159,7 @@ def create_app(
             "provider_missing": 503,
             "gh_missing": 503,
             "gh_not_logged": 503,
+            "busy": 409,
             "cursor_cli_missing": 503,
             "provider_error": 502,
             "forbidden": 403,
@@ -467,6 +479,15 @@ def create_app(
         need_editor_or_owner=_need_editor_or_owner,
         need_owner=_need_owner,
         audit=_audit,
+    )
+    register_issue_import_routes(
+        app,
+        issues,
+        json_error=_json_error,
+        need_editor_or_owner=_need_editor_or_owner,
+        need_owner=_need_owner,
+        audit=_audit,
+        graph_dir=settings.graph_dir,
     )
 
     return app

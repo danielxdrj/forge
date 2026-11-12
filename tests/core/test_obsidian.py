@@ -79,13 +79,12 @@ def test_write_helper_only_under_forge_atomic(tmp_path):
     assert dest.name == "nova.md"
     assert dest.parent.name == "Forge"
     assert dest.read_text(encoding="utf-8") == "# hi\n"
+    nested = prepare_write(root, "site/34.md", b"# issue\n")
+    assert nested.parent.name == "site"
+    assert nested.parent.parent.name == "Forge"
+    assert nested.read_text(encoding="utf-8") == "# issue\n"
     try:
         prepare_write(root, "../x.md", b"no")
-        assert False
-    except VaultRuleError as exc:
-        assert exc.code == "invalid_name"
-    try:
-        prepare_write(root, "a/b.md", b"no")
         assert False
     except VaultRuleError as exc:
         assert exc.code == "invalid_name"

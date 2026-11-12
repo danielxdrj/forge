@@ -247,6 +247,9 @@ def test_frontend_shell_tabs_and_theme():
     assert "/api/graphs" in js
     assert "Salvar nota" in js
     assert "note-body" in js
+    assert "Importar issues concluídas" in js
+    assert "/api/completed-issues" in js
+    assert "Issues relacionadas" in js
     assert "Código" in js
     assert "Portainer" in js
     assert "Banco" in js

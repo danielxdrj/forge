@@ -534,6 +534,22 @@ a { color: var(--link); }
 
 .source-card .source-name { font-weight: 650; color: var(--fg); }
 
+.investigacao-split {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(14rem, 20rem);
+  gap: 1rem;
+  align-items: start;
+}
+
+.related-item {
+  padding: 0.55rem 0.65rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--input);
+}
+
+.related-item a { color: var(--link); }
+
 .notes-grid {
   display: grid;
   grid-template-columns: minmax(12rem, 18rem) 1fr;
@@ -560,6 +576,7 @@ a { color: var(--link); }
 
 @media (max-width: 860px) {
   .notes-grid { grid-template-columns: 1fr; }
+  .investigacao-split { grid-template-columns: 1fr; }
 }
 
 .login-code {
