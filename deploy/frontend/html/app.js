@@ -120,7 +120,7 @@
       try {
         data = JSON.parse(text);
       } catch (err) {
-        data = { error: "malformed" };
+        data = { error: response.status === 504 ? "gateway_timeout" : "http_" + response.status };
       }
     }
     return { ok: response.ok, status: response.status, data: data };
@@ -367,6 +367,7 @@
   function errorMessage(code, detail) {
     const map = {
       csrf: "CSRF recusado. Recarregue a página.",
+      gateway_timeout: "A geração demorou demais e o proxy desistiu. Tente de novo.",
       forbidden: "Sem papel editor. O owner não implica editor.",
       invalid_session: "Sessão inválida. Entre de novo.",
       context_too_large: "Contexto maior que 64 KiB.",
