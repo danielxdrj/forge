@@ -100,6 +100,7 @@ def test_backend_is_read_only_with_run_secrets_tmpfs():
     assert "FORGE_GRAPH_POLL_SECONDS:" in backend
     assert "FORGE_GRAPH_NODE_LIMIT:" in backend
     assert "FORGE_GRAPH_EDGE_LIMIT:" in backend
+    assert "FORGE_GRAPH_EXTRACT_TIMEOUT:" in backend
     assert 'GRAPHIFY_BACKEND: "none"' in backend
     assert "forge_graphs:/graphs" in backend
     assert 'ObsidianVault:/vault:ro' in COMPOSE

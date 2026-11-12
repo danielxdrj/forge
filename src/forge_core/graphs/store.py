@@ -7,6 +7,8 @@ from pathlib import Path
 QUERY_MAX = 200
 RESULT_LIMIT = 50
 GRAPH_MAX_BYTES = 96 * 1024 * 1024
+GRAPH_MAX_NODES = 250_000
+GRAPH_MAX_EDGES = 1_000_000
 
 
 class GraphFileError(Exception):
@@ -74,12 +76,73 @@ def inspect_graph_file(path: Path) -> str | None:
         data = json.loads(path.read_bytes().decode("utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         return "invalid_json"
+    return inspect_graph_data(data)
+
+
+def inspect_graph_data(data) -> str | None:
+    """Valida o formato Graphify/NetworkX. Motivo curto, sem conteúdo."""
     if not isinstance(data, dict):
-        return "schema"
-    graph = data.get("graph") if isinstance(data.get("graph"), dict) else data
-    if not isinstance(graph, dict) or "nodes" not in graph:
-        return "schema"
+        return "schema:not_object"
+    graph = graph_document(data)
+    if graph is None:
+        return "schema:missing_nodes"
+    nodes = _as_seq(graph.get("nodes"))
+    if nodes is None:
+        return "schema:nodes_not_list"
+    if len(nodes) == 0:
+        return "schema:empty_nodes"
+    if len(nodes) > GRAPH_MAX_NODES:
+        return "schema:too_many_nodes"
+    edges = edge_seq(graph)
+    if edges is None:
+        return "schema:edges_not_list"
+    if len(edges) > GRAPH_MAX_EDGES:
+        return "schema:too_many_edges"
     return None
+
+
+def graph_document(data: dict) -> dict | None:
+    """Raiz com `nodes`: Graphify grava metadados em `graph`, nós no topo."""
+    if not isinstance(data, dict):
+        return None
+    if "nodes" in data:
+        return data
+    inner = data.get("graph")
+    if isinstance(inner, dict) and "nodes" in inner:
+        return inner
+    return None
+
+
+def edge_seq(graph: dict) -> list | None:
+    """`links` (NetworkX node_link_data) ou `edges`. Ausente = lista vazia."""
+    if "links" in graph:
+        raw = graph.get("links")
+    elif "edges" in graph:
+        raw = graph.get("edges")
+    else:
+        return []
+    return _as_seq(raw)
+
+
+def _as_seq(raw) -> list | None:
+    if raw is None:
+        return []
+    if isinstance(raw, list):
+        return raw
+    if isinstance(raw, dict):
+        return list(raw.values())
+    return None
+
+
+def has_valid_indexed_graph(root: Path, repo: str) -> bool:
+    """graph.json no volume, schema ok e pelo menos um nó."""
+    path = repo_dir(root, repo) / "graph.json"
+    if not path.is_file() or path.is_symlink():
+        return False
+    if inspect_graph_file(path):
+        return False
+    nodes, _edges = graph_counts(root, repo)
+    return nodes > 0
 
 
 def copy_graph(src: Path, root: Path, repo: str) -> Path:
@@ -184,21 +247,9 @@ def query_nodes(root: Path, repo: str, question: str) -> list[dict]:
 
 
 def nodes_edges(data: dict) -> tuple[list, list]:
-    graph = data.get("graph") if isinstance(data.get("graph"), dict) else data
-    nodes = graph.get("nodes") if isinstance(graph, dict) else None
-    edges = None
-    if isinstance(graph, dict):
-        edges = graph.get("edges")
-        if edges is None:
-            edges = graph.get("links")
-    if isinstance(nodes, dict):
-        nodes = list(nodes.values())
-    if isinstance(edges, dict):
-        edges = list(edges.values())
-    if not isinstance(nodes, list):
-        nodes = []
-    if not isinstance(edges, list):
-        edges = []
+    graph = graph_document(data) or {}
+    nodes = _as_seq(graph.get("nodes")) or []
+    edges = edge_seq(graph) or []
     return nodes, edges
 
 

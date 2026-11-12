@@ -240,10 +240,14 @@ def _code_kind(node: dict) -> str:
         return raw
     path = _file_of(node)
     label = str(node.get("label") or node.get("name") or "")
+    if node.get("_callable_class"):
+        return "class"
     if path and (label in {path, path.rsplit("/", 1)[-1]} or label.endswith((".py", ".ts", ".js", ".go", ".rs"))):
         return "file"
     if path and ("/" in label or label.endswith(tuple(f".{e}" for e in ("py", "ts", "js", "go", "rs", "md")))):
         return "file"
+    if node.get("_callable") or label.endswith("()"):
+        return "function"
     if raw in {"code", ""}:
         if path and not label:
             return "file"

@@ -30,6 +30,8 @@ _DEFAULT_GRAPH_POLL = 3600
 _MAX_GRAPH_POLL = 7 * 24 * 3600
 _DEFAULT_GRAPH_NODE_LIMIT = 500
 _DEFAULT_GRAPH_EDGE_LIMIT = 1500
+_DEFAULT_GRAPH_EXTRACT_TIMEOUT = 1800
+_MAX_GRAPH_EXTRACT_TIMEOUT = 7200
 
 
 @dataclass(frozen=True)
@@ -53,6 +55,7 @@ class Settings:
     graphify_bin: str = "graphify"
     graph_node_limit: int = _DEFAULT_GRAPH_NODE_LIMIT
     graph_edge_limit: int = _DEFAULT_GRAPH_EDGE_LIMIT
+    graph_extract_timeout: int = _DEFAULT_GRAPH_EXTRACT_TIMEOUT
 
 
 def _allow_folders(raw: str) -> tuple[str, ...]:
@@ -194,6 +197,19 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
     except ValueError:
         problems.append("FORGE_GRAPH_EDGE_LIMIT inválido: use um inteiro entre 100 e 20000")
 
+    extract_timeout = _DEFAULT_GRAPH_EXTRACT_TIMEOUT
+    timeout_raw = env.get("FORGE_GRAPH_EXTRACT_TIMEOUT", str(_DEFAULT_GRAPH_EXTRACT_TIMEOUT)).strip()
+    try:
+        extract_timeout = int(timeout_raw)
+        if extract_timeout < 60 or extract_timeout > _MAX_GRAPH_EXTRACT_TIMEOUT:
+            problems.append(
+                "FORGE_GRAPH_EXTRACT_TIMEOUT inválido: use um inteiro entre 60 e 7200 (segundos)"
+            )
+    except ValueError:
+        problems.append(
+            "FORGE_GRAPH_EXTRACT_TIMEOUT inválido: use um inteiro entre 60 e 7200 (segundos)"
+        )
+
     if problems:
         raise ConfigError("Configuração inválida:\n- " + "\n- ".join(problems))
     return Settings(
@@ -204,6 +220,7 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
         obsidian_vault=obsidian_vault, obsidian_allow=obsidian_allow,
         graph_dir=graph_dir, graph_poll_seconds=graph_poll, graphify_bin=graphify_bin,
         graph_node_limit=node_limit, graph_edge_limit=edge_limit,
+        graph_extract_timeout=extract_timeout,
     )
 
 

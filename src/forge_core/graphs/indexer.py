@@ -27,7 +27,7 @@ from . import store
 
 log = logging.getLogger("forge_core.graphs")
 
-EXTRACT_TIMEOUT = 600
+EXTRACT_TIMEOUT = 1800
 GRAPHIFY_ENV_ALLOW = frozenset({
     "PATH", "HOME", "USER", "LOGNAME", "SHELL",
     "TMPDIR", "TMP", "TEMP",
@@ -44,6 +44,13 @@ class GraphError(ForgeError):
         super().__init__(code if not hint else f"{code}: {hint}")
         self.code = code
         self.hint = hint
+
+
+def _graph_error(reason: str) -> GraphError:
+    """Converte motivo do arquivo (`schema:missing_nodes`) em GraphError."""
+    if reason.startswith("schema:"):
+        return GraphError("schema", hint=reason.split(":", 1)[1])
+    return GraphError(reason)
 
 
 @dataclass(frozen=True)
@@ -113,6 +120,7 @@ class GraphIndexer:
                 "source": meta.get("source") or None,
                 "commit": meta.get("commit") or None,
                 "indexed_at": meta.get("indexed_at") or None,
+                "status": meta.get("status") or None,
                 "nodes": int(meta.get("nodes") or nodes or 0),
                 "edges": int(meta.get("edges") or edges or 0),
                 "error": meta.get("error") or None,
@@ -272,7 +280,7 @@ class GraphIndexer:
         self._set_progress(repo, "running")
         source = self._resolve_ref(repo)
         meta = store.read_meta(self._root, repo) or {}
-        if not force and self._unchanged(meta, source):
+        if not force and self._unchanged(meta, source, repo):
             log.info("graph.index repo=%s ref=%s result=unchanged", repo, source.ref)
             row = {
                 "repo": repo, "status": "unchanged", "tag": source.tag,
@@ -289,6 +297,8 @@ class GraphIndexer:
             commit = source.commit or self._commit_of(clone)
             if not commit:
                 commit = self._commit_of(clone)
+            if nodes <= 0:
+                raise GraphError("schema", hint="empty_nodes")
             payload = {
                 "repo": repo,
                 "tag": source.tag,
@@ -299,6 +309,7 @@ class GraphIndexer:
                 "nodes": nodes,
                 "edges": edges,
                 "graph_sha256": digest,
+                "status": "ok",
                 "error": None,
             }
             store.write_meta(self._root, repo, payload)
@@ -316,8 +327,14 @@ class GraphIndexer:
             if clone is not None:
                 shutil.rmtree(clone.parent, ignore_errors=True)
 
-    def _unchanged(self, meta: dict, source: GraphRef) -> bool:
+    def _unchanged(self, meta: dict, source: GraphRef, repo: str) -> bool:
+        if (meta.get("status") or "") != "ok":
+            return False
         if meta.get("error"):
+            return False
+        if int(meta.get("nodes") or 0) <= 0:
+            return False
+        if not store.has_valid_indexed_graph(self._root, repo):
             return False
         if source.kind == "release":
             return bool(source.tag) and meta.get("tag") == source.tag
@@ -367,15 +384,16 @@ class GraphIndexer:
         env["GRAPHIFY_QUERY_LOG_DISABLE"] = "1"
         env["GRAPHIFY_OUT"] = str(out_root)
         run = self._runner or subprocess.run
+        timeout = int(self._settings.graph_extract_timeout or EXTRACT_TIMEOUT)
         try:
             proc = run(
                 argv, cwd=str(clone), env=env, capture_output=True, check=False,
-                shell=False, timeout=EXTRACT_TIMEOUT,
+                shell=False, timeout=timeout,
             )
         except FileNotFoundError as exc:
             raise GraphError("graphify_missing") from exc
         except subprocess.TimeoutExpired as exc:
-            raise GraphError("timeout") from exc
+            raise GraphError("timeout", hint=f"seconds={timeout}") from exc
         found = store.locate_graph_json(out_root, clone)
         if found is None:
             if proc.returncode != 0:
@@ -390,11 +408,11 @@ class GraphIndexer:
                 pass
             if reason == "too_large":
                 log.info("graph.index repo=%s result=error:too_large bytes=%s", repo, size)
-            raise GraphError(reason)
+            raise _graph_error(reason)
         try:
             dest = store.copy_graph(found, self._root, repo)
         except store.GraphFileError as exc:
-            raise GraphError(exc.code) from exc
+            raise _graph_error(exc.code) from exc
         except OSError:
             raise GraphError("extract_failed", hint="write_failed") from None
         digest = hashlib.sha256(dest.read_bytes()).hexdigest()
@@ -418,7 +436,9 @@ class GraphIndexer:
 
     def _record_error(self, repo: str, code: str, hint: str = "") -> None:
         meta = store.read_meta(self._root, repo) or {"repo": repo}
-        meta["error"] = code
+        reason = f"{code}:{hint}" if code == "schema" and hint else code
+        meta["status"] = "error"
+        meta["error"] = reason
         if hint:
             meta["error_hint"] = hint
         else:
@@ -427,7 +447,12 @@ class GraphIndexer:
             store.write_meta(self._root, repo, meta)
         except OSError:
             pass
-        if hint:
+        if code == "schema" and hint:
+            log.info("graph.index repo=%s result=error:schema:%s", repo, hint)
+        elif code == "timeout":
+            extra = f" {hint}" if hint else ""
+            log.info("graph.index repo=%s result=error:timeout%s", repo, extra)
+        elif hint:
             log.info("graph.index repo=%s result=error:%s detail=%s", repo, code, hint)
         else:
             log.info("graph.index repo=%s result=error:%s", repo, code)

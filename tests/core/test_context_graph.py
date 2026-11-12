@@ -12,7 +12,7 @@ from fastapi.testclient import TestClient
 from auth_helpers import TEST_CLIENT_ID, FakeGitHub, bootstrap, person
 from forge_core.auth.store import AuthStore
 from forge_core.config import load_settings
-from forge_core.graphs.store import copy_graph, write_meta
+from forge_core.graphs.store import copy_graph, inspect_graph_file, nodes_edges, write_meta
 from forge_core.issues.store import upsert
 from forge_core.notes.service import NoteService
 from forge_core.obsidian.vault import ObsidianVault
@@ -23,6 +23,7 @@ from forge_core.web.security import CSRF_COOKIE, CSRF_HEADER, SESSION_COOKIE
 
 HOST = {"Host": "127.0.0.1:8091"}
 REPO = "ferreiraeborzone/site"
+FIXTURE = Path(__file__).parent / "fixtures" / "graphify_graph.json"
 ISSUE_URL = "https://github.com/ferreiraeborzone/site/issues/34"
 PR_URL = "https://github.com/ferreiraeborzone/site/pull/12"
 SENTINEL = "SENTINELA_TEIA_NAO_VAZAR ghp_" + ("A" * 36)
@@ -226,3 +227,33 @@ def test_context_graph_vault_wiki_links_without_content(tmp_path):
     dump = json.dumps(data)
     assert SENTINEL not in dump
     assert "segredo" not in dump
+
+
+def test_real_graphify_fixture_parses_and_builds_context_graph(tmp_path):
+    assert FIXTURE.is_file()
+    assert inspect_graph_file(FIXTURE) is None
+    raw = json.loads(FIXTURE.read_text(encoding="utf-8"))
+    nodes, edges = nodes_edges(raw)
+    assert len(nodes) > 0
+    assert len(edges) > 0
+    assert any(n.get("source_file") for n in nodes if isinstance(n, dict))
+    assert any("source" in e and "target" in e for e in edges if isinstance(e, dict))
+    settings = _settings(tmp_path)
+    repo = open_repository(settings.database_url)
+    seed_allowed_repos(repo)
+    owner = bootstrap(repo, FakeGitHub(), login_name="dona", github_id=1000)
+    AuthStore(repo).grant_role(owner, 1000, "editor")
+    copy_graph(FIXTURE, tmp_path / "graphs", REPO)
+    write_meta(tmp_path / "graphs", REPO, {
+        "tag": "v1", "commit": "abc123", "source": "release", "status": "ok", "nodes": len(nodes),
+    })
+    app = create_app(repo, settings, transport=Scripted())
+    client = TestClient(app, base_url="http://127.0.0.1:8091")
+    _login(client)
+    res = client.get("/api/context-graph", headers=HOST, params={"repo": REPO})
+    assert res.status_code == 200
+    payload = res.json()
+    code = [n for n in payload["nodes"] if n["type"] in {"file", "module", "class"}]
+    assert len(code) > 0
+    labels = {n["label"] for n in code}
+    assert "auth.py" in labels or "AuthService" in labels or "app.py" in labels
