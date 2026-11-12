@@ -34,7 +34,42 @@
     notice: "",
     busy: false,
     loading: true,
+    issues: [],
+    issuesError: "",
+    selectedIssue: "",
+    notes: [],
+    selectedNoteId: "",
+    noteForm: { title: "", body: "" },
+    vault: { enabled: false, notes: [], error: "", message: "" },
+    vaultNote: null,
+    graphs: [],
+    graphBusy: false,
+    graphQuery: "",
+    graphRepo: "",
+    graphNodes: [],
+    graphIndex: { state: "idle", busy: false, reason: "", repos: [] },
+    graphNotice: "",
+    graphPollTimer: null,
+    teia: { nodes: [], edges: [], truncated: false, vault: false },
+    teiaRepo: "",
+    teiaTypes: [],
+    teiaQuery: "",
+    teiaSelected: null,
+    teiaExpanded: {},
+    relatedIssues: [],
   };
+  let teiaCtl = null;
+  let teiaCanvas = null;
+  let teiaKey = "";
+  const TEIA_TYPES = [
+    { id: "issue", label: "Issues" },
+    { id: "pr", label: "PRs" },
+    { id: "note", label: "Notas" },
+    { id: "vault", label: "Vault" },
+    { id: "file", label: "Arquivos" },
+    { id: "module", label: "Módulos" },
+    { id: "class", label: "Classes" },
+  ];
 
   function csrfToken() {
     const parts = document.cookie.split(";");
@@ -197,6 +232,12 @@
     if (isEditor()) {
       await loadEditorData();
     }
+    if (canEditNotes() && activeTab() === "investigacao") {
+      await loadInvestigacao();
+    }
+    if (canEditNotes() && activeTab() === "teia") {
+      await loadTeia();
+    }
     render();
   }
 
@@ -206,6 +247,10 @@
 
   function isOwner() {
     return !!(state.who && Array.isArray(state.who.roles) && state.who.roles.indexOf("owner") !== -1);
+  }
+
+  function canEditNotes() {
+    return isEditor() || isOwner();
   }
 
   async function loadEditorData() {
@@ -393,6 +438,25 @@
       gh_not_logged: "gh não está autenticado no container.",
       board_fields: "Não foi possível ler as opções do board.",
       api_unreachable: "Não foi possível falar com a API. Recarregue a página.",
+      vault_disabled: "Vault Obsidian desligado: defina FORGE_OBSIDIAN_VAULT e FORGE_OBSIDIAN_ALLOW.",
+      invalid_issue: "Issue inválida. Use owner/repo#número da allowlist.",
+      invalid_title: "Título da nota inválido (1 a 200 caracteres).",
+      invalid_body: "Corpo da nota inválido.",
+      body_too_large: "Nota maior que 64 KiB.",
+      not_found: "Registro não encontrado.",
+      busy: "O índice do grafo já está em execução.",
+      not_indexed: "Este repositório ainda não tem grafo.",
+      no_release: "O repositório não tem release no GitHub.",
+      graphify_missing: "graphify não está na imagem.",
+      extract_failed: "Falha ao extrair o grafo (modo offline).",
+      missing_output: "Graphify não gravou graph.json.",
+      invalid_json: "graph.json inválido.",
+      schema: "graph.json sem o formato de grafo.",
+      too_large: "Grafo maior que o limite.",
+      clone_failed: "Falha ao clonar o repositório para indexar.",
+      path_forbidden: "Caminho fora da allowlist do vault.",
+      file_too_large: "Arquivo do vault acima do limite.",
+      issues_import: "Falha ao importar issues concluídas.",
     };
     let text = map[code] || code;
     const fields = detail && Array.isArray(detail.fields) ? detail.fields : [];
@@ -433,6 +497,44 @@
     if (state.draft && document.getElementById("draft-body")) {
       const payload = currentDraftPayload();
       state.draft.body = payload.body_md;
+    }
+    const issue = document.getElementById("issue-select");
+    if (issue) {
+      state.selectedIssue = issue.value;
+    }
+    const noteTitle = document.getElementById("note-title");
+    const noteBody = document.getElementById("note-body");
+    if (noteTitle) {
+      state.noteForm.title = noteTitle.value;
+    }
+    if (noteBody) {
+      state.noteForm.body = noteBody.value;
+    }
+    const graphRepo = document.getElementById("graph-repo");
+    const graphQuery = document.getElementById("graph-query");
+    if (graphRepo) {
+      state.graphRepo = graphRepo.value;
+    }
+    if (graphQuery) {
+      state.graphQuery = graphQuery.value;
+    }
+    const teiaRepo = document.getElementById("teia-repo");
+    const teiaQuery = document.getElementById("teia-query");
+    if (teiaRepo) {
+      state.teiaRepo = teiaRepo.value;
+    }
+    if (teiaQuery) {
+      state.teiaQuery = teiaQuery.value;
+    }
+    const types = [];
+    TEIA_TYPES.forEach(function (item) {
+      const box = document.getElementById("teia-type-" + item.id);
+      if (box && box.checked) {
+        types.push(item.id);
+      }
+    });
+    if (document.getElementById("teia-type-issue")) {
+      state.teiaTypes = types;
     }
   }
 
@@ -713,49 +815,801 @@
     ]);
   }
 
+  async function loadInvestigacao() {
+    if (!canEditNotes()) {
+      return;
+    }
+    const issues = await api("/api/issues");
+    if (issues.ok) {
+      state.issues = issues.data.issues || [];
+      state.issuesError = issues.data.error ? errorMessage(issues.data.error, issues.data) : "";
+    } else {
+      state.issues = [];
+      state.issuesError = errorMessage((issues.data && issues.data.error) || "gh_error", issues.data);
+    }
+    if (state.selectedIssue) {
+      const found = state.issues.some(function (item) { return item.issue_key === state.selectedIssue; });
+      if (!found) {
+        state.selectedIssue = "";
+      }
+    }
+    await loadNotes();
+    await loadRelated();
+  }
+
+  async function loadNotes() {
+    if (!canEditNotes()) {
+      return;
+    }
+    const path = state.selectedIssue
+      ? "/api/notes?issue=" + encodeURIComponent(state.selectedIssue)
+      : "/api/notes";
+    const res = await api(path);
+    if (res.ok) {
+      state.notes = res.data.notes || [];
+    } else {
+      state.notes = [];
+    }
+  }
+
+  async function selectIssue(value) {
+    state.selectedIssue = value;
+    state.selectedNoteId = "";
+    state.noteForm = { title: "", body: "" };
+    await loadNotes();
+    await loadRelated();
+    render();
+  }
+
+  async function loadRelated() {
+    if (!canEditNotes() || !state.selectedIssue) {
+      state.relatedIssues = [];
+      return;
+    }
+    const res = await api("/api/completed-issues?issue=" + encodeURIComponent(state.selectedIssue));
+    if (res.ok) {
+      state.relatedIssues = res.data.issues || [];
+    } else {
+      state.relatedIssues = [];
+    }
+  }
+
+  async function importCompletedIssues() {
+    state.busy = true;
+    state.error = "";
+    render();
+    const res = await api("/api/completed-issues/import", { method: "POST", body: {} });
+    state.busy = false;
+    if (!res.ok) {
+      setErrorFromResponse(res.data);
+      return;
+    }
+    const imported = res.data.imported || 0;
+    const updated = res.data.updated || 0;
+    state.notice = "Issues concluídas: " + imported + " novas, " + updated + " atualizadas.";
+    await loadInvestigacao();
+    render();
+  }
+
+  async function openNote(noteId) {
+    const res = await api("/api/notes/" + encodeURIComponent(noteId));
+    if (!res.ok) {
+      setErrorFromResponse(res.data);
+      return;
+    }
+    state.selectedNoteId = noteId;
+    state.selectedIssue = res.data.issue_key || state.selectedIssue;
+    state.noteForm.title = res.data.title || "";
+    state.noteForm.body = res.data.body || "";
+    render();
+  }
+
+  function newNote() {
+    state.selectedNoteId = "";
+    state.noteForm = { title: "", body: "" };
+    render();
+  }
+
+  async function saveNote() {
+    if (!state.selectedIssue) {
+      setError("invalid_issue");
+      return;
+    }
+    const titleEl = document.getElementById("note-title");
+    const bodyEl = document.getElementById("note-body");
+    const title = titleEl ? titleEl.value : state.noteForm.title;
+    const body = bodyEl ? bodyEl.value : state.noteForm.body;
+    state.noteForm.title = title;
+    state.noteForm.body = body;
+    state.busy = true;
+    state.error = "";
+    render();
+    const payload = { issue_key: state.selectedIssue, title: title, body: body };
+    const path = state.selectedNoteId
+      ? "/api/notes/" + encodeURIComponent(state.selectedNoteId)
+      : "/api/notes";
+    const res = await api(path, { method: "POST", body: payload });
+    state.busy = false;
+    if (!res.ok) {
+      setErrorFromResponse(res.data);
+      return;
+    }
+    state.selectedNoteId = res.data.id;
+    state.noteForm.title = res.data.title || title;
+    state.noteForm.body = res.data.body || body;
+    state.notice = "Nota salva.";
+    await loadNotes();
+    render();
+  }
+
+  async function deleteNote() {
+    if (!state.selectedNoteId) {
+      return;
+    }
+    state.busy = true;
+    state.error = "";
+    render();
+    const res = await api("/api/notes/" + encodeURIComponent(state.selectedNoteId) + "/delete", {
+      method: "POST",
+      body: {},
+    });
+    state.busy = false;
+    if (!res.ok) {
+      setErrorFromResponse(res.data);
+      return;
+    }
+    state.selectedNoteId = "";
+    state.noteForm = { title: "", body: "" };
+    state.notice = "Nota apagada.";
+    await loadNotes();
+    render();
+  }
+
+  function stopGraphPoll() {
+    if (state.graphPollTimer) {
+      window.clearInterval(state.graphPollTimer);
+      state.graphPollTimer = null;
+    }
+  }
+
+  function startGraphPoll() {
+    if (state.graphPollTimer) {
+      return;
+    }
+    state.graphPollTimer = window.setInterval(async function () {
+      const res = await api("/api/graphs/status");
+      if (!res.ok) {
+        return;
+      }
+      state.graphIndex = res.data;
+      const running = !!(res.data.busy || res.data.state === "running");
+      state.graphBusy = running;
+      if (!running) {
+        stopGraphPoll();
+        state.graphNotice = "";
+        state.notice = "Índice atualizado.";
+        await loadTeia();
+      }
+      render();
+    }, 2000);
+  }
+
+  async function loadTeia() {
+    if (!canEditNotes()) {
+      return;
+    }
+    const params = new URLSearchParams();
+    if (state.teiaRepo) {
+      params.set("repo", state.teiaRepo);
+    }
+    if (state.teiaTypes && state.teiaTypes.length && state.teiaTypes.length < TEIA_TYPES.length) {
+      params.set("types", state.teiaTypes.join(","));
+    }
+    if (state.teiaQuery) {
+      params.set("q", state.teiaQuery);
+    }
+    const graph = await api("/api/context-graph?" + params.toString());
+    if (graph.ok) {
+      state.teia = {
+        nodes: graph.data.nodes || [],
+        edges: graph.data.edges || [],
+        truncated: !!graph.data.truncated,
+        aggregated: !!graph.data.aggregated,
+        shown: graph.data.shown || (graph.data.nodes || []).length,
+        total: graph.data.total || (graph.data.nodes || []).length,
+        raw_total: graph.data.raw_total || 0,
+        vault: !!graph.data.vault,
+      };
+      state.teiaExpanded = {};
+      state.vault.enabled = !!graph.data.vault;
+    } else if (graph.status === 401 || graph.status === 403) {
+      setErrorFromResponse(graph.data);
+    }
+    const graphs = await api("/api/graphs");
+    if (graphs.ok) {
+      state.graphs = graphs.data.graphs || [];
+      state.graphIndex = {
+        state: graphs.data.state || "idle",
+        busy: !!graphs.data.busy,
+        reason: graphs.data.reason || "",
+        repos: graphs.data.repos || [],
+      };
+      state.graphBusy = !!(graphs.data.busy || graphs.data.state === "running");
+      if (!state.teiaRepo && state.graphs.length) {
+        state.graphRepo = state.graphs[0].repo;
+      }
+      if (state.graphBusy) {
+        state.graphNotice = "Indexando…";
+        startGraphPoll();
+      }
+    }
+  }
+
+  async function applyTeiaFilters() {
+    snapshotForm();
+    state.teiaSelected = null;
+    state.teiaExpanded = {};
+    teiaKey = "";
+    await loadTeia();
+    render();
+  }
+
+  async function refreshGraph(repo) {
+    state.error = "";
+    const body = repo ? { repo: repo } : {};
+    const res = await api("/api/graphs/refresh", { method: "POST", body: body });
+    if (!res.ok) {
+      setErrorFromResponse(res.data);
+      return;
+    }
+    state.graphIndex = res.data;
+    state.graphBusy = !!(res.data.busy || res.data.state === "running");
+    if (state.graphBusy) {
+      state.graphNotice = "Indexando…";
+      startGraphPoll();
+    } else {
+      state.graphNotice = "";
+      state.notice = "Índice atualizado.";
+      await loadTeia();
+    }
+    render();
+  }
+
+  function teiaTypeLabel(type) {
+    const map = {
+      issue: "Issue", pr: "PR", note: "Nota", vault: "Vault",
+      file: "Arquivo", module: "Módulo", class: "Classe", function: "Função",
+    };
+    return map[type] || type || "";
+  }
+
+  function teiaCountText() {
+    const n = (state.teia.nodes || []).length;
+    const raw = state.teia.raw_total || 0;
+    const total = state.teia.total || n;
+    const m = raw > n ? raw : total;
+    if (state.teia.truncated || state.teia.aggregated || m > n) {
+      return "Mostrando " + n + " de " + m;
+    }
+    return n + " nós";
+  }
+
+  function teiaNodeById(id) {
+    if (!id) {
+      return null;
+    }
+    const nodes = state.teia.nodes || [];
+    for (let i = 0; i < nodes.length; i += 1) {
+      if (nodes[i].id === id) {
+        return nodes[i];
+      }
+    }
+    return null;
+  }
+
+  function teiaNeighbors(id) {
+    const out = [];
+    const seen = {};
+    (state.teia.edges || []).forEach(function (edge) {
+      let other = null;
+      if (edge.source === id) {
+        other = edge.target;
+      } else if (edge.target === id) {
+        other = edge.source;
+      }
+      if (other && !seen[other]) {
+        seen[other] = true;
+        const node = teiaNodeById(other);
+        if (node) {
+          out.push(node);
+        }
+      }
+    });
+    out.sort(function (a, b) {
+      return String(a.label || a.id).localeCompare(String(b.label || b.id));
+    });
+    return out;
+  }
+
+  function selectTeiaNode(id) {
+    state.teiaSelected = id || null;
+    if (teiaCtl) {
+      teiaCtl.setSelected(id || null);
+    }
+    fillTeiaDetail();
+    const node = teiaNodeById(id);
+    if (node && node.type === "file" && node.expandable && node.repo && node.path && !state.teiaExpanded[node.id]) {
+      expandTeiaFile(node);
+    }
+  }
+
+  async function expandTeiaFile(node) {
+    const params = new URLSearchParams();
+    params.set("repo", node.repo);
+    params.set("file", node.path);
+    const res = await api("/api/context-graph/expand?" + params.toString());
+    if (!res.ok) {
+      return;
+    }
+    state.teiaExpanded[node.id] = true;
+    const kids = res.data.nodes || [];
+    const extra = res.data.edges || [];
+    const seen = {};
+    (state.teia.nodes || []).forEach(function (item) { seen[item.id] = true; });
+    kids.forEach(function (item) {
+      if (!seen[item.id]) {
+        state.teia.nodes.push(item);
+        seen[item.id] = true;
+      }
+    });
+    extra.forEach(function (edge) {
+      state.teia.edges.push(edge);
+    });
+    if (teiaCtl && teiaCtl.addAround) {
+      teiaCtl.addAround(node.id, kids, extra);
+    }
+    fillTeiaDetail();
+  }
+
+  function teiaLinkLabel(node) {
+    if (!node) {
+      return "Abrir";
+    }
+    if (node.type === "pr") {
+      return "Abrir PR";
+    }
+    if (node.type === "file" || node.type === "class" || node.type === "module") {
+      return "Abrir no GitHub";
+    }
+    if (node.type === "issue") {
+      return "Abrir issue";
+    }
+    return "Abrir";
+  }
+
+  function fillTeiaDetail(panel) {
+    const host = panel || document.getElementById("teia-detail");
+    if (!host) {
+      return;
+    }
+    host.replaceChildren();
+    host.appendChild(el("h2", { text: "Detalhe" }));
+    const selected = teiaNodeById(state.teiaSelected);
+    if (!selected) {
+      host.appendChild(el("p", { class: "muted", text: "Clique num nó para ver o detalhe." }));
+      return;
+    }
+    host.appendChild(el("p", { class: "pill pill-core", text: teiaTypeLabel(selected.type) }));
+    host.appendChild(el("h3", { text: selected.label || selected.id }));
+    if (selected.repo) {
+      host.appendChild(el("p", { text: selected.repo }));
+    }
+    if (selected.path) {
+      host.appendChild(el("p", { class: "muted", text: selected.path }));
+    }
+    if (selected.url) {
+      host.appendChild(safeLink(selected.url, teiaLinkLabel(selected)));
+    }
+    if (selected.type === "file" && selected.expandable) {
+      const n = selected.children || 0;
+      host.appendChild(el("p", {
+        class: "muted",
+        text: state.teiaExpanded[selected.id]
+          ? ("Símbolos no ficheiro: " + n)
+          : ("Clique para expandir " + n + " símbolos neste ficheiro."),
+      }));
+    }
+    const labels = selected.labels || [];
+    if (selected.type === "issue" && labels.length) {
+      host.appendChild(el("p", { class: "teia-k", text: "Labels" }));
+      const row = el("div", { class: "teia-chips" });
+      labels.forEach(function (name) {
+        row.appendChild(el("span", { class: "pill pill-tasks", text: String(name) }));
+      });
+      host.appendChild(row);
+    }
+    const prs = selected.prs || [];
+    if (selected.type === "issue" && prs.length) {
+      host.appendChild(el("p", { class: "teia-k", text: "PRs" }));
+      const list = el("div", { class: "teia-nlist" });
+      prs.forEach(function (pr) {
+        const prId = selected.repo ? ("pr:" + selected.repo + "#" + pr.number) : "";
+        const label = "PR #" + pr.number;
+        if (prId && teiaNodeById(prId)) {
+          list.appendChild(el("button", {
+            type: "button",
+            class: "teia-neighbor",
+            text: label,
+            onClick: function () { selectTeiaNode(prId); },
+          }));
+        } else if (pr.url) {
+          list.appendChild(safeLink(pr.url, label));
+        } else {
+          list.appendChild(el("span", { text: label }));
+        }
+      });
+      host.appendChild(list);
+    }
+    const neighbors = teiaNeighbors(selected.id);
+    host.appendChild(el("p", { class: "teia-k", text: "Vizinhos" }));
+    if (!neighbors.length) {
+      host.appendChild(el("p", { class: "muted", text: "Sem vizinhos neste recorte." }));
+      return;
+    }
+    const nlist = el("div", { class: "teia-nlist" });
+    neighbors.forEach(function (node) {
+      nlist.appendChild(el("button", {
+        type: "button",
+        class: "teia-neighbor",
+        text: teiaTypeLabel(node.type) + " · " + (node.label || node.id),
+        onClick: function () { selectTeiaNode(node.id); },
+      }));
+    });
+    host.appendChild(nlist);
+  }
+
+  function teiaDataKey() {
+    const nodes = state.teia.nodes || [];
+    const types = (!state.teiaTypes.length || state.teiaTypes.length >= TEIA_TYPES.length)
+      ? "*"
+      : state.teiaTypes.slice().sort().join(",");
+    return [
+      state.teiaRepo || "*",
+      types,
+      state.teiaQuery || "",
+      String(nodes.length),
+      nodes.length ? nodes[0].id : "",
+      nodes.length ? nodes[nodes.length - 1].id : "",
+      String((state.teia.edges || []).length),
+    ].join("|");
+  }
+
+  function mountTeiaWeb(host) {
+    if (!(state.teia.nodes || []).length) {
+      if (teiaCtl) {
+        teiaCtl.setData([], [], {});
+        teiaKey = "";
+      }
+      host.appendChild(el("p", { class: "muted teia-empty", text: "Nenhum nó neste recorte. Importe issues ou aguarde o índice Graphify." }));
+      return;
+    }
+    if (!teiaCanvas) {
+      teiaCanvas = el("canvas", { class: "teia-canvas", id: "teia-web" });
+    }
+    host.appendChild(teiaCanvas);
+    if (!teiaCtl && window.ForgeTeia) {
+      teiaCtl = window.ForgeTeia.create(teiaCanvas, {
+        onSelect: function (id) { selectTeiaNode(id); },
+      });
+    }
+    const key = teiaDataKey();
+    if (teiaCtl && teiaKey !== key) {
+      teiaKey = key;
+      teiaCtl.setData(state.teia.nodes, state.teia.edges, {
+        clusterByRepo: !state.teiaRepo,
+      });
+    }
+    if (teiaCtl) {
+      teiaCtl.setSelected(state.teiaSelected);
+      window.requestAnimationFrame(function () {
+        if (teiaCtl) {
+          teiaCtl.resize();
+        }
+      });
+    }
+  }
+
   function renderInvestigacao(root) {
     root.appendChild(el("section", { class: "card card-eng" }, [
       el("div", { class: "card-head" }, [
         el("span", { class: "icon-box icon-eng", text: "B" }),
         el("h2", { text: "Investigação" }),
-        el("span", { class: "pill pill-proposed", text: "EM CONSTRUÇÃO" }),
+        el("span", { class: "pill pill-eng", text: "NOTAS" }),
       ]),
-      el("p", { text: "Esta área vai reunir evidências de uma issue sem alterar os sistemas consultados." }),
-      el("p", { class: "muted", text: "Em construção. O seletor e as fontes ainda não consultam a API." }),
+      el("p", { text: "Notas manuais por issue, no banco do Forge. Independente do vault Obsidian." }),
+      el("p", { class: "muted", text: "Markdown aparece como texto. O corpo da nota não vai para o log." }),
     ]));
-    root.appendChild(el("section", { class: "card" }, [
+    if (!canEditNotes()) {
+      root.appendChild(el("section", { class: "card" }, [
+        el("p", { class: "error", text: "Só editor ou owner vê as notas da investigação." }),
+      ]));
+      return;
+    }
+    const issueBox = el("section", { class: "card" }, [
       el("h2", { text: "Issue" }),
       el("label", { text: "Issue do GitHub", for: "issue-select" }),
-      el("select", { id: "issue-select", disabled: "disabled" }, [
-        el("option", { value: "", text: "Selecione uma issue" }),
+    ]);
+    const select = el("select", {
+      id: "issue-select",
+      onChange: function (ev) { selectIssue(ev.target.value); },
+    });
+    select.appendChild(el("option", { value: "", text: "Selecione uma issue" }));
+    state.issues.forEach(function (item) {
+      const label = item.issue_key + (item.title ? " — " + item.title : "");
+      const opt = el("option", { value: item.issue_key, text: label });
+      if (state.selectedIssue === item.issue_key) {
+        opt.selected = true;
+      }
+      select.appendChild(opt);
+    });
+    issueBox.appendChild(select);
+    if (state.issuesError) {
+      issueBox.appendChild(el("p", { class: "muted", text: state.issuesError }));
+    }
+    if (isOwner()) {
+      issueBox.appendChild(el("div", { class: "row" }, [
+        el("button", {
+          type: "button",
+          class: "primary",
+          text: state.busy ? "Aguarde…" : "Importar issues concluídas",
+          disabled: state.busy ? "disabled" : null,
+          onClick: function () { importCompletedIssues(); },
+        }),
+      ]));
+    }
+    root.appendChild(issueBox);
+
+    const notesCard = el("section", { class: "card card-eng" }, [
+      el("div", { class: "card-head" }, [
+        el("h2", { text: "Notas" }),
+        el("span", { class: "pill pill-eng", text: "FORGE" }),
       ]),
-      el("p", { class: "muted", text: "O seletor fica desligado até a etapa de investigação." }),
+    ]);
+    const list = el("div", { class: "note-list" });
+    if (!state.notes.length) {
+      list.appendChild(el("p", { class: "muted", text: "Nenhuma nota nesta issue." }));
+    }
+    state.notes.forEach(function (note) {
+      list.appendChild(el("button", {
+        type: "button",
+        class: "note-item" + (state.selectedNoteId === note.id ? " active" : ""),
+        text: (note.title || "(sem título)") + " · " + note.size + " B",
+        onClick: function () { openNote(note.id); },
+      }));
+    });
+    const editor = el("div", null, [
+      el("label", { text: "Título", for: "note-title" }),
+      el("input", { id: "note-title", type: "text", maxlength: "200", value: state.noteForm.title || "" }),
+      el("label", { text: "Corpo (markdown, exibido como texto)", for: "note-body" }),
+    ]);
+    const noteBody = el("textarea", { id: "note-body", class: "preview" });
+    noteBody.value = state.noteForm.body || "";
+    editor.appendChild(noteBody);
+    editor.appendChild(el("div", { class: "row" }, [
+      el("button", {
+        type: "button",
+        class: "primary",
+        text: state.busy ? "Aguarde…" : (state.selectedNoteId ? "Salvar nota" : "Criar nota"),
+        disabled: state.busy ? "disabled" : null,
+        onClick: function () { saveNote(); },
+      }),
+      el("button", {
+        type: "button",
+        text: "Nova nota",
+        disabled: state.busy ? "disabled" : null,
+        onClick: function () { newNote(); },
+      }),
+      state.selectedNoteId ? el("button", {
+        type: "button",
+        class: "danger",
+        text: "Apagar",
+        disabled: state.busy ? "disabled" : null,
+        onClick: function () { deleteNote(); },
+      }) : null,
     ]));
+    notesCard.appendChild(el("div", { class: "notes-grid" }, [list, editor]));
+    const relatedCard = el("section", { class: "card card-eng" }, [
+      el("div", { class: "card-head" }, [
+        el("h2", { text: "Issues relacionadas" }),
+        el("span", { class: "pill pill-eng", text: "CONCLUÍDAS" }),
+      ]),
+    ]);
+    if (!state.selectedIssue) {
+      relatedCard.appendChild(el("p", { class: "muted", text: "Selecione uma issue para ver concluídas semelhantes." }));
+    } else if (!state.relatedIssues.length) {
+      relatedCard.appendChild(el("p", { class: "muted", text: "Nenhuma issue concluída semelhante. Owner pode importar o board." }));
+    } else {
+      const relatedList = el("div", { class: "note-list" });
+      state.relatedIssues.forEach(function (item) {
+        const key = item.issue_key || ((item.repo || "") + "#" + item.number);
+        const title = item.title || key;
+        const block = el("div", { class: "related-item" }, [
+          safeLink(item.url, key + " — " + title),
+        ]);
+        (item.prs || []).forEach(function (pr) {
+          if (!pr) {
+            return;
+          }
+          const files = (pr.files || []).slice(0, 6).join(", ");
+          block.appendChild(safeLink(pr.url, "PR #" + pr.number + (files ? ": " + files : "")));
+        });
+        (item.nodes || []).slice(0, 6).forEach(function (node) {
+          block.appendChild(el("p", {
+            class: "muted",
+            text: (node.label || node.id || "") + (node.file ? " · " + node.file : ""),
+          }));
+        });
+        relatedList.appendChild(block);
+      });
+      relatedCard.appendChild(relatedList);
+    }
+    root.appendChild(el("div", { class: "investigacao-split" }, [notesCard, relatedCard]));
+
     const sources = el("section", { class: "card" }, [
       el("div", { class: "card-head" }, [
         el("h2", { text: "Fontes" }),
         el("span", { class: "pill pill-planned", text: "SOMENTE LEITURA" }),
       ]),
+      el("p", { class: "muted", text: "Em construção: as outras fontes ainda não consultam a API." }),
       el("div", { class: "source-grid" }, [
         sourceCard("B", "icon-eng", "Código", "Repositório Git"),
         sourceCard("D", "icon-ops", "Portainer", "Containers"),
         sourceCard("F", "icon-core", "Banco", "MySQL / PostgreSQL"),
         sourceCard("F", "icon-core", "FTP", "FTP / SFTP"),
+        sourceCard("F", "icon-core", "Obsidian", "Vault (aba Teia)"),
       ]),
     ]);
     root.appendChild(sources);
   }
 
   function renderTeia(root) {
-    root.appendChild(el("section", { class: "card card-core" }, [
-      el("div", { class: "card-head" }, [
+    const vaultEnabled = !!(state.teia && state.teia.vault);
+    const indexing = !!state.graphBusy;
+    if (!canEditNotes()) {
+      root.appendChild(el("section", { class: "card" }, [
+        el("p", { class: "error", text: "Só editor ou owner lê o vault e o grafo." }),
+      ]));
+      return;
+    }
+    if (state.graphNotice || indexing) {
+      root.appendChild(el("p", { class: "banner banner-info", text: state.graphNotice || "Indexando…" }));
+      const prog = el("ul", { class: "teia-progress" });
+      (state.graphIndex.repos || []).forEach(function (row) {
+        const reason = row.error || row.hint || "";
+        prog.appendChild(el("li", {
+          text: (row.repo || "") + " · " + (row.status || "queued") + (reason ? " (" + reason + ")" : ""),
+        }));
+      });
+      if ((state.graphIndex.repos || []).length) {
+        root.appendChild(prog);
+      }
+    }
+
+    const repoSelect = el("select", { id: "teia-repo" });
+    repoSelect.appendChild(el("option", { value: "", text: "Todos os repositórios" }));
+    state.graphs.forEach(function (g) {
+      const opt = el("option", { value: g.repo, text: g.repo });
+      if (state.teiaRepo === g.repo) {
+        opt.selected = true;
+      }
+      repoSelect.appendChild(opt);
+    });
+    const q = el("input", {
+      id: "teia-query", type: "search", value: state.teiaQuery || "",
+      placeholder: "Buscar",
+    });
+    const types = el("div", { class: "teia-types" });
+    TEIA_TYPES.forEach(function (item) {
+      const checked = !state.teiaTypes.length || state.teiaTypes.indexOf(item.id) !== -1;
+      const box = el("input", {
+        id: "teia-type-" + item.id, type: "checkbox",
+      });
+      if (checked) {
+        box.checked = true;
+      }
+      types.appendChild(el("label", { class: "teia-type", for: "teia-type-" + item.id }, [
+        box,
+        el("span", { text: item.label }),
+      ]));
+    });
+    const filters = el("div", { class: "teia-filters card" }, [
+      el("div", { class: "teia-filter-head" }, [
         el("span", { class: "icon-box icon-core", text: "F" }),
-        el("h2", { text: "Teia de contexto" }),
-        el("span", { class: "pill pill-proposed", text: "EM CONSTRUÇÃO" }),
+        el("strong", { text: "Teia de contexto" }),
+        el("span", {
+          class: vaultEnabled ? "pill pill-ok" : "pill pill-proposed",
+          text: vaultEnabled ? "VAULT" : "DESLIGADO",
+        }),
+        el("span", { class: "muted teia-count", text: teiaCountText() }),
       ]),
-      el("p", { text: "O vault Obsidian vai guardar notas, vínculos e o mapa de contexto da investigação." }),
-      el("p", { class: "muted", text: "As notas ficam fora do Git e não substituem o banco do Forge. Esta tela ainda não está ligada ao vault." }),
-    ]));
+      el("div", { class: "graph-query teia-filter-row" }, [
+        el("div", null, [el("label", { text: "Repositório", for: "teia-repo" }), repoSelect]),
+        el("div", null, [el("label", { text: "Busca", for: "teia-query" }), q]),
+        el("button", {
+          type: "button",
+          text: "Aplicar",
+          onClick: function () { applyTeiaFilters(); },
+        }),
+      ]),
+      types,
+    ]);
+    if (state.teia.truncated || state.teia.aggregated) {
+      filters.appendChild(el("p", {
+        class: "banner banner-warn teia-trunc",
+        text: teiaCountText() + (state.teia.aggregated
+          ? ". Agregado por ficheiro; clique num ficheiro para ver classes e funções."
+          : ". Recorte pelos nós mais ligados a issues e notas."),
+      }));
+    }
+
+    const panel = el("aside", { class: "teia-panel card", id: "teia-detail" });
+    fillTeiaDetail(panel);
+
+    const graphCard = el("section", { class: "card card-eng teia-graphs" }, [
+      el("div", { class: "card-head" }, [
+        el("h2", { text: "Grafos Graphify" }),
+        el("span", { class: "pill pill-eng", text: "OFFLINE" }),
+      ]),
+      el("p", { class: "muted", text: "Índice de código dos 5 repositórios da allowlist. Sem LLM." }),
+    ]);
+    if (!state.graphs.length) {
+      graphCard.appendChild(el("p", { class: "muted", text: "Nenhum grafo ainda." }));
+    } else {
+      const table = el("table");
+      table.appendChild(el("thead", null, [el("tr", null, [
+        el("th", { text: "Repositório" }),
+        el("th", { text: "Ref" }),
+        el("th", { text: "Nós" }),
+        el("th", { text: "Arestas" }),
+      ])]));
+      const tbody = el("tbody");
+      state.graphs.forEach(function (g) {
+        const ref = g.tag || (g.source === "head" ? ("HEAD " + (g.ref || "")) : (g.ref || g.error || "—"));
+        tbody.appendChild(el("tr", null, [
+          el("td", { text: g.repo || "" }),
+          el("td", { text: ref }),
+          el("td", { text: String(g.nodes || 0) }),
+          el("td", { text: String(g.edges || 0) }),
+        ]));
+      });
+      table.appendChild(tbody);
+      graphCard.appendChild(table);
+    }
+    if (isOwner()) {
+      graphCard.appendChild(el("button", {
+        type: "button",
+        class: "primary",
+        text: indexing ? "Indexando…" : "Atualizar grafo",
+        disabled: indexing ? "disabled" : null,
+        onClick: function () { refreshGraph(state.teiaRepo || state.graphRepo); },
+      }));
+    }
+
+    const legend = el("ul", { class: "teia-legend" });
+    TEIA_TYPES.concat([{ id: "function", label: "Funções" }]).forEach(function (item) {
+      legend.appendChild(el("li", { class: "teia-legend-" + item.id }, [
+        el("span", { class: "teia-swatch", "aria-hidden": "true" }),
+        el("span", { text: item.label }),
+      ]));
+    });
+
+    const web = el("div", { class: "teia-web" });
+    web.appendChild(legend);
+    mountTeiaWeb(web);
+
+    const left = el("div", { class: "teia-left" }, [panel, graphCard]);
+    const right = el("div", { class: "teia-right" }, [filters, web]);
+    root.appendChild(el("div", { class: "teia-page" }, [left, right]));
   }
 
   function render() {
@@ -765,6 +1619,9 @@
     renderSession(session);
     renderNav();
     app.replaceChildren();
+    const teiaOpen = !state.loading && !!state.who && activeTab() === "teia";
+    app.classList.toggle("teia-layout", teiaOpen);
+    document.body.classList.toggle("teia-open", teiaOpen);
     if (state.loading) {
       setPageTitle("Forge");
       app.appendChild(stateCard("loading", "Carregando…"));
@@ -805,6 +1662,12 @@
       if (isEditor()) {
         await loadEditorData();
       }
+      if (canEditNotes() && activeTab() === "investigacao") {
+        await loadInvestigacao();
+      }
+      if (canEditNotes() && activeTab() === "teia") {
+        await loadTeia();
+      }
     } catch (err) {
       state.error = "api_unreachable";
     }
@@ -812,6 +1675,15 @@
     render();
   }
 
-  window.addEventListener("hashchange", function () { render(); });
+  window.addEventListener("hashchange", async function () {
+    const tab = activeTab();
+    if (tab === "investigacao" && canEditNotes()) {
+      await loadInvestigacao();
+    }
+    if (tab === "teia" && canEditNotes()) {
+      await loadTeia();
+    }
+    render();
+  });
   boot();
 })();

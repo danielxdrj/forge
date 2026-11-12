@@ -83,6 +83,7 @@ class WebTaskService:
         *,
         drafts_dir: Path | None = None,
         field_cache: BoardFieldCache | None = None,
+        graph_dir: Path | str | None = None,
     ):
         self.repo = repo
         self.tasks = tasks
@@ -91,7 +92,7 @@ class WebTaskService:
         self.drafts_dir = Path(drafts_dir) if drafts_dir else Path(tempfile.mkdtemp(prefix="forge-web-drafts-"))
         self.drafts_dir.mkdir(parents=True, exist_ok=True)
         self.fields = field_cache or BoardFieldCache(gh)
-        self.drafts = DraftService(tasks, provider, gh)
+        self.drafts = DraftService(tasks, provider, gh, store=repo, graph_dir=graph_dir)
 
     def list_repos(self, principal: Principal) -> list[dict]:
         self.tasks._auth.require(principal, "editor")

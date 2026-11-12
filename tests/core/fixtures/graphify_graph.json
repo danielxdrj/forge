@@ -1,0 +1,262 @@
+{
+  "directed": false,
+  "multigraph": false,
+  "graph": {
+    "schema_version": 1,
+    "graphify_version": "0.9.106"
+  },
+  "nodes": [
+    {
+      "id": "pkg_auth_authservice",
+      "label": "AuthService",
+      "_callable": true,
+      "_callable_class": true,
+      "_origin": "ast",
+      "community": 0,
+      "file_type": "code",
+      "norm_label": "authservice",
+      "source_file": "pkg/auth.py",
+      "source_location": "L1"
+    },
+    {
+      "id": "pkg_app_main",
+      "label": "main()",
+      "_callable": true,
+      "_origin": "ast",
+      "community": 0,
+      "file_type": "code",
+      "norm_label": "main()",
+      "source_file": "pkg/app.py",
+      "source_location": "L3"
+    },
+    {
+      "id": "pkg_auth_login",
+      "label": "login()",
+      "_callable": true,
+      "_origin": "ast",
+      "community": 0,
+      "file_type": "code",
+      "norm_label": "login()",
+      "source_file": "pkg/auth.py",
+      "source_location": "L8"
+    },
+    {
+      "id": "pkg_auth_authservice_login",
+      "label": ".login()",
+      "_callable": true,
+      "_origin": "ast",
+      "community": 2,
+      "file_type": "code",
+      "norm_label": ".login()",
+      "source_file": "pkg/auth.py",
+      "source_location": "L2"
+    },
+    {
+      "id": "pkg_auth_check",
+      "label": "check()",
+      "_callable": true,
+      "_origin": "ast",
+      "community": 2,
+      "file_type": "code",
+      "norm_label": "check()",
+      "source_file": "pkg/auth.py",
+      "source_location": "L5"
+    },
+    {
+      "id": "pkg_app",
+      "label": "app.py",
+      "_origin": "ast",
+      "community": 0,
+      "file_type": "code",
+      "norm_label": "app.py",
+      "source_file": "pkg/app.py",
+      "source_location": "L1"
+    },
+    {
+      "id": "pkg_auth",
+      "label": "auth.py",
+      "_origin": "ast",
+      "community": 1,
+      "file_type": "code",
+      "norm_label": "auth.py",
+      "source_file": "pkg/auth.py",
+      "source_location": "L1"
+    },
+    {
+      "id": "pkg_init",
+      "label": "__init__.py",
+      "_origin": "ast",
+      "community": 1,
+      "file_type": "code",
+      "norm_label": "__init__.py",
+      "source_file": "pkg/__init__.py",
+      "source_location": "L1"
+    }
+  ],
+  "links": [
+    {
+      "source": "pkg_app_main",
+      "target": "pkg_auth_authservice",
+      "relation": "calls",
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "context": "call",
+      "source_file": "pkg/app.py",
+      "source_location": "L4",
+      "weight": 1.0
+    },
+    {
+      "source": "pkg_app_main",
+      "target": "pkg_auth_login",
+      "relation": "calls",
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "context": "call",
+      "source_file": "pkg/app.py",
+      "source_location": "L5",
+      "weight": 1.0
+    },
+    {
+      "source": "pkg_auth_authservice_login",
+      "target": "pkg_auth_check",
+      "relation": "calls",
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "context": "call",
+      "source_file": "pkg/auth.py",
+      "source_location": "L3",
+      "weight": 1.0
+    },
+    {
+      "source": "pkg_auth_login",
+      "target": "pkg_auth_authservice",
+      "relation": "calls",
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "context": "call",
+      "source_file": "pkg/auth.py",
+      "source_location": "L9",
+      "weight": 1.0
+    },
+    {
+      "source": "pkg_init",
+      "target": "pkg_auth",
+      "relation": "re_exports",
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "context": "export",
+      "source_file": "pkg/__init__.py",
+      "source_location": "L1",
+      "weight": 1.0
+    },
+    {
+      "source": "pkg_app",
+      "target": "pkg_auth_authservice",
+      "relation": "imports",
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "context": "import",
+      "source_file": "pkg/app.py",
+      "source_location": "L1",
+      "weight": 1.0
+    },
+    {
+      "source": "pkg_app",
+      "target": "pkg_auth_login",
+      "relation": "imports",
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "context": "import",
+      "source_file": "pkg/app.py",
+      "source_location": "L1",
+      "weight": 1.0
+    },
+    {
+      "source": "pkg_init",
+      "target": "pkg_auth_login",
+      "relation": "imports",
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "context": "import",
+      "source_file": "pkg/__init__.py",
+      "source_location": "L1",
+      "weight": 1.0
+    },
+    {
+      "source": "pkg_app",
+      "target": "pkg_auth",
+      "relation": "imports_from",
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "context": "import",
+      "source_file": "pkg/app.py",
+      "source_location": "L1",
+      "weight": 1.0
+    },
+    {
+      "source": "pkg_app",
+      "target": "pkg_app_main",
+      "relation": "contains",
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "pkg/app.py",
+      "source_location": "L3",
+      "weight": 1.0
+    },
+    {
+      "source": "pkg_auth",
+      "target": "pkg_auth_authservice",
+      "relation": "contains",
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "pkg/auth.py",
+      "source_location": "L1",
+      "weight": 1.0
+    },
+    {
+      "source": "pkg_auth",
+      "target": "pkg_auth_check",
+      "relation": "contains",
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "pkg/auth.py",
+      "source_location": "L5",
+      "weight": 1.0
+    },
+    {
+      "source": "pkg_auth",
+      "target": "pkg_auth_login",
+      "relation": "contains",
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "pkg/auth.py",
+      "source_location": "L8",
+      "weight": 1.0
+    },
+    {
+      "source": "pkg_auth_authservice",
+      "target": "pkg_auth_authservice_login",
+      "relation": "method",
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "pkg/auth.py",
+      "source_location": "L2",
+      "weight": 1.0
+    }
+  ],
+  "hyperedges": []
+}

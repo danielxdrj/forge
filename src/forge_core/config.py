@@ -25,6 +25,13 @@ _DEFAULT_WEB_HOSTS = (
 )
 _HOST = re.compile(r"^[A-Za-z0-9.-]+:[0-9]{1,5}$")
 _DEFAULT_SESSION_TTL = 7 * 24 * 3600
+_DEFAULT_GRAPH_DIR = "/graphs"
+_DEFAULT_GRAPH_POLL = 3600
+_MAX_GRAPH_POLL = 7 * 24 * 3600
+_DEFAULT_GRAPH_NODE_LIMIT = 500
+_DEFAULT_GRAPH_EDGE_LIMIT = 1500
+_DEFAULT_GRAPH_EXTRACT_TIMEOUT = 1800
+_MAX_GRAPH_EXTRACT_TIMEOUT = 7200
 
 
 @dataclass(frozen=True)
@@ -41,6 +48,34 @@ class Settings:
     web_hosts: tuple[str, ...] = _DEFAULT_WEB_HOSTS
     trust_forwarded: bool = False
     trusted_proxies: tuple[str, ...] = ()
+    obsidian_vault: str | None = None
+    obsidian_allow: tuple[str, ...] = ()
+    graph_dir: str = _DEFAULT_GRAPH_DIR
+    graph_poll_seconds: int = _DEFAULT_GRAPH_POLL
+    graphify_bin: str = "graphify"
+    graph_node_limit: int = _DEFAULT_GRAPH_NODE_LIMIT
+    graph_edge_limit: int = _DEFAULT_GRAPH_EDGE_LIMIT
+    graph_extract_timeout: int = _DEFAULT_GRAPH_EXTRACT_TIMEOUT
+
+
+def _allow_folders(raw: str) -> tuple[str, ...]:
+    """Pastas relativas do vault. Sem `..`, sem caminho absoluto."""
+    out: list[str] = []
+    seen: set[str] = set()
+    for part in (raw or "").split(","):
+        item = part.strip().replace("\\", "/").strip("/")
+        if not item:
+            continue
+        bits = [b for b in item.split("/") if b and b != "."]
+        if not bits or any(b == ".." for b in bits):
+            continue
+        cleaned = "/".join(bits)
+        key = cleaned.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(cleaned)
+    return tuple(out)
 
 
 def _bool(name: str, raw: str) -> bool:
@@ -122,6 +157,59 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
     if trust_forwarded and not trusted_proxies:
         problems.append("FORGE_TRUST_FORWARDED=true exige FORGE_TRUSTED_PROXIES (IPs do proxy na rede compose)")
 
+    vault_raw = env.get("FORGE_OBSIDIAN_VAULT", "").strip()
+    obsidian_vault = vault_raw or None
+    if obsidian_vault and not os.path.isabs(obsidian_vault):
+        problems.append("FORGE_OBSIDIAN_VAULT inválido: use um caminho absoluto no container (ex.: /vault)")
+
+    obsidian_allow = _allow_folders(env.get("FORGE_OBSIDIAN_ALLOW", ""))
+
+    graph_dir = env.get("FORGE_GRAPH_DIR", _DEFAULT_GRAPH_DIR).strip() or _DEFAULT_GRAPH_DIR
+    if not os.path.isabs(graph_dir):
+        problems.append("FORGE_GRAPH_DIR inválido: use um caminho absoluto no container (ex.: /graphs)")
+
+    poll_raw = env.get("FORGE_GRAPH_POLL_SECONDS", str(_DEFAULT_GRAPH_POLL)).strip()
+    graph_poll = _DEFAULT_GRAPH_POLL
+    try:
+        graph_poll = int(poll_raw)
+        if graph_poll < 0 or graph_poll > _MAX_GRAPH_POLL:
+            problems.append("FORGE_GRAPH_POLL_SECONDS inválido: use um inteiro entre 0 e 604800 (0 desliga o poll)")
+    except ValueError:
+        problems.append("FORGE_GRAPH_POLL_SECONDS inválido: use um inteiro entre 0 e 604800 (0 desliga o poll)")
+
+    graphify_bin = env.get("FORGE_GRAPHIFY_BIN", "graphify").strip() or "graphify"
+
+    node_limit = _DEFAULT_GRAPH_NODE_LIMIT
+    node_raw = env.get("FORGE_GRAPH_NODE_LIMIT", str(_DEFAULT_GRAPH_NODE_LIMIT)).strip()
+    try:
+        node_limit = int(node_raw)
+        if node_limit < 50 or node_limit > 5000:
+            problems.append("FORGE_GRAPH_NODE_LIMIT inválido: use um inteiro entre 50 e 5000")
+    except ValueError:
+        problems.append("FORGE_GRAPH_NODE_LIMIT inválido: use um inteiro entre 50 e 5000")
+
+    edge_limit = _DEFAULT_GRAPH_EDGE_LIMIT
+    edge_raw = env.get("FORGE_GRAPH_EDGE_LIMIT", str(_DEFAULT_GRAPH_EDGE_LIMIT)).strip()
+    try:
+        edge_limit = int(edge_raw)
+        if edge_limit < 100 or edge_limit > 20000:
+            problems.append("FORGE_GRAPH_EDGE_LIMIT inválido: use um inteiro entre 100 e 20000")
+    except ValueError:
+        problems.append("FORGE_GRAPH_EDGE_LIMIT inválido: use um inteiro entre 100 e 20000")
+
+    extract_timeout = _DEFAULT_GRAPH_EXTRACT_TIMEOUT
+    timeout_raw = env.get("FORGE_GRAPH_EXTRACT_TIMEOUT", str(_DEFAULT_GRAPH_EXTRACT_TIMEOUT)).strip()
+    try:
+        extract_timeout = int(timeout_raw)
+        if extract_timeout < 60 or extract_timeout > _MAX_GRAPH_EXTRACT_TIMEOUT:
+            problems.append(
+                "FORGE_GRAPH_EXTRACT_TIMEOUT inválido: use um inteiro entre 60 e 7200 (segundos)"
+            )
+    except ValueError:
+        problems.append(
+            "FORGE_GRAPH_EXTRACT_TIMEOUT inválido: use um inteiro entre 60 e 7200 (segundos)"
+        )
+
     if problems:
         raise ConfigError("Configuração inválida:\n- " + "\n- ".join(problems))
     return Settings(
@@ -129,6 +217,10 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
         database_migration_url=migration_url, agents_disabled=agents_disabled, github_client_id=client_id,
         session_ttl_seconds=ttl, cookie_secure=cookie_secure, web_hosts=web_hosts,
         trust_forwarded=trust_forwarded, trusted_proxies=trusted_proxies,
+        obsidian_vault=obsidian_vault, obsidian_allow=obsidian_allow,
+        graph_dir=graph_dir, graph_poll_seconds=graph_poll, graphify_bin=graphify_bin,
+        graph_node_limit=node_limit, graph_edge_limit=edge_limit,
+        graph_extract_timeout=extract_timeout,
     )
 
 

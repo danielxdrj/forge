@@ -17,6 +17,7 @@ def test_compose_project_and_three_container_names():
     assert COMPOSE.count("container_name:") == 3
     assert "forge_pgdata" in COMPOSE
     assert "forge_cli_home" in COMPOSE
+    assert "forge_graphs" in COMPOSE
 
 
 def test_ports_are_loopback_only_frontend_8090_backend_not_published():
@@ -24,10 +25,13 @@ def test_ports_are_loopback_only_frontend_8090_backend_not_published():
     assert "127.0.0.1:${FORGE_PG_HOST_PORT:-5433}:5432" in COMPOSE
     assert "8091:8091" not in COMPOSE
     assert "0.0.0.0" not in COMPOSE
-    for match in re.finditer(r'-\s*"([^"]+)"', COMPOSE):
-        mapping = match.group(1)
-        if mapping.count(":") >= 2:
-            assert mapping.startswith("127.0.0.1:"), mapping
+    for line in COMPOSE.splitlines():
+        if line.lstrip().startswith("#"):
+            continue
+        for match in re.finditer(r'-\s*"([^"]+)"', line):
+            mapping = match.group(1)
+            if mapping.count(":") >= 2:
+                assert mapping.startswith("127.0.0.1:"), mapping
 
 
 def test_no_host_keyring_home_or_docker_sock_mounts():
@@ -71,6 +75,9 @@ def test_postgres_image_is_pinned_by_digest():
 
 def test_backend_dockerfile_runs_as_user_forge():
     assert re.search(r"(?m)^USER forge\s*$", BACKEND_DOCKERFILE)
+    assert "graphifyy==0.9.106" in BACKEND_DOCKERFILE
+    assert "GRAPHIFY_BACKEND=none" in BACKEND_DOCKERFILE
+    assert "mkdir -p /etc/forge/config /graphs" in BACKEND_DOCKERFILE
 
 
 def test_backend_is_read_only_with_run_secrets_tmpfs():
@@ -87,6 +94,17 @@ def test_backend_is_read_only_with_run_secrets_tmpfs():
     assert "FORGE_WEB_HOSTS:" in backend
     assert "FORGE_FRONTEND_HOST_PORT:-8090" in backend
     assert "FORGE_SESSION_TTL_SECONDS:" in backend
+    assert "FORGE_OBSIDIAN_VAULT:" in backend
+    assert "FORGE_OBSIDIAN_ALLOW:" in backend
+    assert "FORGE_GRAPH_DIR: /graphs" in backend
+    assert "FORGE_GRAPH_POLL_SECONDS:" in backend
+    assert "FORGE_GRAPH_NODE_LIMIT:" in backend
+    assert "FORGE_GRAPH_EDGE_LIMIT:" in backend
+    assert "FORGE_GRAPH_EXTRACT_TIMEOUT:" in backend
+    assert 'GRAPHIFY_BACKEND: "none"' in backend
+    assert "forge_graphs:/graphs" in backend
+    assert 'ObsidianVault:/vault:ro' in COMPOSE
+    assert 'ObsidianVault/Forge:/vault/Forge' in COMPOSE
 
 
 def test_shell_and_dockerfiles_have_no_cr():
@@ -124,8 +142,24 @@ def test_nginx_proxies_api_sets_forwarded_headers_and_csp():
     assert "@sha256:" in FRONTEND_DOCKERFILE
     html = (ROOT / "deploy/frontend/html/index.html").read_text(encoding="utf-8")
     assert "<script src=\"/app.js\"" in html
+    assert '<script src="/vendor/d3-force.js"' in html
+    assert '<script src="/teia.js"' in html
     assert "onclick=" not in html
     js = (ROOT / "deploy/frontend/html/app.js").read_text(encoding="utf-8")
+    teia_js = (ROOT / "deploy/frontend/html/teia.js").read_text(encoding="utf-8")
+    vendor = ROOT / "deploy/frontend/html/vendor/d3-force.js"
+    license_txt = (ROOT / "deploy/frontend/html/vendor/LICENSE").read_text(encoding="utf-8")
+    assert vendor.is_file()
+    assert "ISC" in license_txt
+    assert "d3-force" in license_txt
+    assert "cdn." not in teia_js.lower()
+    assert "unpkg" not in teia_js.lower()
+    assert "jsdelivr" not in teia_js.lower()
+    assert "innerHTML" not in teia_js
+    assert "requestAnimationFrame" in teia_js
+    assert "forceSimulation" in teia_js
+    assert "forceX" in teia_js
+    assert "devicePixelRatio" in teia_js
     assert "innerHTML" not in js
     assert "textContent" in js
     assert "draft-body" in js
@@ -186,6 +220,10 @@ def test_frontend_shell_tabs_and_theme():
     assert "--group-core:" in css
     assert ".pill-ok" in css
     assert ".pill-warn" in css
+    assert ".teia-page" in css
+    assert "340px" in css
+    assert ".teia-web" in css
+    assert "#0E0E10" in css
     assert ".pill-danger" in css
     assert "Playfair Display" in css
     assert "Inter" in css
@@ -226,6 +264,24 @@ def test_frontend_shell_tabs_and_theme():
     assert 'id="session"' in html
     assert "Em construção" in js
     assert "issue-select" in js
+    assert "/api/notes" in js
+    assert "Atualizar grafo" in js
+    assert "vault_disabled" in js
+    assert "/api/graphs" in js
+    assert "/api/context-graph" in js
+    assert "/api/graphs/status" in js
+    assert "teia-canvas" in js
+    assert "ForgeTeia" in js
+    assert "teia-detail" in js
+    assert "clusterByRepo" in js
+    assert "truncated" in js
+    assert "Indexando" in js
+    assert "cdn." not in js.lower()
+    assert "Salvar nota" in js
+    assert "note-body" in js
+    assert "Importar issues concluídas" in js
+    assert "/api/completed-issues" in js
+    assert "Issues relacionadas" in js
     assert "Código" in js
     assert "Portainer" in js
     assert "Banco" in js

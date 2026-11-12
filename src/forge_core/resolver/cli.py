@@ -10,7 +10,8 @@ from ..auth.cli import _with_login
 from ..auth.github import DeviceFlow, DeviceFlowError, Transport, UrllibTransport
 from ..auth.store import AuthStore
 from ..config import load_settings
-from ..draft.cursor_cli import implementer_adapter, resolve_cursor_model
+from ..draft.cursor_cli import resolve_cursor_model
+from ..draft.engine import select_engine_adapter
 from ..draft.github_gh import GhCli
 from ..draft.service import ask_confirm
 from ..errors import AuthenticationError, AuthorizationError, ConfigError, DraftError, ForgeError
@@ -106,8 +107,8 @@ def _execute(args, argv, env, transport, provider, gh, git, out, err, stdin) -> 
         adapter = provider
         keep = bool(args.manter_clone)
         if adapter is None:
-            adapter = implementer_adapter(
-                model=model or None, timeout=timeout, env=env,
+            adapter = select_engine_adapter(
+                env, implementer=True, model=model or None, timeout=timeout,
             )
         service = ResolverService(tasks, adapter, gh_cli, git=git_cli, attempts=attempts)
         if args.retomar:

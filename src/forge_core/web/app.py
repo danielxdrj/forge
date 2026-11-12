@@ -17,9 +17,19 @@ from ..connections.probes import ConnectionProbes
 from ..connections.service import ConnectionService
 from ..connections.vault import ConnectionsVault
 from ..errors import AuthenticationError, AuthorizationError, DraftError
+from ..graphs.context import ContextGraph
+from ..graphs.indexer import GraphIndexer
+from ..issues.importer import CompletedIssueImporter
 from ..logging import redact
+from ..notes.service import NoteService
+from ..obsidian.vault import ObsidianVault
 from ..storage.sql import SqlRepository
 from .connections import register_connection_routes
+from .context_graph import register_context_graph_routes
+from .graphs import register_graph_routes
+from .issues import register_issue_import_routes
+from .notes import register_note_routes
+from .obsidian import register_obsidian_routes
 from .pending import PendingLogin, PendingStore
 from .security import (
     CSRF_COOKIE,
@@ -69,6 +79,9 @@ def create_app(
     drafts_dir: Path | None = None,
     vault: ConnectionsVault | None = None,
     probes: ConnectionProbes | None = None,
+    obsidian: ObsidianVault | None = None,
+    graph_indexer: GraphIndexer | None = None,
+    issue_importer: CompletedIssueImporter | None = None,
 ) -> FastAPI:
     if not settings.github_client_id:
         raise ValueError("FORGE_GITHUB_CLIENT_ID é obrigatória para o painel web")
@@ -80,9 +93,20 @@ def create_app(
     from ..tasks.service import TaskService
 
     tasks = TaskService(repo)
-    panel = WebTaskService(repo, tasks, provider, gh, drafts_dir=drafts_dir)
+    panel = WebTaskService(
+        repo, tasks, provider, gh, drafts_dir=drafts_dir, graph_dir=settings.graph_dir,
+    )
     connections_vault = vault if vault is not None else ConnectionsVault.from_env()
     connections = ConnectionService(repo, store, connections_vault, probes)
+    notes = NoteService(repo, store)
+    obsidian_vault = obsidian if obsidian is not None else ObsidianVault.from_settings(settings)
+    issues = issue_importer if issue_importer is not None else CompletedIssueImporter(
+        repo, settings, gh=gh,
+    )
+    graphs = graph_indexer if graph_indexer is not None else GraphIndexer(
+        repo, settings, gh=gh, on_poll=lambda reason: issues.run(reason=reason),
+    )
+    context_graph = ContextGraph(repo, settings, obsidian_vault)
     app = FastAPI(title="Forge", docs_url=None, redoc_url=None, openapi_url=None)
     app.state.repo = repo
     app.state.store = store
@@ -90,6 +114,11 @@ def create_app(
     app.state.require_editor = require_editor
     app.state.panel = panel
     app.state.connections = connections
+    app.state.notes = notes
+    app.state.obsidian = obsidian_vault
+    app.state.graphs = graphs
+    app.state.context_graph = context_graph
+    app.state.issues = issues
 
     def _audit(actor: str, action: str, target: str, result: str) -> None:
         repo.record_audit(actor, action, target, redact(result))
@@ -134,7 +163,10 @@ def create_app(
             "provider_missing": 503,
             "gh_missing": 503,
             "gh_not_logged": 503,
+            "busy": 409,
             "cursor_cli_missing": 503,
+            "claude_cli_missing": 503,
+            "claude_cli_error": 502,
             "provider_error": 502,
             "forbidden": 403,
         }.get(code, 400)
@@ -258,6 +290,15 @@ def create_app(
         if isinstance(principal, JSONResponse):
             return principal
         if store.has_role(principal.identity_id, "editor") or store.has_role(principal.identity_id, "owner"):
+            return principal
+        return _json_error(403, "forbidden")
+
+    def _need_editor_or_owner(request: Request) -> Principal | JSONResponse:
+        principal = _need_principal(request)
+        if isinstance(principal, JSONResponse):
+            return principal
+        ident = principal.identity_id
+        if store.has_role(ident, "editor") or store.has_role(ident, "owner"):
             return principal
         return _json_error(403, "forbidden")
 
@@ -423,6 +464,42 @@ def create_app(
         need_principal=_need_principal,
         need_owner=_need_owner,
         need_reader=_need_connection_reader,
+    )
+    register_note_routes(
+        app,
+        notes,
+        json_error=_json_error,
+        need_editor_or_owner=_need_editor_or_owner,
+        gh=gh,
+    )
+    register_obsidian_routes(
+        app,
+        obsidian_vault,
+        json_error=_json_error,
+        need_editor_or_owner=_need_editor_or_owner,
+    )
+    register_graph_routes(
+        app,
+        graphs,
+        json_error=_json_error,
+        need_editor_or_owner=_need_editor_or_owner,
+        need_owner=_need_owner,
+        audit=_audit,
+    )
+    register_context_graph_routes(
+        app,
+        context_graph,
+        json_error=_json_error,
+        need_editor_or_owner=_need_editor_or_owner,
+    )
+    register_issue_import_routes(
+        app,
+        issues,
+        json_error=_json_error,
+        need_editor_or_owner=_need_editor_or_owner,
+        need_owner=_need_owner,
+        audit=_audit,
+        graph_dir=settings.graph_dir,
     )
 
     return app

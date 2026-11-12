@@ -17,5 +17,9 @@ GRANT SELECT, INSERT ON identities, bootstrap_owner, role_grants, role_revocatio
 GRANT USAGE ON SEQUENCE role_grants_id_seq, approval_grants_id_seq TO <PAPEL_APP>;
 -- Conexões: cadastro substituível (CRUD). DELETE só nestas duas tabelas.
 GRANT SELECT, INSERT, UPDATE, DELETE ON connections, connection_hosts TO <PAPEL_APP>;
+-- Notas manuais da Investigação (CRUD). O conteúdo não vai para audit_log.
+GRANT SELECT, INSERT, UPDATE, DELETE ON investigation_notes TO <PAPEL_APP>;
+-- Issues concluídas importadas (somente leitura no GitHub). Upsert no Forge.
+GRANT SELECT, INSERT, UPDATE ON completed_issues TO <PAPEL_APP>;
 -- Sem DELETE nas demais: projeto e repositório são desativados (active=0), nunca apagados.
 -- Sem UPDATE/DELETE/TRUNCATE em audit_log e sem ser dono de nenhuma tabela.

@@ -22,6 +22,7 @@ from .template import PROJECT_NUMBER, PROJECT_OWNER
 
 Runner = Callable[..., subprocess.CompletedProcess]
 MAX_OUTPUT = 256 * 1024
+IMPORT_MAX_OUTPUT = 512 * 1024
 DEFAULT_TIMEOUT = 60
 ISSUE_URL = re.compile(r"https://github\.com/[^/\s]+/[^/\s]+/issues/(\d+)")
 
@@ -80,6 +81,78 @@ query($id: ID!) {
 }
 """
 
+DONE_ITEMS_QUERY = """
+query($id: ID!, $first: Int!, $after: String) {
+  node(id: $id) {
+    ... on ProjectV2 {
+      items(first: $first, after: $after) {
+        pageInfo { hasNextPage endCursor }
+        nodes {
+          fieldValues(first: 20) {
+            nodes {
+              ... on ProjectV2ItemFieldSingleSelectValue {
+                name
+                field { ... on ProjectV2SingleSelectField { name } }
+              }
+              ... on ProjectV2ItemFieldIterationValue {
+                title
+                field { ... on ProjectV2IterationField { name } }
+              }
+            }
+          }
+          content {
+            ... on Issue {
+              number
+              title
+              url
+              closedAt
+              repository { nameWithOwner }
+              labels(first: 20) { nodes { name } }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+"""
+
+ISSUE_IMPORT_QUERY = """
+query($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) {
+    issue(number: $number) {
+      number
+      title
+      body
+      url
+      closedAt
+      state
+      labels(first: 20) { nodes { name } }
+      closedByPullRequestsReferences(first: 10) {
+        nodes { number url title }
+      }
+    }
+  }
+}
+"""
+
+DEFAULT_HEAD_QUERY = """
+query($owner: String!, $name: String!) {
+  repository(owner: $owner, name: $name) {
+    defaultBranchRef {
+      name
+      target { oid }
+    }
+  }
+}
+"""
+_SHA = re.compile(r"^[a-fA-F0-9]{7,64}$")
+
+DONE_STATUS_ALIASES = frozenset({
+    "done", "concluido", "concluído", "pronto", "finished", "complete", "completed",
+})
+STATUS_FIELD_ALIASES = frozenset({"status", "estado", "situacao", "situação"})
+
 
 @dataclass
 class IssueRef:
@@ -114,27 +187,32 @@ class GhCli:
     def _env_os(self) -> dict[str, str]:
         return filter_env(self._env or os.environ, GH_ENV_ALLOW)
 
-    def _run(self, args: list[str], *, cwd: str | None = None) -> str:
+    def _run(
+        self, args: list[str], *, cwd: str | None = None, timeout: int | None = None,
+        max_output: int | None = None,
+    ) -> str:
         argv = [self.bin, *args]
         self.calls.append(argv)
         run = self._runner or subprocess.run
         try:
             proc = run(
                 argv, cwd=cwd, env=self._env_os(), capture_output=True, check=False,
-                shell=False, timeout=self.timeout,
+                shell=False, timeout=timeout or self.timeout,
             )
         except FileNotFoundError as exc:
             raise DraftError("gh_missing") from exc
         except subprocess.TimeoutExpired as exc:
             raise DraftError("timeout") from exc
         raw = proc.stdout or b""
-        if len(raw) > MAX_OUTPUT:
+        if len(raw) > (max_output or MAX_OUTPUT):
             raise DraftError("output_too_large")
         text = raw.decode("utf-8", "replace")
         if proc.returncode != 0:
             err = (proc.stderr or b"").decode("utf-8", "replace").lower()
             if "project" in err and ("scope" in err or "403" in err or "resource not accessible" in err):
                 raise DraftError("project_scope", "gh auth refresh -s project")
+            if "release not found" in err or "no releases found" in err:
+                raise DraftError("no_release")
             raise DraftError("gh_error")
         return text
 
@@ -192,6 +270,75 @@ class GhCli:
 
     def clone_repo(self, repo: str, dest: str) -> None:
         self._run(["repo", "clone", repo, dest])
+
+    def clone_repo_at(self, repo: str, dest: str, tag: str) -> None:
+        """Clona uma tag de release ou a branch padrão (`git clone --branch REF`). Sem token no env."""
+        tag = (tag or "").strip()
+        if not tag or tag.startswith("-") or ".." in tag or "\x00" in tag:
+            raise DraftError("gh_error")
+        self._run(
+            ["repo", "clone", repo, dest, "--", "--branch", tag, "--depth", "1", "--single-branch"],
+            timeout=180,
+        )
+
+    def latest_release_tag(self, repo: str) -> str:
+        try:
+            text = self._run(["release", "view", "--repo", repo, "--json", "tagName,targetCommitish"])
+        except DraftError:
+            raise
+        data = _json(text)
+        if not isinstance(data, dict):
+            raise DraftError("no_release")
+        tag = str(data.get("tagName") or "").strip()
+        if not tag:
+            raise DraftError("no_release")
+        return tag
+
+    def default_branch_head(self, repo: str) -> tuple[str, str]:
+        """Branch padrão e SHA do HEAD. Somente leitura (GraphQL). Sem token no env."""
+        owner, _, name = (repo or "").partition("/")
+        if not owner or not name or "/" in name:
+            raise DraftError("gh_error")
+        text = self._run([
+            "api", "graphql",
+            "-F", f"owner={owner}",
+            "-F", f"name={name}",
+            "-f", f"query={DEFAULT_HEAD_QUERY}",
+        ])
+        payload = _json(text)
+        ref = (((payload.get("data") or {}).get("repository") or {}).get("defaultBranchRef") or {})
+        if not isinstance(ref, dict):
+            raise DraftError("gh_error")
+        branch = str(ref.get("name") or "").strip()
+        target = ref.get("target") if isinstance(ref.get("target"), dict) else {}
+        sha = str(target.get("oid") or "").strip()
+        if not branch or branch.startswith("-") or ".." in branch or "\x00" in branch:
+            raise DraftError("gh_error")
+        if not _SHA.fullmatch(sha):
+            raise DraftError("gh_error")
+        return branch, sha
+
+    def list_issues(self, repo: str, limit: int = 50) -> list[IssueRef]:
+        cap = max(1, min(int(limit), 100))
+        text = self._run([
+            "issue", "list", "--repo", repo, "--limit", str(cap),
+            "--state", "all", "--json", "number,title,url,state",
+        ])
+        data = _json(text)
+        if not isinstance(data, list):
+            raise DraftError("gh_error")
+        out: list[IssueRef] = []
+        for item in data:
+            if not isinstance(item, dict):
+                continue
+            try:
+                out.append(IssueRef(
+                    int(item["number"]), str(item.get("url") or ""),
+                    item.get("title"), item.get("state"),
+                ))
+            except (KeyError, TypeError, ValueError):
+                continue
+        return out
 
     def list_issue_branches(self, repo: str, number: int) -> list[str]:
         text = self._run(["issue", "develop", str(number), "--repo", repo, "--list"])
@@ -295,6 +442,142 @@ class GhCli:
         self._run(["issue", "develop", str(number), "--repo", repo, "--name", name])
         return name
 
+    def list_closed_issues(self, repo: str, limit: int = 50) -> list[dict]:
+        """Lista issues fechadas. Somente leitura; sem corpo."""
+        cap = max(1, min(int(limit), 100))
+        text = self._run([
+            "issue", "list", "--repo", repo, "--limit", str(cap),
+            "--state", "closed", "--json", "number,title,url,closedAt,labels,state",
+        ])
+        data = _json(text)
+        if not isinstance(data, list):
+            raise DraftError("gh_error")
+        out: list[dict] = []
+        for item in data:
+            parsed = _issue_list_item(item, repo)
+            if parsed is not None:
+                out.append(parsed)
+        return out
+
+    def list_done_project_issues(self, allowed_repos: set[str], limit: int = 100) -> list[dict]:
+        """Issues na coluna Done do board IT Backlog. Somente leitura. Pagina até `limit`."""
+        cap = max(1, min(int(limit), 200))
+        try:
+            self.preflight()
+        except DraftError as exc:
+            if exc.code in {"project_scope", "project_schema"}:
+                return []
+            raise
+        if not self.project_id:
+            return []
+        allowed = {name.lower() for name in allowed_repos}
+        out: list[dict] = []
+        after = None
+        page = 50
+        while len(out) < cap:
+            args = [
+                "api", "graphql",
+                "-F", f"id={self.project_id}",
+                "-F", f"first={page}",
+            ]
+            if after:
+                args.extend(["-F", f"after={after}"])
+            args.extend(["-f", f"query={DONE_ITEMS_QUERY}"])
+            text = self._run(args, max_output=IMPORT_MAX_OUTPUT)
+            payload = _json(text)
+            items = (((payload.get("data") or {}).get("node") or {}).get("items") or {})
+            nodes = items.get("nodes")
+            if not isinstance(nodes, list):
+                break
+            for node in nodes:
+                parsed = _done_item(node, allowed)
+                if parsed is not None:
+                    out.append(parsed)
+                    if len(out) >= cap:
+                        break
+            info = items.get("pageInfo") or {}
+            if not info.get("hasNextPage") or not info.get("endCursor"):
+                break
+            after = str(info["endCursor"])
+        return out[:cap]
+
+    def view_completed_issue(self, repo: str, number: int) -> dict:
+        """Detalhe de issue fechada + PRs ligados. Somente leitura. Sem mutação."""
+        owner, _, name = repo.partition("/")
+        if not owner or not name:
+            raise DraftError("gh_error")
+        try:
+            text = self._run([
+                "api", "graphql",
+                "-F", f"owner={owner}",
+                "-F", f"name={name}",
+                "-F", f"number={int(number)}",
+                "-f", f"query={ISSUE_IMPORT_QUERY}",
+            ], max_output=IMPORT_MAX_OUTPUT)
+            payload = _json(text)
+            issue = (((payload.get("data") or {}).get("repository") or {}).get("issue"))
+            if not isinstance(issue, dict):
+                raise DraftError("gh_error")
+            return self._hydrate_issue(repo, issue)
+        except DraftError:
+            text = self._run([
+                "issue", "view", str(number), "--repo", repo,
+                "--json", "number,title,body,url,closedAt,labels,state",
+            ], max_output=IMPORT_MAX_OUTPUT)
+            data = _json(text)
+            if not isinstance(data, dict) or "number" not in data:
+                raise DraftError("gh_error")
+            return self._hydrate_issue(repo, data)
+
+    def pr_changed_files(self, repo: str, number: int) -> list[str]:
+        """Arquivos de um PR. Somente leitura."""
+        text = self._run([
+            "pr", "view", str(number), "--repo", repo, "--json", "files,number,url",
+        ])
+        data = _json(text)
+        if not isinstance(data, dict):
+            return []
+        return _file_paths(data.get("files"))
+
+    def _hydrate_issue(self, repo: str, raw: dict) -> dict:
+        number = int(raw.get("number") or 0)
+        labels = _label_names(raw.get("labels"))
+        prs = []
+        refs = raw.get("closedByPullRequestsReferences") or {}
+        nodes = refs.get("nodes") if isinstance(refs, dict) else refs
+        if isinstance(nodes, list):
+            for node in nodes:
+                if not isinstance(node, dict) or not node.get("number"):
+                    continue
+                pr_number = int(node["number"])
+                pr_url = str(node.get("url") or "")
+                pr_repo = _repo_from_pr_url(pr_url) or repo
+                try:
+                    files = self.pr_changed_files(pr_repo, pr_number)
+                except DraftError:
+                    files = []
+                prs.append({
+                    "number": pr_number,
+                    "url": pr_url,
+                    "title": str(node.get("title") or ""),
+                    "files": files,
+                })
+        tipo, prioridade, sprint = _labels_to_fields(labels)
+        return {
+            "repo": repo,
+            "number": number,
+            "title": str(raw.get("title") or ""),
+            "body": str(raw.get("body") or ""),
+            "url": str(raw.get("url") or ""),
+            "closed_at": str(raw.get("closedAt") or raw.get("closed_at") or "") or None,
+            "state": str(raw.get("state") or ""),
+            "labels": labels,
+            "tipo": tipo,
+            "prioridade": prioridade,
+            "sprint": sprint,
+            "prs": prs,
+        }
+
     def find_pr(self, repo: str, head: str) -> str | None:
         """Procura PR existente pela branch. Somente leitura; não cria PR."""
         if not (repo or "").strip() or not (head or "").strip():
@@ -318,6 +601,159 @@ def _json(text: str):
         return json.loads(text)
     except json.JSONDecodeError as exc:
         raise DraftError("gh_error") from exc
+
+
+def _label_names(raw) -> list[str]:
+    names: list[str] = []
+    nodes = raw
+    if isinstance(raw, dict):
+        nodes = raw.get("nodes") or raw.get("edges") or []
+    if not isinstance(nodes, list):
+        return names
+    for item in nodes:
+        if isinstance(item, str) and item.strip():
+            names.append(item.strip())
+        elif isinstance(item, dict):
+            name = str(item.get("name") or "").strip()
+            if name:
+                names.append(name)
+    return names
+
+
+def _file_paths(raw) -> list[str]:
+    out: list[str] = []
+    if not isinstance(raw, list):
+        return out
+    for item in raw:
+        if isinstance(item, str) and item.strip():
+            out.append(item.strip())
+            continue
+        if not isinstance(item, dict):
+            continue
+        path = str(item.get("path") or item.get("filename") or "").strip()
+        if path:
+            out.append(path)
+    return out
+
+
+def _labels_to_fields(labels: list[str]) -> tuple[str, str, str]:
+    tipo = prioridade = sprint = ""
+    for name in labels:
+        low = name.strip()
+        folded = fold_option_name(low)
+        for prefix, target in (
+            ("tipo:", "tipo"), ("type:", "tipo"),
+            ("prioridade:", "prioridade"), ("priority:", "prioridade"),
+            ("sprint:", "sprint"),
+        ):
+            if folded.startswith(prefix):
+                value = name.split(":", 1)[1].strip()
+                if target == "tipo" and not tipo:
+                    tipo = value
+                elif target == "prioridade" and not prioridade:
+                    prioridade = value
+                elif target == "sprint" and not sprint:
+                    sprint = value
+    return tipo, prioridade, sprint
+
+
+def _repo_from_pr_url(url: str) -> str | None:
+    text = (url or "").strip()
+    marker = "github.com/"
+    if marker not in text or "/pull/" not in text:
+        return None
+    rest = text.split(marker, 1)[1]
+    parts = rest.split("/")
+    if len(parts) >= 2:
+        return f"{parts[0]}/{parts[1]}"
+    return None
+
+
+def _issue_list_item(item, default_repo: str) -> dict | None:
+    if not isinstance(item, dict):
+        return None
+    try:
+        number = int(item["number"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    return {
+        "repo": default_repo,
+        "number": number,
+        "title": str(item.get("title") or ""),
+        "url": str(item.get("url") or ""),
+        "closed_at": str(item.get("closedAt") or "") or None,
+        "labels": _label_names(item.get("labels")),
+        "tipo": "",
+        "prioridade": "",
+        "sprint": "",
+    }
+
+
+def _done_item(node, allowed: set[str]) -> dict | None:
+    if not isinstance(node, dict):
+        return None
+    content = node.get("content")
+    if not isinstance(content, dict) or not content.get("number"):
+        return None
+    repo = str((content.get("repository") or {}).get("nameWithOwner") or "").strip()
+    if repo.lower() not in allowed:
+        return None
+    fields = _project_field_map(node.get("fieldValues"))
+    status = fold_option_name(fields.get("status") or "")
+    if status and status not in DONE_STATUS_ALIASES:
+        return None
+    if not status:
+        return None
+    try:
+        number = int(content["number"])
+    except (TypeError, ValueError):
+        return None
+    labels = _label_names(content.get("labels"))
+    tipo = fields.get("tipo") or ""
+    prioridade = fields.get("prioridade") or ""
+    sprint = fields.get("sprint") or ""
+    if not tipo or not prioridade or not sprint:
+        lt, lp, ls = _labels_to_fields(labels)
+        tipo = tipo or lt
+        prioridade = prioridade or lp
+        sprint = sprint or ls
+    return {
+        "repo": repo,
+        "number": number,
+        "title": str(content.get("title") or ""),
+        "url": str(content.get("url") or ""),
+        "closed_at": str(content.get("closedAt") or "") or None,
+        "labels": labels,
+        "tipo": tipo,
+        "prioridade": prioridade,
+        "sprint": sprint,
+    }
+
+
+def _project_field_map(raw) -> dict[str, str]:
+    nodes = raw
+    if isinstance(raw, dict):
+        nodes = raw.get("nodes") or []
+    if not isinstance(nodes, list):
+        return {}
+    out: dict[str, str] = {}
+    for node in nodes:
+        if not isinstance(node, dict):
+            continue
+        field = node.get("field") or {}
+        fname = fold_option_name(str(field.get("name") or ""))
+        value = str(node.get("name") or node.get("title") or "").strip()
+        if not fname or not value:
+            continue
+        if fname in STATUS_FIELD_ALIASES:
+            out["status"] = value
+        elif fname in FIELD_ALIASES["tipo"]:
+            out["tipo"] = value
+        elif fname in FIELD_ALIASES["prioridade"]:
+            out["prioridade"] = value
+        elif fname in FIELD_ALIASES["sprint"]:
+            out["sprint"] = value
+    return out
 
 
 def _normalize_field(node: dict) -> dict:

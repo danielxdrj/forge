@@ -312,7 +312,7 @@ def implementer_adapter(**kwargs) -> CursorCliAdapter:
     return CursorCliAdapter(**kwargs)
 
 
-def build_prompt(user_context: str, board: dict | None = None) -> str:
+def build_prompt(user_context: str, board: dict | None = None, related_prompt: str = "") -> str:
     extra = ""
     if board:
         lines = ["Opções reais do board (sugira só valores desta lista; [PENDENTE] só se não der para decidir):"]
@@ -320,7 +320,10 @@ def build_prompt(user_context: str, board: dict | None = None) -> str:
             names = [str(n).strip() for n in (board.get(key) or []) if str(n).strip()]
             lines.append(f"{label}: {', '.join(names) if names else '(indisponível)'}")
         extra = "\n" + "\n".join(lines) + "\n"
-    return INSTRUCTION + extra + "\n\nCONTEXTO_DO_USUARIO:\n" + user_context + "\n"
+    related = ""
+    if (related_prompt or "").strip():
+        related = "\n" + related_prompt.strip() + "\n"
+    return INSTRUCTION + extra + related + "\n\nCONTEXTO_DO_USUARIO:\n" + user_context + "\n"
 
 
 def diagnose_cursor_cli(

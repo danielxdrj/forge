@@ -133,6 +133,12 @@ html, body {
 
 .app-shell { min-height: 100vh; }
 
+body.teia-open { overflow: hidden; }
+body.teia-open .workspace {
+  height: 100vh;
+  overflow: hidden;
+}
+
 .sidebar {
   position: fixed;
   inset: 0 auto 0 0;
@@ -297,6 +303,17 @@ main {
   flex: 1;
   width: min(64rem, 100%);
   padding: 1.15rem 1.5rem 2.4rem;
+}
+
+main.teia-layout {
+  width: 100%;
+  max-width: none;
+  padding: 0.55rem 0.8rem 0.7rem;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
 }
 
 h1, h2 {
@@ -533,6 +550,270 @@ a { color: var(--link); }
 }
 
 .source-card .source-name { font-weight: 650; color: var(--fg); }
+
+.investigacao-split {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(14rem, 20rem);
+  gap: 1rem;
+  align-items: start;
+}
+
+.related-item {
+  padding: 0.55rem 0.65rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--input);
+}
+
+.related-item a { color: var(--link); }
+
+.notes-grid {
+  display: grid;
+  grid-template-columns: minmax(12rem, 18rem) 1fr;
+  gap: 1rem;
+  margin-top: 0.6rem;
+}
+
+.note-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.note-item {
+  text-align: left;
+  width: 100%;
+  margin: 0;
+}
+
+.note-item.active { border-color: var(--accent); }
+
+.graph-query { display: flex; gap: 0.5rem; align-items: end; flex-wrap: wrap; }
+.graph-query > * { flex: 1 1 10rem; }
+
+.banner-info {
+  background: var(--group-core-bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0.55rem 0.8rem;
+}
+.banner-warn {
+  background: var(--warn-bg);
+  color: var(--warn);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0.55rem 0.8rem;
+}
+
+.teia-page {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 340px minmax(0, 1fr);
+  gap: 0.75rem;
+  overflow: hidden;
+}
+.teia-left {
+  width: 340px;
+  min-width: 0;
+  max-width: 340px;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  min-height: 0;
+  overflow: hidden;
+}
+.teia-panel,
+.teia-graphs {
+  width: 100%;
+  min-width: 0;
+}
+.teia-panel {
+  flex: 0 1 auto;
+  max-height: 48%;
+  overflow: auto;
+  min-height: 10rem;
+}
+.teia-graphs {
+  flex: 1 1 auto;
+  overflow: auto;
+  min-height: 0;
+}
+.teia-graphs table {
+  width: 100%;
+  font-size: 0.74rem;
+}
+.teia-graphs th,
+.teia-graphs td {
+  padding: 0.28rem 0.32rem;
+  word-break: break-word;
+}
+.teia-right {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  overflow: hidden;
+}
+.teia-filters {
+  flex: 0 0 auto;
+  padding: 0.5rem 0.7rem 0.55rem;
+}
+.teia-filters .card-head,
+.teia-filter-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.4rem 0.55rem;
+  margin: 0 0 0.4rem;
+  padding: 0;
+  border: 0;
+}
+.teia-filter-head strong {
+  font-family: var(--font-heading);
+  font-size: 0.98rem;
+}
+.teia-count { font-size: 0.78rem; }
+.teia-filter-row { align-items: end; }
+.teia-filter-row > div { flex: 1 1 8rem; min-width: 0; }
+.teia-filter-row button { flex: 0 0 auto; }
+.teia-trunc { margin: 0.4rem 0 0; }
+.teia-web {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  border: 1px solid #2A2A2A;
+  border-radius: var(--radius);
+  background: #0E0E10;
+  overflow: hidden;
+}
+.teia-canvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+  cursor: grab;
+  touch-action: none;
+  background: #0E0E10;
+}
+.teia-canvas.dragging { cursor: grabbing; }
+.teia-empty {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  margin: 0;
+  color: #B3B3B3;
+}
+.teia-legend {
+  position: absolute;
+  z-index: 2;
+  left: 0.6rem;
+  bottom: 0.6rem;
+  margin: 0;
+  padding: 0.4rem 0.55rem;
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem 0.7rem;
+  background: rgba(14, 14, 16, 0.82);
+  border: 1px solid rgba(153, 0, 0, 0.35);
+  border-radius: var(--radius-sm);
+  color: #E8E8E8;
+  font-size: 0.72rem;
+  pointer-events: none;
+}
+.teia-legend li {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+.teia-swatch {
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 50%;
+  display: inline-block;
+}
+.teia-legend-issue .teia-swatch { background: #E35A5A; }
+.teia-legend-pr .teia-swatch { background: #8FBF9A; }
+.teia-legend-note .teia-swatch { background: #C4A484; }
+.teia-legend-vault .teia-swatch { background: #D0D0D0; }
+.teia-legend-file .teia-swatch { background: #D4B46A; }
+.teia-legend-module .teia-swatch { background: #D4A0A8; }
+.teia-legend-class .teia-swatch { background: #E38A8A; }
+.teia-legend-function .teia-swatch { background: #E8C989; }
+.teia-k {
+  margin: 0.7rem 0 0.25rem;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.teia-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+}
+.teia-nlist {
+  display: flex;
+  flex-direction: column;
+  gap: 0.28rem;
+}
+.teia-neighbor {
+  text-align: left;
+  width: 100%;
+  margin: 0;
+  padding: 0.35rem 0.5rem;
+  font-size: 0.82rem;
+}
+.teia-types {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem 0.7rem;
+  margin-top: 0.4rem;
+}
+.teia-type {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+.teia-progress {
+  margin: 0 0 0.4rem;
+  padding-left: 1.2rem;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+@media (max-width: 860px) {
+  main.teia-layout {
+    height: auto;
+    min-height: calc(100vh - 3.6rem);
+    overflow: auto;
+  }
+  .teia-page {
+    grid-template-columns: 1fr;
+    overflow: visible;
+  }
+  .teia-left {
+    width: 100%;
+    max-width: none;
+    max-height: none;
+    overflow: visible;
+  }
+  .teia-panel { max-height: none; }
+  .teia-web { min-height: 22rem; height: 58vh; }
+}
+
+@media (max-width: 860px) {
+  .notes-grid { grid-template-columns: 1fr; }
+  .investigacao-split { grid-template-columns: 1fr; }
+}
 
 .login-code {
   display: inline-block;

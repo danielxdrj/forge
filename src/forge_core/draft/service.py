@@ -13,7 +13,8 @@ from pathlib import Path
 from ..agents.provider import ProviderAdapter
 from ..auth.store import Principal
 from ..errors import DraftError
-from ..logging import redact
+from ..issues.related import find_related, format_related_prompt, format_related_section
+from ..redaction import redact_secrets
 from ..tasks.service import TaskService
 from .cursor_cli import build_prompt
 from .github_gh import (
@@ -166,20 +167,23 @@ def write_exclusive(path: Path, text: str) -> None:
 
 class DraftService:
     def __init__(self, tasks: TaskService, provider: ProviderAdapter, gh: GhCli | None = None,
-                 today: date | None = None):
+                 today: date | None = None, store=None, graph_dir: Path | str | None = None):
         self.tasks = tasks
         self.provider = provider
         self.gh = gh
         self.today = today or date.today()
+        self.store = store
+        self.graph_dir = Path(graph_dir) if graph_dir else None
 
     def generate(self, context: str, repo: str, principal: Principal, output: Path,
                  meta: dict, branch_prefix: str = "", board: dict | None = None) -> DraftResult:
         repo = validate_repo(repo)
         self.tasks._auth.require(principal, "editor")
-        context = redact(context.strip())
+        context = redact_secrets(context.strip())
         if not context:
             raise DraftError("empty_context")
-        prompt = build_prompt(context, board)
+        related = self._related_issues(context, repo)
+        prompt = build_prompt(context, board, related_prompt=format_related_prompt(related))
         if "FORGE_" in prompt or "GH_TOKEN" in prompt or "GITHUB_TOKEN" in prompt:
             raise DraftError("secret_in_prompt")
         try:
@@ -191,6 +195,9 @@ class DraftService:
         data = fill_inferred_sections(parse_model_json(response.text), context)
         meta = _merge_board_suggestions(meta, data, board)
         body = render(data)
+        section = format_related_section(related)
+        if section:
+            body = body.rstrip() + "\n\n" + section
         write_exclusive(output, body)
         task = self.tasks.create_task(
             data["title"], principal,
@@ -397,12 +404,22 @@ class DraftService:
         if missing:
             raise DraftError("board_mismatch", ",".join(missing))
 
+    def _related_issues(self, context: str, repo: str) -> list[dict]:
+        store = self.store
+        if store is None:
+            return []
+        try:
+            return find_related(store, context, repo, graph_dir=self.graph_dir)
+        except Exception:
+            return []
+
 
 _BODY_HEADERS = (
     "Solicitado Por", "Objetivo", "Contexto",
     "Foram reportados os seguintes problemas:",
     "Situação Atual", "Comportamento Esperado",
     "Critérios de Aceite", "Observações",
+    "Issues relacionadas",
 )
 
 

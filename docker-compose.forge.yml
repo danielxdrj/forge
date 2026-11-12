@@ -64,11 +64,29 @@ services:
       FORGE_TRUSTED_PROXIES: forge_frontend
       FORGE_WEB_HOSTS: "127.0.0.1:${FORGE_FRONTEND_HOST_PORT:-8090},localhost:${FORGE_FRONTEND_HOST_PORT:-8090},127.0.0.1:8091,localhost:8091"
       FORGE_SESSION_TTL_SECONDS: ${FORGE_SESSION_TTL_SECONDS:-604800}
+      FORGE_OBSIDIAN_VAULT: ${FORGE_OBSIDIAN_VAULT:-}
+      FORGE_OBSIDIAN_ALLOW: ${FORGE_OBSIDIAN_ALLOW:-}
+      FORGE_GRAPH_DIR: /graphs
+      FORGE_GRAPH_POLL_SECONDS: ${FORGE_GRAPH_POLL_SECONDS:-3600}
+      FORGE_GRAPH_NODE_LIMIT: ${FORGE_GRAPH_NODE_LIMIT:-500}
+      FORGE_GRAPH_EDGE_LIMIT: ${FORGE_GRAPH_EDGE_LIMIT:-1500}
+      FORGE_GRAPH_EXTRACT_TIMEOUT: ${FORGE_GRAPH_EXTRACT_TIMEOUT:-1800}
+      FORGE_ENGINE: ${FORGE_ENGINE:-claude}
+      FORGE_CLAUDE_BIN: /usr/local/bin/claude
+      GRAPHIFY_BACKEND: "none"
+      GRAPHIFY_QUERY_LOG_DISABLE: "1"
       HOME: /home/forge
       XDG_CONFIG_HOME: /home/forge/.config
       XDG_DATA_HOME: /home/forge/.local/share
     volumes:
       - forge_cli_home:/home/forge
+      - forge_claude:/home/forge/.claude
+      - forge_graphs:/graphs
+      # Vault Obsidian (opcional). O vault inteiro entra somente leitura em /vault;
+      # só Forge/ é remontada por cima com escrita (helper da fase 2). Caminho Windows
+      # ainda não definido — descomente e ajuste:
+      # - "C:/Users/<USER>/Documents/ObsidianVault:/vault:ro"
+      # - "C:/Users/<USER>/Documents/ObsidianVault/Forge:/vault/Forge"
     security_opt:
       - no-new-privileges:true
     restart: unless-stopped
@@ -102,3 +120,5 @@ secrets:
 volumes:
   forge_pgdata:
   forge_cli_home:
+  forge_claude:
+  forge_graphs:
