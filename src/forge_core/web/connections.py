@@ -56,7 +56,7 @@ def register_connection_routes(
             return _rule(exc)
         except AuthorizationError:
             return json_error(403, "forbidden")
-        return {"enabled": True, "connections": [c.as_json() for c in items]}
+        return {**status, "connections": [c.as_json() for c in items]}
 
     @app.get("/api/connections/{connection_id}")
     def api_get_connection(request: Request, connection_id: str):

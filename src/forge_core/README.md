@@ -13,10 +13,14 @@ src/forge_core/
   errors.py       ForgeError, ConfigError, AutomationDisabledError
   backup.py       backup/restauração do SQLite
   agents/         Orchestrator, executor isolado em container (FRG-6, ADR-013), registro e agente echo (veja agents/README.md)
+  agent_catalog/  catálogo/governança da aba "Agentes": cadastro, métricas, aprovação de escrita (sem execução; distinto de agents/)
   projects/       projetos e repositórios gerenciáveis (FRG-5; veja projects/README.md)
   tasks/          gerenciamento de tarefas (FRG-15): model, rules (puras), service (TaskService)
   draft/          rascunho de issue (Cursor CLI + gh local; ADR-015)
   resolver/       implementador local no clone temporário (ADR-016); push/PR só após s/N
+  investigations/ investigação livre (sem issue obrigatória), motor em modo somente leitura
+  graphs/         grafo Graphify + contexto combinado; prompt_context.py gera a seção "## Contexto do grafo"
+  connections/    conexões externas (FTP/MySQL/Postgres/Portainer); readonly.py trava escrita em código
   queue/          fila de jobs persistida (SqlJobQueue)
   storage/        persistência (FRG-42)
     repository.py   interface Repository e entidades
@@ -48,6 +52,8 @@ docker-compose.dev.yml  Postgres de dev/teste (127.0.0.1:5433; conflita com o pa
 | `FORGE_TRUST_FORWARDED` / `FORGE_TRUSTED_PROXIES` | painel web | `X-Forwarded-*` só do proxy listado (compose: `forge_frontend`) |
 | `FORGE_CURSOR_AGENT` / `FORGE_CURSOR_MODEL` / `FORGE_GH_BIN` | não | caminhos/opções do rascunho e do resolver; `FORGE_CURSOR_AGENT` é opcional (PATH/`agent.cmd`) |
 | `FORGE_RESOLVER_ATTEMPTS` | não | teto de tentativas do motor implementador (1–3, padrão 1) |
+| `FORGE_CLAUDE_MAX_TURNS` | não (8) | teto de turnos do Claude Code CLI por chamada (`--max-turns`); investigação roda com `--permission-mode plan` e `--disallowedTools` além disso |
+| `FORGE_GRAPH_PROMPT_MAX_NODES` / `FORGE_GRAPH_PROMPT_MAX_CHARS` | não (40 / 6000) | teto da seção "## Contexto do grafo" injetada no prompt do rascunho, resolver e investigação (`graphs/prompt_context.py`) |
 
 Com `FORGE_AUTOMATION_ENABLED=false`, `start()` levanta `AutomationDisabledError` e `main()` sai com código 2. Ausente = ligado.
 
@@ -110,6 +116,21 @@ svc.update_task(a.id, ana, expected_version=1, priority="high")
 
 ## Rascunho de issue (ADR-015)
 `python -m forge_core.draft draft --contexto "..."` ou `--arquivo` (stdin: `--arquivo -`). `--retomar <id>` continua sem LLM. `python -m forge_core.draft doctor` diagnostica o adaptador Cursor (nomes de env, nunca valores). `FORGE_CURSOR_MODEL` é obrigatório na geração (escolha da assinatura; sem default de custo). Runbook: `docs/operacao/rascunho-issue.md`.
+
+## Contexto do grafo no prompt do motor
+`graphs/prompt_context.py::graph_prompt_section(graph_dir, text, repos, max_nodes=None, max_chars=None)` lê só os `graph.json` já indexados (sem tocar notas do vault nem a tabela de issues), pontua nós pelo overlap de tokens com `text`, inclui vizinhos de 1º grau e devolve uma seção Markdown enxuta `## Contexto do grafo` (ou `""` em silêncio, sem grafo). Tetos: `FORGE_GRAPH_PROMPT_MAX_NODES` (40) e `FORGE_GRAPH_PROMPT_MAX_CHARS` (6000). Injetada em todo prompt do motor: rascunho (`draft/service.py`), resolver (`resolver/service.py`) e investigação (`investigations/service.py`).
+
+## Investigação livre (sem issue)
+`POST /api/investigations/run` (`{description, repos: [...], issue_key?, connection_ids?}`, editor/owner) roda o motor configurado (`draft/engine.py::select_engine_adapter`) em modo somente leitura (Claude: `--permission-mode plan` + `--disallowedTools Bash,Write,Edit,WebFetch`), com a descrição, a seção do grafo e metadados não-secretos das conexões selecionadas (nunca o segredo cifrado). `GET /api/investigations` e `GET /api/investigations/{id}` listam/detalham. `POST /api/investigations/{id}/to-task` (`{repo?}`) gera um rascunho de tarefa via o mesmo fluxo de `/api/tasks/generate`, sem publicar no GitHub. Persistido em `investigation_notes` (migração `0018`; `kind='investigation'`, reaproveita a tabela das notas manuais, que agora aceitam `issue_key` nulo).
+
+## Conexões: travas de somente leitura reais (`connections/readonly.py`)
+`ReadOnlyFTP` (subclasse de `ftplib.FTP`) só deixa passar comandos de leitura (`LIST`, `RETR`, `CWD`, ...) e recusa qualquer outro antes do socket. `ReadOnlyPortainerClient` só permite `GET` em caminhos de leitura (`status`, `endpoints`, `containers/json`, `.../json|logs|stats`). `assert_readonly_query`/`ReadOnlySqlGuard` só deixam `SELECT`/`WITH`/`EXPLAIN`/`SHOW`, recusam DML/DDL (mesmo em comentário/string) e abrem a sessão do banco em modo leitura antes de executar. `probes.py` usa os dois primeiros; nenhuma resposta de `/api/connections` devolve segredo. `GET /api/connections` expõe `readonly: true` e `policy` (texto para a UI).
+
+## Exclusão de issues (`issues/delete.py`)
+`POST /api/issues/{owner}/{repo}/{number}/delete` (owner, `{"confirm": "owner/repo#numero"}` exato) tenta apagar via GraphQL `deleteIssue`; sem permissão de admin, recusa com `issue_delete_forbidden` e aceita `{"fallback": "close"}` para fechar como `not planned`. Depois limpa `completed_issues`, `drafts`/`task_links` da tarefa vinculada e desvincula notas/investigações (`issue_key = NULL`; `{"purge_notes": true}` apaga de vez).
+
+## Catálogo de agentes (aba "Agentes", `agent_catalog/`)
+Cadastro e monitoramento (sem execução) sobre as tabelas `agents`/`agent_executions`/`agent_approvals` (migração `0019`; não colide com `agent_runs`/`approval_grants` do Orchestrator interno, `agents/`). `GET /api/agents` (lista + métricas: ativos/total, execuções hoje, erros 24h, aprovações pendentes), `POST /api/agents` (owner; agente `company_system` com `permissions_write` cria um pedido pendente em `agent_approvals`), `GET /api/agents/{id}` (detalhe + últimas execuções), `POST /api/agents/{id}` (owner; pausar/reativar), `GET /api/agents/approvals`, `POST /api/agents/approvals/{id}/approve|reject` (owner). Escrita em `ftp`/`database`/`portainer`/`docker` é sempre recusada na validação (`write_denied_resource`), coerente com o guard real do item acima — aprovar não libera isso. Seed de exemplo (`agent_catalog/seed.py::seed_demo_agents`) nunca roda sozinho: só por chamada explícita, e só com a tabela vazia.
 
 ## Autenticação humana (ADR-014)
 `forge_core.auth`: login por OAuth device flow do GitHub (`github.py`), identidades e papéis `owner`/`editor`/`approver` em tabelas append-only (`store.py`) e CLI local (`cli.py`). Pré-requisito humano e operação: `docs/operacao/autenticacao-humana.md`. Os testes usam transporte falso (`tests/core/test_auth.py`).

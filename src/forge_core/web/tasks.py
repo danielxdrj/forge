@@ -9,7 +9,12 @@ from pathlib import Path
 from ..auth.store import Principal
 from ..draft.context import decode_utf8
 from ..draft.github_gh import GhCli, RemoteState, canonical_board_value, find_field
-from ..draft.service import DraftResult, DraftService, parse_model_json_from_body, parse_remote
+from ..draft.service import (
+    DraftResult,
+    DraftService,
+    parse_model_json_from_body,
+    parse_remote,
+)
 from ..draft.template import PENDING, required_pending, validate_repo
 from ..errors import DraftError
 from ..storage.drafts import (
@@ -84,6 +89,8 @@ class WebTaskService:
         drafts_dir: Path | None = None,
         field_cache: BoardFieldCache | None = None,
         graph_dir: Path | str | None = None,
+        graph_prompt_max_nodes: int | None = None,
+        graph_prompt_max_chars: int | None = None,
     ):
         self.repo = repo
         self.tasks = tasks
@@ -92,7 +99,10 @@ class WebTaskService:
         self.drafts_dir = Path(drafts_dir) if drafts_dir else Path(tempfile.mkdtemp(prefix="forge-web-drafts-"))
         self.drafts_dir.mkdir(parents=True, exist_ok=True)
         self.fields = field_cache or BoardFieldCache(gh)
-        self.drafts = DraftService(tasks, provider, gh, store=repo, graph_dir=graph_dir)
+        self.drafts = DraftService(
+            tasks, provider, gh, store=repo, graph_dir=graph_dir,
+            graph_prompt_max_nodes=graph_prompt_max_nodes, graph_prompt_max_chars=graph_prompt_max_chars,
+        )
 
     def list_repos(self, principal: Principal) -> list[dict]:
         self.tasks._auth.require(principal, "editor")

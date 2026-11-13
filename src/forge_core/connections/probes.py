@@ -12,7 +12,9 @@ import socket
 import ssl
 import struct
 from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
+from urllib.request import urlopen
+
+from .readonly import ReadOnlyFTP, ReadOnlyPortainerClient, ReadOnlyViolation
 
 HOST_TIMEOUT_SECONDS = 5.0
 CONNECTION_TYPES = ("mysql", "postgres", "ftp", "sftp", "portainer")
@@ -45,7 +47,7 @@ def _recvn(sock: socket.socket, n: int) -> bytes:
 def _tcp(host: str, port: int, timeout: float) -> socket.socket:
     try:
         sock = socket.create_connection((host, port), timeout=timeout)
-    except socket.timeout as exc:
+    except TimeoutError as exc:
         raise ProbeError("timeout") from exc
     except ConnectionRefusedError as exc:
         raise ProbeError("refused") from exc
@@ -91,7 +93,7 @@ class ConnectionProbes:
             body = struct.pack(">I", _PG_PROTOCOL) + payload
             sock.sendall(struct.pack(">I", 4 + len(body)) + body)
             self._pg_auth(sock, user, password)
-        except socket.timeout as exc:
+        except TimeoutError as exc:
             raise ProbeError("timeout") from exc
         finally:
             sock.close()
@@ -151,11 +153,11 @@ class ConnectionProbes:
         client_key = hmac.new(salted, b"Client Key", hashlib.sha256).digest()
         stored = hashlib.sha256(client_key).digest()
         client_final_wo = f"c=biws,r={attrs['r']}"
-        auth_msg = f"{client_first_bare},{server_first},{client_final_wo}".encode("utf-8")
+        auth_msg = f"{client_first_bare},{server_first},{client_final_wo}".encode()
         signature = hmac.new(stored, auth_msg, hashlib.sha256).digest()
         proof = bytes(a ^ b for a, b in zip(client_key, signature))
         proof_b64 = __import__("base64").b64encode(proof).decode("ascii")
-        client_final = f"{client_final_wo},p={proof_b64}".encode("utf-8")
+        client_final = f"{client_final_wo},p={proof_b64}".encode()
         sock.sendall(b"p" + struct.pack(">I", 4 + len(client_final)) + client_final)
         tag, payload = self._pg_read(sock)
         if tag == b"E" or (tag == b"R" and int.from_bytes(payload[:4], "big") not in (12, 0)):
@@ -180,7 +182,7 @@ class ConnectionProbes:
             if resp[0] == 0x01:
                 raise ProbeError("auth_unsupported")
             raise ProbeError("auth_failed")
-        except socket.timeout as exc:
+        except TimeoutError as exc:
             raise ProbeError("timeout") from exc
         finally:
             sock.close()
@@ -193,7 +195,7 @@ class ConnectionProbes:
     def _ftp(self, host: str, port: int, user: str, password: str, remote_path: str | None) -> None:
         import ftplib
 
-        cls = self._ftp_cls or ftplib.FTP
+        cls = self._ftp_cls or ReadOnlyFTP
         try:
             ftp = cls()
             ftp.connect(host, port, timeout=self.timeout)
@@ -203,7 +205,7 @@ class ConnectionProbes:
             ftp.quit()
         except ftplib.error_perm as exc:
             raise ProbeError("auth_failed") from exc
-        except socket.timeout as exc:
+        except TimeoutError as exc:
             raise ProbeError("timeout") from exc
         except ConnectionRefusedError as exc:
             raise ProbeError("refused") from exc
@@ -216,21 +218,24 @@ class ConnectionProbes:
             banner = sock.recv(256)
             if not banner.startswith(b"SSH-"):
                 raise ProbeError("protocol")
-        except socket.timeout as exc:
+        except TimeoutError as exc:
             raise ProbeError("timeout") from exc
         finally:
             sock.close()
 
     def _portainer(self, host: str, port: int, token: str) -> None:
-        url = f"http://{host}:{port}/api/status"
+        client = ReadOnlyPortainerClient(
+            f"http://{host}:{port}", token, timeout=self.timeout, urlopen_fn=self._urlopen,
+        )
         try:
-            req = Request(url, method="GET", headers={"X-API-Key": token, "Accept": "application/json"})
-            with self._urlopen(req, timeout=self.timeout) as resp:
+            with client.get("/api/status") as resp:
                 if getattr(resp, "status", 200) >= 400:
                     raise ProbeError("auth_failed")
+        except ReadOnlyViolation as exc:
+            raise ProbeError("protocol") from exc
         except ProbeError:
             raise
-        except socket.timeout as exc:
+        except TimeoutError as exc:
             raise ProbeError("timeout") from exc
         except HTTPError as exc:
             if exc.code in (401, 403):

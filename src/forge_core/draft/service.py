@@ -13,17 +13,31 @@ from pathlib import Path
 from ..agents.provider import ProviderAdapter
 from ..auth.store import Principal
 from ..errors import DraftError
+from ..graphs.prompt_context import graph_prompt_section
 from ..issues.related import find_related, format_related_prompt, format_related_section
 from ..redaction import redact_secrets
 from ..tasks.service import TaskService
 from .cursor_cli import build_prompt
 from .github_gh import (
-    GhCli, RemoteState, canonical_board_value, current_iteration_id, find_field,
-    match_option, names_match,
+    GhCli,
+    RemoteState,
+    canonical_board_value,
+    current_iteration_id,
+    find_field,
+    match_option,
+    names_match,
 )
 from .template import (
-    ASSIGNEE, PENDING, PROJECT_NUMBER, PROJECT_OWNER, PROJECT_TITLE,
-    branch_name, fill_inferred_sections, parse_model_json, render, required_pending,
+    ASSIGNEE,
+    PENDING,
+    PROJECT_NUMBER,
+    PROJECT_OWNER,
+    PROJECT_TITLE,
+    branch_name,
+    fill_inferred_sections,
+    parse_model_json,
+    render,
+    required_pending,
     validate_repo,
 )
 
@@ -167,13 +181,16 @@ def write_exclusive(path: Path, text: str) -> None:
 
 class DraftService:
     def __init__(self, tasks: TaskService, provider: ProviderAdapter, gh: GhCli | None = None,
-                 today: date | None = None, store=None, graph_dir: Path | str | None = None):
+                 today: date | None = None, store=None, graph_dir: Path | str | None = None,
+                 graph_prompt_max_nodes: int | None = None, graph_prompt_max_chars: int | None = None):
         self.tasks = tasks
         self.provider = provider
         self.gh = gh
         self.today = today or date.today()
         self.store = store
         self.graph_dir = Path(graph_dir) if graph_dir else None
+        self.graph_prompt_max_nodes = graph_prompt_max_nodes
+        self.graph_prompt_max_chars = graph_prompt_max_chars
 
     def generate(self, context: str, repo: str, principal: Principal, output: Path,
                  meta: dict, branch_prefix: str = "", board: dict | None = None) -> DraftResult:
@@ -183,7 +200,10 @@ class DraftService:
         if not context:
             raise DraftError("empty_context")
         related = self._related_issues(context, repo)
-        prompt = build_prompt(context, board, related_prompt=format_related_prompt(related))
+        graph_prompt = self._graph_section(context, [repo])
+        prompt = build_prompt(
+            context, board, related_prompt=format_related_prompt(related), graph_prompt=graph_prompt,
+        )
         if "FORGE_" in prompt or "GH_TOKEN" in prompt or "GITHUB_TOKEN" in prompt:
             raise DraftError("secret_in_prompt")
         try:
@@ -412,6 +432,17 @@ class DraftService:
             return find_related(store, context, repo, graph_dir=self.graph_dir)
         except Exception:
             return []
+
+    def _graph_section(self, context: str, repos: list[str]) -> str:
+        if self.graph_dir is None:
+            return ""
+        try:
+            return graph_prompt_section(
+                self.graph_dir, context, repos,
+                max_nodes=self.graph_prompt_max_nodes, max_chars=self.graph_prompt_max_chars,
+            )
+        except Exception:
+            return ""
 
 
 _BODY_HEADERS = (
