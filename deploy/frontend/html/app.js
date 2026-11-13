@@ -36,6 +36,8 @@
     loading: true,
     issues: [],
     issuesError: "",
+    issueQuery: "",
+    issueRepoFilter: "",
     selectedIssue: "",
     notes: [],
     selectedNoteId: "",
@@ -664,6 +666,14 @@
     const issue = document.getElementById("issue-select");
     if (issue) {
       state.selectedIssue = issue.value;
+    }
+    const issueQuery = document.getElementById("issue-filter-text");
+    const issueRepoFilter = document.getElementById("issue-filter-repo");
+    if (issueQuery) {
+      state.issueQuery = issueQuery.value;
+    }
+    if (issueRepoFilter) {
+      state.issueRepoFilter = issueRepoFilter.value;
     }
     const noteTitle = document.getElementById("note-title");
     const noteBody = document.getElementById("note-body");
@@ -1345,16 +1355,206 @@
     modal = openModal({ title: "Apagar issue", build: paint });
   }
 
-  function deleteIssueButton(owner, repoName, number, onDeleted) {
+  function trashIcon() {
+    const ns = "http://www.w3.org/2000/svg";
+    const svg = document.createElementNS(ns, "svg");
+    svg.setAttribute("viewBox", "0 0 16 16");
+    svg.setAttribute("width", "13");
+    svg.setAttribute("height", "13");
+    svg.setAttribute("aria-hidden", "true");
+    const path = document.createElementNS(ns, "path");
+    path.setAttribute("fill", "none");
+    path.setAttribute("stroke", "currentColor");
+    path.setAttribute("stroke-width", "1.5");
+    path.setAttribute("stroke-linecap", "round");
+    path.setAttribute("stroke-linejoin", "round");
+    path.setAttribute("d", "M5.5 6.2v5M8 6.2v5M10.5 6.2v5M3.5 4.3h9M6.2 4.3V3.2h3.6v1.1M4.2 4.3l.5 8.2h6.6l.5-8.2");
+    svg.appendChild(path);
+    return svg;
+  }
+
+  function deleteIssueButton(owner, repoName, number, onDeleted, compact) {
     if (!owner || !repoName || !number || !isOwner()) {
       return null;
     }
-    return el("button", {
+    const key = owner + "/" + repoName + "#" + number;
+    const btn = el("button", {
       type: "button",
-      class: "danger",
-      text: "Apagar issue",
-      onClick: function () { openDeleteIssueModal(owner, repoName, number, onDeleted); },
+      class: compact ? "danger issue-delete-btn" : "danger",
+      title: "Apagar issue",
+      "aria-label": "Apagar issue " + key,
+      onClick: function (ev) {
+        ev.stopPropagation();
+        openDeleteIssueModal(owner, repoName, number, onDeleted);
+      },
     });
+    if (compact) {
+      btn.appendChild(trashIcon());
+      btn.appendChild(el("span", { text: "Apagar" }));
+    } else {
+      btn.textContent = "Apagar issue";
+    }
+    return btn;
+  }
+
+  function issueRowKey(item) {
+    if (item.repo && item.number) {
+      const repo = String(item.repo);
+      const slash = repo.lastIndexOf("/");
+      const short = slash >= 0 ? repo.slice(slash + 1) : repo;
+      return short + "#" + item.number;
+    }
+    return item.issue_key || "";
+  }
+
+  function uniqueIssueRepos() {
+    const seen = {};
+    const out = [];
+    state.issues.forEach(function (item) {
+      const repo = item.repo || "";
+      if (repo && !seen[repo]) {
+        seen[repo] = true;
+        out.push(repo);
+      }
+    });
+    out.sort();
+    return out;
+  }
+
+  function filteredIssues() {
+    const q = (state.issueQuery || "").trim().toLowerCase();
+    const repo = state.issueRepoFilter || "";
+    return state.issues.filter(function (item) {
+      if (repo && item.repo !== repo) {
+        return false;
+      }
+      if (!q) {
+        return true;
+      }
+      const hay = [item.issue_key, item.title, item.repo, item.number].join(" ").toLowerCase();
+      return hay.indexOf(q) !== -1;
+    });
+  }
+
+  function onIssueDeleted(item) {
+    return async function () {
+      state.notice = "Issue " + item.issue_key + " apagada.";
+      await loadInvestigacao();
+      render();
+    };
+  }
+
+  function paintIssueRows(list) {
+    list.replaceChildren();
+    const items = filteredIssues();
+    if (!items.length) {
+      list.appendChild(el("p", {
+        class: "muted issue-list-empty",
+        text: state.issues.length ? "Nenhuma issue corresponde ao filtro." : "Nenhuma issue carregada.",
+      }));
+      return;
+    }
+    items.forEach(function (item) {
+      const parts = splitOwnerRepo(item.repo);
+      const row = el("div", {
+        class: "issue-row" + (state.selectedIssue === item.issue_key ? " active" : ""),
+      });
+      const pick = el("button", {
+        type: "button",
+        class: "issue-row-pick",
+        onClick: function () { selectIssue(item.issue_key); },
+      }, [
+        el("span", { class: "issue-row-key", text: issueRowKey(item) }),
+        el("span", { class: "issue-row-title", text: item.title || item.issue_key || "(sem título)" }),
+      ]);
+      row.appendChild(pick);
+      const del = deleteIssueButton(parts.owner, parts.repo, item.number, onIssueDeleted(item), true);
+      if (del) {
+        row.appendChild(del);
+      }
+      list.appendChild(row);
+    });
+  }
+
+  function renderIssuePicker() {
+    const issueBox = el("section", { class: "card" }, [
+      el("h2", { text: "Issue" }),
+      el("label", { text: "Issue do GitHub", for: "issue-select" }),
+    ]);
+    const select = el("select", {
+      id: "issue-select",
+      onChange: function (ev) { selectIssue(ev.target.value); },
+    });
+    select.appendChild(el("option", { value: "", text: "Selecione uma issue" }));
+    state.issues.forEach(function (item) {
+      const label = item.issue_key + (item.title ? " — " + item.title : "");
+      const opt = el("option", { value: item.issue_key, text: label });
+      if (state.selectedIssue === item.issue_key) {
+        opt.selected = true;
+      }
+      select.appendChild(opt);
+    });
+    issueBox.appendChild(select);
+    if (state.issuesError) {
+      issueBox.appendChild(el("p", { class: "muted", text: state.issuesError }));
+    }
+    const repoWrap = el("div", null, [
+      el("label", { text: "Repositório", for: "issue-filter-repo" }),
+    ]);
+    const toolbar = el("div", { class: "issue-toolbar" }, [
+      el("div", null, [
+        el("label", { text: "Filtrar", for: "issue-filter-text" }),
+        el("input", {
+          id: "issue-filter-text",
+          type: "text",
+          value: state.issueQuery || "",
+          placeholder: "Buscar por título, repo ou número",
+          onInput: function (ev) {
+            state.issueQuery = ev.target.value;
+            const list = document.getElementById("issue-list-scroll");
+            if (list) {
+              paintIssueRows(list);
+            }
+          },
+        }),
+      ]),
+      repoWrap,
+    ]);
+    const repoSel = el("select", {
+      id: "issue-filter-repo",
+      onChange: function (ev) {
+        state.issueRepoFilter = ev.target.value;
+        const list = document.getElementById("issue-list-scroll");
+        if (list) {
+          paintIssueRows(list);
+        }
+      },
+    });
+    repoSel.appendChild(el("option", { value: "", text: "Todos os repositórios" }));
+    uniqueIssueRepos().forEach(function (repo) {
+      const opt = el("option", { value: repo, text: repo });
+      if (state.issueRepoFilter === repo) {
+        opt.selected = true;
+      }
+      repoSel.appendChild(opt);
+    });
+    repoWrap.appendChild(repoSel);
+    issueBox.appendChild(toolbar);
+    const list = el("div", { class: "issue-list-scroll", id: "issue-list-scroll" });
+    paintIssueRows(list);
+    issueBox.appendChild(list);
+    if (isOwner()) {
+      issueBox.appendChild(el("div", { class: "issue-list-actions" }, [
+        el("button", {
+          type: "button",
+          class: "primary",
+          text: state.busy ? "Aguarde…" : "Importar issues concluídas",
+          disabled: state.busy ? "disabled" : null,
+          onClick: function () { importCompletedIssues(); },
+        }),
+      ]));
+    }
+    return issueBox;
   }
 
   async function openNote(noteId) {
@@ -1958,65 +2158,12 @@
       ]));
       return;
     }
-    renderInvestForm(root);
-    renderInvestResult(root);
-    renderInvestHistory(root);
-    root.appendChild(el("h2", { class: "section-divider", text: "Notas por issue" }));
-    const issueBox = el("section", { class: "card" }, [
-      el("h2", { text: "Issue" }),
-      el("label", { text: "Issue do GitHub", for: "issue-select" }),
-    ]);
-    const select = el("select", {
-      id: "issue-select",
-      onChange: function (ev) { selectIssue(ev.target.value); },
-    });
-    select.appendChild(el("option", { value: "", text: "Selecione uma issue" }));
-    state.issues.forEach(function (item) {
-      const label = item.issue_key + (item.title ? " — " + item.title : "");
-      const opt = el("option", { value: item.issue_key, text: label });
-      if (state.selectedIssue === item.issue_key) {
-        opt.selected = true;
-      }
-      select.appendChild(opt);
-    });
-    issueBox.appendChild(select);
-    if (state.issuesError) {
-      issueBox.appendChild(el("p", { class: "muted", text: state.issuesError }));
-    }
-    if (state.issues.length) {
-      const issueList = el("div", { class: "note-list" });
-      state.issues.forEach(function (item) {
-        const parts = splitOwnerRepo(item.repo);
-        const row = el("div", { class: "related-item" }, [
-          el("span", null, [
-            el("strong", { text: item.issue_key }),
-            el("span", { text: item.title ? " — " + item.title : "" }),
-          ]),
-        ]);
-        const del = deleteIssueButton(parts.owner, parts.repo, item.number, async function () {
-          state.notice = "Issue " + item.issue_key + " apagada.";
-          await loadInvestigacao();
-          render();
-        });
-        if (del) {
-          row.appendChild(del);
-        }
-        issueList.appendChild(row);
-      });
-      issueBox.appendChild(issueList);
-    }
-    if (isOwner()) {
-      issueBox.appendChild(el("div", { class: "row" }, [
-        el("button", {
-          type: "button",
-          class: "primary",
-          text: state.busy ? "Aguarde…" : "Importar issues concluídas",
-          disabled: state.busy ? "disabled" : null,
-          onClick: function () { importCompletedIssues(); },
-        }),
-      ]));
-    }
-    root.appendChild(issueBox);
+    const mainCol = el("div", { class: "investigacao-col-main" });
+    renderInvestForm(mainCol);
+    renderInvestResult(mainCol);
+    renderInvestHistory(mainCol);
+    mainCol.appendChild(el("h2", { class: "section-divider", text: "Notas por issue" }));
+    mainCol.appendChild(renderIssuePicker());
 
     const notesCard = el("section", { class: "card card-eng" }, [
       el("div", { class: "card-head" }, [
@@ -2102,8 +2249,6 @@
       });
       relatedCard.appendChild(relatedList);
     }
-    root.appendChild(el("div", { class: "investigacao-split" }, [notesCard, relatedCard]));
-
     const sources = el("section", { class: "card" }, [
       el("div", { class: "card-head" }, [
         el("h2", { text: "Fontes" }),
@@ -2118,7 +2263,10 @@
         sourceCard("F", "icon-core", "Obsidian", "Vault (aba Teia)"),
       ]),
     ]);
-    root.appendChild(sources);
+    root.appendChild(el("div", { class: "investigacao-cols" }, [
+      mainCol,
+      el("aside", { class: "investigacao-col-side" }, [notesCard, relatedCard, sources]),
+    ]));
   }
 
   function renderTeia(root) {
@@ -2645,7 +2793,9 @@
     renderNav();
     app.replaceChildren();
     const teiaOpen = !state.loading && !!state.who && activeTab() === "teia";
+    const investOpen = !state.loading && !!state.who && activeTab() === "investigacao";
     app.classList.toggle("teia-layout", teiaOpen);
+    app.classList.toggle("investigacao-layout", investOpen);
     document.body.classList.toggle("teia-open", teiaOpen);
     if (state.loading) {
       setPageTitle("Forge");

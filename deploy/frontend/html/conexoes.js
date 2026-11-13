@@ -49,6 +49,8 @@
     form: emptyForm(),
     error: "",
     errorDetail: null,
+    fieldErrors: {},
+    formWarning: "",
     notice: "",
     busy: false,
     testResult: null,
@@ -158,9 +160,10 @@
       invalid_user: "Informe o usuário.",
       invalid_port: "Porta inválida.",
       invalid_hosts: "Informe ao menos um host.",
-      invalid_host: "Host inválido (sem URL, usuário ou caminho).",
+      invalid_host: "Host inválido. Preencha o campo Host com o IP ou o hostname. O nome do banco vai no campo Banco.",
       invalid_host_label: "Cada host precisa de um rótulo.",
       invalid_preferred: "Host preferido inválido.",
+      form_invalid: "Há campos a corrigir. Veja o destaque no formulário.",
       invalid_secret: "Segredo inválido.",
       denied: "Autorização negada no GitHub.",
       expired: "O código expirou. Comece de novo.",
@@ -176,6 +179,24 @@
   function setError(code, detail) {
     state.error = code || "";
     state.errorDetail = detail || null;
+    if (code === "invalid_host" || code === "invalid_hosts" || code === "invalid_host_label") {
+      const errors = {};
+      (state.form.hosts || []).forEach(function (h, idx) {
+        if (code === "invalid_host_label" && !String(h.label || "").trim()) {
+          errors["conn-host-label-" + idx] = "Informe um rótulo para este host.";
+        }
+        if (code === "invalid_host" && !String(h.host || "").trim()) {
+          errors["conn-host-" + idx] = "Informe o host ou IP neste campo (não use o campo Banco).";
+        }
+        if (code === "invalid_host" && String(h.host || "").trim()) {
+          errors["conn-host-" + idx] = "Este host está inválido. Use IP, hostname ou a URL do Portainer.";
+        }
+      });
+      if (code === "invalid_hosts") {
+        errors["conn-hosts"] = "Informe ao menos um host.";
+      }
+      state.fieldErrors = errors;
+    }
     render();
   }
 
@@ -368,6 +389,20 @@
     }
     const form = readForm();
     state.form = form;
+    const check = validateConnectionForm(form);
+    state.fieldErrors = check.errors;
+    state.formWarning = check.warning;
+    if (Object.keys(check.errors).length) {
+      const first = firstFieldError(check.errors);
+      state.error = "form_invalid";
+      state.errorDetail = { message: check.errors[first] };
+      render();
+      const node = document.getElementById(first);
+      if (node && typeof node.focus === "function") {
+        node.focus();
+      }
+      return;
+    }
     state.busy = true;
     state.error = "";
     state.notice = "";
@@ -380,7 +415,9 @@
       setError((res.data && res.data.error) || "error", res.data);
       return;
     }
-    state.notice = form.id ? "Conexão atualizada. O segredo não é exibido." : "Conexão criada. O segredo não é exibido.";
+        state.fieldErrors = {};
+    state.formWarning = "";
+state.notice = form.id ? "Conexão atualizada. O segredo não é exibido." : "Conexão criada. O segredo não é exibido.";
     fillForm(res.data);
     await loadConnections();
     render();
@@ -513,6 +550,90 @@
     root.appendChild(box);
   }
 
+  function hostPlaceholder(type) {
+    if (type === "portainer") {
+      return "https://IP:9443";
+    }
+    if (type === "ftp" || type === "sftp") {
+      return "host ou IP";
+    }
+    return "ex.: 100.x.x.x ou db.empresa";
+  }
+
+  function hostHint(type) {
+    if (type === "portainer") {
+      return "URL do Portainer, inclusive o esquema e a porta, por exemplo https://192.168.0.10:9443.";
+    }
+    if (type === "ftp" || type === "sftp") {
+      return "Hostname ou IP do servidor. O caminho remoto vai no campo Caminho, não aqui.";
+    }
+    return "Hostname ou IP do servidor. Não coloque o IP no campo Banco.";
+  }
+
+  function looksLikeHostAddress(value) {
+    const v = String(value || "").trim();
+    if (!v) {
+      return false;
+    }
+    if (/^https?:\/\//i.test(v)) {
+      return true;
+    }
+    if (/^\d{1,3}(?:\.\d{1,3}){3}(?::\d+)?$/.test(v)) {
+      return true;
+    }
+    return false;
+  }
+
+  function fieldError(formEl, fieldId, message) {
+    const node = formEl.querySelector("#" + fieldId) || document.getElementById(fieldId);
+    if (node) {
+      node.classList.add("field-invalid");
+      node.setAttribute("aria-invalid", "true");
+    }
+    if (message) {
+      const hint = el("p", { class: "field-hint field-error", id: fieldId + "-error", text: message });
+      if (node && node.parentNode) {
+        node.parentNode.appendChild(hint);
+      }
+    }
+    return node;
+  }
+
+  function validateConnectionForm(form) {
+    const errors = {};
+    if (!String(form.name || "").trim()) {
+      errors["conn-name"] = "Informe um nome.";
+    }
+    if (!String(form.user || "").trim()) {
+      errors["conn-user"] = "Informe o usuário.";
+    }
+    const port = Number(form.port);
+    if (!Number.isInteger(port) || port < 1 || port > 65535) {
+      errors["conn-port"] = "Informe uma porta válida (1 a 65535).";
+    }
+    if (!form.hosts.length) {
+      errors["conn-hosts"] = "Informe ao menos um host.";
+    }
+    form.hosts.forEach(function (h, idx) {
+      if (!String(h.label || "").trim()) {
+        errors["conn-host-label-" + idx] = "Informe um rótulo para este host.";
+      }
+      if (!String(h.host || "").trim()) {
+        errors["conn-host-" + idx] = "Informe o host ou IP neste campo (não use o campo Banco).";
+      }
+    });
+    let warning = "";
+    if ((form.type === "mysql" || form.type === "postgres") && looksLikeHostAddress(form.database)) {
+      warning = "O campo Banco parece um IP ou uma URL. Coloque o endereço no campo Host; Banco é o nome do schema e é opcional.";
+    }
+    return { errors: errors, warning: warning };
+  }
+
+  function firstFieldError(errors) {
+    const keys = Object.keys(errors);
+    return keys.length ? keys[0] : "";
+  }
+
   function defaultPort(type) {
     return { postgres: "5432", mysql: "3306", ftp: "21", sftp: "22", portainer: "9000" }[type] || "";
   }
@@ -555,14 +676,28 @@
       root.appendChild(form);
       return;
     }
+    const fieldErrors = state.fieldErrors || {};
+    function mark(id, attrs) {
+      const next = Object.assign({}, attrs);
+      if (fieldErrors[id]) {
+        next.class = ((next.class || "") + " field-invalid").trim();
+        next["aria-invalid"] = "true";
+      }
+      return next;
+    }
+    function hintFor(id) {
+      return fieldErrors[id] ? el("p", { class: "field-hint field-error", id: id + "-error", text: fieldErrors[id] }) : null;
+    }
     form.appendChild(el("label", { text: "Nome", for: "conn-name" }));
-    form.appendChild(el("input", { id: "conn-name", type: "text", value: state.form.name }));
+    form.appendChild(el("input", mark("conn-name", { id: "conn-name", type: "text", value: state.form.name })));
+    form.appendChild(hintFor("conn-name"));
     form.appendChild(el("label", { text: "Tipo", for: "conn-type" }));
     const typeSel = el("select", { id: "conn-type", onChange: function () {
       state.form = readForm();
       if (!state.form.id) {
         state.form.port = defaultPort(state.form.type);
       }
+      state.fieldErrors = state.fieldErrors || {};
       render();
     } });
     TYPES.forEach(function (t) {
@@ -574,36 +709,33 @@
     });
     form.appendChild(typeSel);
     form.appendChild(el("label", { text: "Usuário", for: "conn-user" }));
-    form.appendChild(el("input", { id: "conn-user", type: "text", value: state.form.user, autocomplete: "off" }));
-    form.appendChild(el("label", { text: "Porta", for: "conn-port" }));
-    form.appendChild(el("input", { id: "conn-port", type: "text", value: state.form.port }));
-    if (state.form.type === "mysql" || state.form.type === "postgres") {
-      form.appendChild(el("label", { text: "Banco", for: "conn-database" }));
-      form.appendChild(el("input", { id: "conn-database", type: "text", value: state.form.database }));
-    }
-    if (state.form.type === "ftp" || state.form.type === "sftp") {
-      form.appendChild(el("label", { text: "Caminho", for: "conn-path" }));
-      form.appendChild(el("input", { id: "conn-path", type: "text", value: state.form.path }));
-    }
-    form.appendChild(el("label", { text: state.form.id ? "Substituir segredo (deixe em branco para manter)" : "Segredo (senha ou token Portainer)", for: "conn-secret" }));
-    form.appendChild(el("input", {
-      id: "conn-secret",
-      type: "password",
-      value: "",
-      autocomplete: "new-password",
-      placeholder: state.form.id ? "não é exibido; preencha só para trocar" : "",
-    }));
+    form.appendChild(el("input", mark("conn-user", { id: "conn-user", type: "text", value: state.form.user, autocomplete: "off" })));
+    form.appendChild(hintFor("conn-user"));
     form.appendChild(el("p", { class: "muted", text: "Hosts (rótulo + endereço). O teste tenta o preferido e depois a ordem." }));
-    const hostBox = el("div", { class: "hosts" });
+    form.appendChild(el("p", { class: "field-hint", text: hostHint(state.form.type) }));
+    if (fieldErrors["conn-hosts"]) {
+      form.appendChild(el("p", { class: "field-hint field-error", text: fieldErrors["conn-hosts"] }));
+    }
+    const hostBox = el("div", { class: "hosts", id: "conn-hosts" });
     state.form.hosts.forEach(function (h, idx) {
+      const labelId = "conn-host-label-" + idx;
+      const hostId = "conn-host-" + idx;
       const row = el("div", { class: "host-row" }, [
         el("div", null, [
-          el("label", { text: "Rótulo" }),
-          el("input", { type: "text", "data-host": "label", value: h.label }),
+          el("label", { text: "Rótulo", for: labelId }),
+          el("input", mark(labelId, { id: labelId, type: "text", "data-host": "label", value: h.label })),
+          hintFor(labelId),
         ]),
         el("div", null, [
-          el("label", { text: "Host" }),
-          el("input", { type: "text", "data-host": "host", value: h.host, placeholder: "100.x.x.x ou empresa.example.invalid" }),
+          el("label", { text: "Host", for: hostId }),
+          el("input", mark(hostId, {
+            id: hostId,
+            type: "text",
+            "data-host": "host",
+            value: h.host,
+            placeholder: hostPlaceholder(state.form.type),
+          })),
+          hintFor(hostId),
         ]),
         el("div", null, [
           el("label", { text: "Ordem" }),
@@ -615,16 +747,59 @@
     });
     form.appendChild(hostBox);
     form.appendChild(el("button", { type: "button", text: "Adicionar host", onClick: addHostRow }));
+    const portWrap = el("div", { class: "conn-port-row" });
+    portWrap.appendChild(el("label", { text: "Porta", for: "conn-port" }));
+    portWrap.appendChild(el("input", mark("conn-port", { id: "conn-port", type: "text", value: state.form.port })));
+    portWrap.appendChild(hintFor("conn-port"));
+    form.appendChild(portWrap);
+    if (state.form.type === "mysql" || state.form.type === "postgres") {
+      form.appendChild(el("label", { text: "Banco (opcional)", for: "conn-database" }));
+      form.appendChild(el("input", mark("conn-database", {
+        id: "conn-database",
+        type: "text",
+        value: state.form.database,
+        placeholder: "nome do schema (opcional)",
+        onInput: function (ev) {
+          const hint = document.getElementById("conn-database-warn");
+          if (hint) {
+            hint.hidden = !looksLikeHostAddress(ev.target.value);
+          }
+        },
+      })));
+      form.appendChild(el("p", { class: "field-hint", text: "Nome do schema ou do banco. Não coloque IP ou URL aqui." }));
+      const dbWarn = el("p", {
+        class: "field-hint field-warn",
+        id: "conn-database-warn",
+        text: "Este valor parece um IP ou uma URL. Mova o endereço para o campo Host e, em Banco, use só o nome do schema (pode ficar em branco).",
+      });
+      const shouldWarn = !!(state.formWarning || looksLikeHostAddress(state.form.database));
+      if (!shouldWarn) {
+        dbWarn.hidden = true;
+      }
+      form.appendChild(dbWarn);
+    }
+    if (state.form.type === "ftp" || state.form.type === "sftp") {
+      form.appendChild(el("label", { text: "Caminho", for: "conn-path" }));
+      form.appendChild(el("input", { id: "conn-path", type: "text", value: state.form.path, placeholder: "caminho remoto (opcional)" }));
+    }
     form.appendChild(el("label", { text: "Host preferido", for: "conn-preferred" }));
     const pref = el("select", { id: "conn-preferred" });
     state.form.hosts.forEach(function (h, idx) {
-      const opt = el("option", { value: String(idx), text: (h.label || "host") + " · " + (h.host || "(vazio)") });
+      const opt = el("option", { value: String(idx), text: (h.label || "host") + " — " + (h.host || "(vazio)") });
       if (idx === Number(state.form.preferred_index || 0)) {
         opt.selected = true;
       }
       pref.appendChild(opt);
     });
     form.appendChild(pref);
+    form.appendChild(el("label", { text: state.form.id ? "Substituir segredo (deixe em branco para manter)" : "Segredo (senha ou token Portainer)", for: "conn-secret" }));
+    form.appendChild(el("input", {
+      id: "conn-secret",
+      type: "password",
+      value: "",
+      autocomplete: "new-password",
+      placeholder: state.form.id ? "não é exibido; preencha só para trocar" : "",
+    }));
     form.appendChild(el("button", {
       type: "button",
       class: "primary",
@@ -640,11 +815,13 @@
           state.form = emptyForm();
           state.editing = null;
           state.testResult = null;
+          state.fieldErrors = {};
+          state.formWarning = "";
           render();
         },
       }));
     }
-    root.appendChild(form);
+        root.appendChild(form);
   }
 
   function renderList(root) {

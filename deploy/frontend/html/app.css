@@ -1102,3 +1102,150 @@ meter.success-meter::-moz-meter-bar { border-radius: 999px; }
   .host-row { grid-template-columns: 1fr; }
   .sidebar-note { display: none; }
 }
+
+
+main.investigacao-layout {
+  width: 100%;
+  max-width: none;
+}
+
+.investigacao-cols {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.investigacao-col-main,
+.investigacao-col-side {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  min-width: 0;
+}
+
+.investigacao-col-side .notes-grid {
+  grid-template-columns: 1fr;
+}
+
+.issue-toolbar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(8rem, 14rem);
+  gap: 0.55rem;
+  margin: 0.2rem 0 0.55rem;
+}
+
+.issue-toolbar label { margin-top: 0; }
+
+.issue-list-scroll {
+  max-height: 420px;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--input);
+}
+
+.issue-row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-width: 0;
+  padding: 0 0.35rem 0 0;
+  border-bottom: 1px solid var(--border);
+  background: transparent;
+}
+
+.issue-row:last-child { border-bottom: 0; }
+.issue-row:hover { background: var(--hover); }
+.issue-row.active {
+  background: var(--hover);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.issue-row-pick {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0.42rem 0.45rem;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  text-align: left;
+}
+
+.issue-row-pick:hover { border-color: transparent; }
+.issue-row-pick:focus { outline-offset: -2px; }
+
+.issue-row-key {
+  flex: 0 0 auto;
+  font-size: 0.72rem;
+  color: var(--muted);
+  font-family: ui-monospace, Consolas, "Liberation Mono", monospace;
+  white-space: nowrap;
+}
+
+.issue-row-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.88rem;
+}
+
+.issue-delete-btn {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.28rem;
+  margin: 0;
+  padding: 0.2rem 0.45rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.issue-list-actions { margin-top: 0.65rem; }
+.issue-list-actions button { margin: 0; }
+
+.issue-list-empty {
+  margin: 0;
+  padding: 0.8rem 0.7rem;
+}
+
+@media (min-width: 1100px) {
+  .investigacao-cols {
+    display: grid;
+    grid-template-columns: minmax(0, 1.2fr) minmax(22rem, 0.9fr);
+    gap: 1.1rem;
+    align-items: start;
+  }
+  .investigacao-col-side {
+    position: sticky;
+    top: 5.4rem;
+    max-height: calc(100vh - 6rem);
+    overflow: auto;
+  }
+}
+
+@media (max-width: 860px) {
+  .issue-toolbar { grid-template-columns: 1fr; }
+}
+
+input.field-invalid,
+select.field-invalid {
+  border-color: var(--danger);
+  background: var(--danger-bg);
+}
+.field-hint {
+  margin: 0.2rem 0 0;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+.field-hint.field-error { color: var(--danger); }
+.field-hint.field-warn { color: var(--warn); }
