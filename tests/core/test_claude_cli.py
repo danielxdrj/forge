@@ -5,7 +5,12 @@ import json
 import subprocess
 from pathlib import Path
 
-from forge_core.draft.claude_cli import ClaudeCliAdapter, parse_claude_result
+from forge_core.draft.claude_cli import (
+    READONLY_DISALLOWED_TOOLS,
+    ClaudeCliAdapter,
+    parse_claude_result,
+    resolve_max_turns,
+)
 from forge_core.draft.engine import select_engine_adapter
 from forge_core.errors import DraftError
 
@@ -80,6 +85,65 @@ def test_select_engine_falls_back_to_cursor_when_claude_missing(tmp_path):
         agent_bin="agent",
     )
     assert adapter.name == "cursor-cli"
+
+
+def test_claude_cli_default_max_turns_eight(tmp_path):
+    run, captured = _runner({"result": "ok"})
+    adapter = ClaudeCliAdapter(
+        agent_bin="claude", runner=run, env={"PATH": "/bin", "HOME": str(tmp_path)},
+        platform="linux", readonly=True,
+    )
+    adapter.complete("contexto")
+    argv = captured["argv"]
+    assert "--max-turns" in argv
+    assert argv[argv.index("--max-turns") + 1] == "8"
+
+
+def test_claude_cli_max_turns_env_override(tmp_path):
+    run, captured = _runner({"result": "ok"})
+    adapter = ClaudeCliAdapter(
+        agent_bin="claude", runner=run,
+        env={"PATH": "/bin", "HOME": str(tmp_path), "FORGE_CLAUDE_MAX_TURNS": "3"},
+        platform="linux", readonly=True,
+    )
+    adapter.complete("contexto")
+    argv = captured["argv"]
+    assert argv[argv.index("--max-turns") + 1] == "3"
+
+
+def test_claude_cli_explicit_max_turns_wins_over_env(tmp_path):
+    run, captured = _runner({"result": "ok"})
+    adapter = ClaudeCliAdapter(
+        agent_bin="claude", runner=run,
+        env={"PATH": "/bin", "HOME": str(tmp_path), "FORGE_CLAUDE_MAX_TURNS": "3"},
+        platform="linux", readonly=True, max_turns=12,
+    )
+    adapter.complete("contexto")
+    argv = captured["argv"]
+    assert argv[argv.index("--max-turns") + 1] == "12"
+
+
+def test_resolve_max_turns_invalid_env_falls_back_to_default():
+    assert resolve_max_turns({"FORGE_CLAUDE_MAX_TURNS": "nao-numero"}) == 8
+    assert resolve_max_turns({}) == 8
+    assert resolve_max_turns({"FORGE_CLAUDE_MAX_TURNS": "0"}) == 8
+
+
+def test_claude_cli_investigation_mode_sets_plan_and_disallowed_tools(tmp_path):
+    run, captured = _runner({"result": "achado"})
+    adapter = ClaudeCliAdapter(
+        agent_bin="claude", runner=run, env={"PATH": "/bin", "HOME": str(tmp_path)},
+        platform="linux", readonly=True, permission_mode="plan",
+        disallowed_tools=READONLY_DISALLOWED_TOOLS,
+    )
+    adapter.complete("investigue isto")
+    argv = captured["argv"]
+    assert "--permission-mode" in argv
+    assert argv[argv.index("--permission-mode") + 1] == "plan"
+    assert "--disallowedTools" in argv
+    assert argv[argv.index("--disallowedTools") + 1] == "Bash,Write,Edit,WebFetch"
+    assert "--allowedTools" in argv
+    assert "--dangerously-skip-permissions" not in argv
 
 
 def test_select_engine_uses_claude_when_logged_in(tmp_path):

@@ -4,7 +4,7 @@ from __future__ import annotations
 import re
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from ..auth.store import AuthStore, Principal
 from ..errors import AuthorizationError, ForgeError
@@ -28,7 +28,7 @@ class NoteRuleError(ForgeError):
 @dataclass(frozen=True)
 class NoteView:
     id: str
-    issue_key: str
+    issue_key: str | None
     title: str
     body: str
     created_by: str
@@ -55,7 +55,7 @@ class NoteView:
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _require_editor_or_owner(store: AuthStore, principal: Principal) -> Principal:
@@ -97,13 +97,14 @@ class NoteService:
             key = parse_issue_key(issue_key)
             rows = self._repo.fetch(
                 "SELECT id, issue_key, title, body, created_by, created_at, updated_at "
-                "FROM investigation_notes WHERE issue_key = ? ORDER BY updated_at DESC, id",
+                "FROM investigation_notes WHERE kind = 'note' AND issue_key = ? "
+                "ORDER BY updated_at DESC, id",
                 (key,),
             )
         else:
             rows = self._repo.fetch(
                 "SELECT id, issue_key, title, body, created_by, created_at, updated_at "
-                "FROM investigation_notes ORDER BY updated_at DESC, id",
+                "FROM investigation_notes WHERE kind = 'note' ORDER BY updated_at DESC, id",
             )
         return [NoteView(*row) for row in rows]
 
@@ -116,7 +117,8 @@ class NoteService:
 
     def create(self, principal: Principal, payload: dict) -> NoteView:
         _require_editor_or_owner(self._store, principal)
-        issue_key = _require_allowed_issue(self._repo, str(payload.get("issue_key") or ""))
+        raw_issue = str(payload.get("issue_key") or "").strip()
+        issue_key = _require_allowed_issue(self._repo, raw_issue) if raw_issue else None
         title = _title(payload.get("title"))
         body = _body(payload.get("body"))
         note_id = str(uuid.uuid4())
@@ -125,8 +127,8 @@ class NoteService:
         with self._repo.transaction() as tx:
             tx.execute(
                 "INSERT INTO investigation_notes "
-                "(id, issue_key, title, body, created_by, created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                "(id, issue_key, title, body, created_by, created_at, updated_at, kind) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, 'note')",
                 (note_id, issue_key, title, body, principal.identity_id, ts, ts),
             )
             tx.audit(
@@ -174,7 +176,7 @@ class NoteService:
     def _load(self, note_id: str) -> NoteView | None:
         rows = self._repo.fetch(
             "SELECT id, issue_key, title, body, created_by, created_at, updated_at "
-            "FROM investigation_notes WHERE id = ?",
+            "FROM investigation_notes WHERE kind = 'note' AND id = ?",
             (note_id,),
         )
         if not rows:

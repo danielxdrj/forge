@@ -10,9 +10,15 @@ from pathlib import Path
 from ..agents.provider import ProviderAdapter
 from ..auth.store import Principal
 from ..draft.github_gh import GhCli
-from ..draft.service import attach_draft, parse_draft_params, write_draft_sidecar, read_draft_sidecar
+from ..draft.service import (
+    attach_draft,
+    parse_draft_params,
+    read_draft_sidecar,
+    write_draft_sidecar,
+)
 from ..draft.template import branch_name, slug, validate_repo
 from ..errors import DraftError
+from ..graphs.prompt_context import graph_prompt_section
 from ..logging import redact
 from ..tasks.service import TaskService
 from .context_pack import build_pack
@@ -142,12 +148,17 @@ def tests_line(report: str) -> str:
 
 class ResolverService:
     def __init__(self, tasks: TaskService, provider: ProviderAdapter, gh: GhCli,
-                 git: GitCli | None = None, attempts: int = DEFAULT_ATTEMPTS):
+                 git: GitCli | None = None, attempts: int = DEFAULT_ATTEMPTS,
+                 graph_dir: str | None = None, graph_prompt_max_nodes: int | None = None,
+                 graph_prompt_max_chars: int | None = None):
         self.tasks = tasks
         self.provider = provider
         self.gh = gh
         self.git = git or GitCli()
         self.attempts = min(max(int(attempts), 1), MAX_ATTEMPTS)
+        self.graph_dir = graph_dir
+        self.graph_prompt_max_nodes = graph_prompt_max_nodes
+        self.graph_prompt_max_chars = graph_prompt_max_chars
 
     def start(self, issue_ref: str, principal: Principal, *, model: str = "",
               keep_clone: bool = False) -> ResolveResult:
@@ -308,7 +319,8 @@ class ResolverService:
         except DraftError:
             tracked = []
         pack = build_pack(issue=detail, root=Path(state.clone), tracked=tracked)
-        prompt = build_implementer_prompt(pack)
+        graph_prompt = self._graph_section(detail, state.repo)
+        prompt = build_implementer_prompt(pack, graph_prompt=graph_prompt)
         if "GH_TOKEN" in prompt or "FORGE_" in prompt:
             raise DraftError("secret_in_prompt")
         last_err = None
@@ -325,6 +337,18 @@ class ResolverService:
         state.report = redact(text)
         state.tests = tests_line(state.report)
         assert_git_meta_unchanged(Path(state.clone), state.git_meta)
+
+    def _graph_section(self, detail: dict, repo: str) -> str:
+        if self.graph_dir is None:
+            return ""
+        text = f"{detail.get('title') or ''}\n{detail.get('body') or ''}"
+        try:
+            return graph_prompt_section(
+                self.graph_dir, text, [repo],
+                max_nodes=self.graph_prompt_max_nodes, max_chars=self.graph_prompt_max_chars,
+            )
+        except Exception:
+            return ""
 
     def _validate(self, state: ResolveState) -> str:
         root = Path(state.clone)

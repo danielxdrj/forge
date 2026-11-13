@@ -210,7 +210,8 @@ class ContextGraph:
                 _edge(edges, seen_edge, issue_id, file_id, "touches")
 
         note_rows = self._repo.fetch(
-            "SELECT id, issue_key, title FROM investigation_notes ORDER BY updated_at DESC, id",
+            "SELECT id, issue_key, title FROM investigation_notes "
+            "WHERE kind = 'note' AND issue_key IS NOT NULL ORDER BY updated_at DESC, id",
         )
         for note_id, issue_key, title in note_rows:
             repo_name, _sep, _num = (issue_key or "").partition("#")

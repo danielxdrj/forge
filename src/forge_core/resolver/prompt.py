@@ -11,5 +11,8 @@ Não invente arquivos fora deste clone.
 """
 
 
-def build_implementer_prompt(pack: str) -> str:
-    return INSTRUCTION + "\n\nPACOTE:\n" + pack + "\n"
+def build_implementer_prompt(pack: str, graph_prompt: str = "") -> str:
+    graph = ""
+    if (graph_prompt or "").strip():
+        graph = "\n" + graph_prompt.strip() + "\n"
+    return INSTRUCTION + graph + "\n\nPACOTE:\n" + pack + "\n"

@@ -4,13 +4,14 @@ from __future__ import annotations
 import re
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from ..auth.store import AuthStore, Principal
 from ..errors import AuthorizationError, ForgeError
 from ..logging import redact
 from ..storage.sql import SqlRepository
 from .probes import CONNECTION_TYPES, ConnectionProbes, ProbeError
+from .readonly import POLICY_TEXT
 from .vault import ConnectionsVault, VaultDisabled
 
 _HOST = re.compile(r"^[A-Za-z0-9._:-]{1,253}$")
@@ -78,7 +79,7 @@ class ConnectionView:
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _require_reader(store: AuthStore, principal: Principal) -> Principal:
@@ -110,8 +111,10 @@ class ConnectionService:
                 "message": "Área Conexões desligada: chave de cifração ausente ou inválida. "
                 "Gere uma chave Fernet e entregue-a em /run/secrets/forge_connections_key "
                 "(FORGE_CONNECTIONS_KEY no compose; o entrypoint grava o arquivo e remove a variável).",
+                "readonly": True,
+                "policy": POLICY_TEXT,
             }
-        return {"enabled": True}
+        return {"enabled": True, "readonly": True, "policy": POLICY_TEXT}
 
     def _need_vault(self) -> None:
         if not self._vault.enabled:

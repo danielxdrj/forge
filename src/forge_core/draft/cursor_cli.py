@@ -17,7 +17,12 @@ from pathlib import Path, PureWindowsPath
 from ..agents.provider import ProviderResponse
 from ..errors import DraftError
 from ..logging import redact
-from .envfilter import assert_no_host_secrets, cursor_env_allow, filter_env, harden_implementer_env
+from .envfilter import (
+    assert_no_host_secrets,
+    cursor_env_allow,
+    filter_env,
+    harden_implementer_env,
+)
 from .template import INSTRUCTION
 
 # https://cursor.com/docs/cli/reference/permissions
@@ -312,7 +317,9 @@ def implementer_adapter(**kwargs) -> CursorCliAdapter:
     return CursorCliAdapter(**kwargs)
 
 
-def build_prompt(user_context: str, board: dict | None = None, related_prompt: str = "") -> str:
+def build_prompt(
+    user_context: str, board: dict | None = None, related_prompt: str = "", graph_prompt: str = "",
+) -> str:
     extra = ""
     if board:
         lines = ["Opções reais do board (sugira só valores desta lista; [PENDENTE] só se não der para decidir):"]
@@ -323,7 +330,10 @@ def build_prompt(user_context: str, board: dict | None = None, related_prompt: s
     related = ""
     if (related_prompt or "").strip():
         related = "\n" + related_prompt.strip() + "\n"
-    return INSTRUCTION + extra + related + "\n\nCONTEXTO_DO_USUARIO:\n" + user_context + "\n"
+    graph = ""
+    if (graph_prompt or "").strip():
+        graph = "\n" + graph_prompt.strip() + "\n"
+    return INSTRUCTION + extra + related + graph + "\n\nCONTEXTO_DO_USUARIO:\n" + user_context + "\n"
 
 
 def diagnose_cursor_cli(

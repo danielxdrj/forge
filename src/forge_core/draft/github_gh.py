@@ -136,6 +136,18 @@ query($owner: String!, $name: String!, $number: Int!) {
 }
 """
 
+DELETE_ISSUE_MUTATION = """
+mutation($id: ID!) {
+  deleteIssue(input: {issueId: $id}) {
+    clientMutationId
+  }
+}
+"""
+_DELETE_FORBIDDEN_MARKERS = (
+    "not accessible", "resource not accessible", "must have admin",
+    "must be an administrator", "403", "forbidden", "insufficient",
+)
+
 DEFAULT_HEAD_QUERY = """
 query($owner: String!, $name: String!) {
   repository(owner: $owner, name: $name) {
@@ -189,7 +201,7 @@ class GhCli:
 
     def _run(
         self, args: list[str], *, cwd: str | None = None, timeout: int | None = None,
-        max_output: int | None = None,
+        max_output: int | None = None, classify: Callable[[str], str | None] | None = None,
     ) -> str:
         argv = [self.bin, *args]
         self.calls.append(argv)
@@ -209,6 +221,10 @@ class GhCli:
         text = raw.decode("utf-8", "replace")
         if proc.returncode != 0:
             err = (proc.stderr or b"").decode("utf-8", "replace").lower()
+            if classify is not None:
+                code = classify(err)
+                if code:
+                    raise DraftError(code)
             if "project" in err and ("scope" in err or "403" in err or "resource not accessible" in err):
                 raise DraftError("project_scope", "gh auth refresh -s project")
             if "release not found" in err or "no releases found" in err:
@@ -577,6 +593,34 @@ class GhCli:
             "sprint": sprint,
             "prs": prs,
         }
+
+    def node_id_of_issue(self, repo: str, number: int) -> str:
+        owner, _, name = (repo or "").partition("/")
+        if not owner or not name:
+            raise DraftError("gh_error")
+        text = self._run(["api", f"repos/{owner}/{name}/issues/{int(number)}", "--jq", ".node_id"])
+        node_id = text.strip()
+        if not node_id:
+            raise DraftError("gh_error")
+        return node_id
+
+    def delete_issue(self, repo: str, number: int) -> None:
+        """Apaga a issue (mutation GraphQL `deleteIssue`). Exige permissão de admin no repositório."""
+        node_id = self.node_id_of_issue(repo, number)
+
+        def classify(err: str) -> str | None:
+            if any(marker in err for marker in _DELETE_FORBIDDEN_MARKERS):
+                return "issue_delete_forbidden"
+            return None
+
+        self._run(
+            ["api", "graphql", "-f", f"query={DELETE_ISSUE_MUTATION}", "-F", f"id={node_id}"],
+            classify=classify,
+        )
+
+    def close_issue_not_planned(self, repo: str, number: int) -> None:
+        """Fallback quando apagar é recusado por falta de permissão: fecha como `not planned`."""
+        self._run(["issue", "close", str(number), "--repo", repo, "--reason", "not planned"])
 
     def find_pr(self, repo: str, head: str) -> str | None:
         """Procura PR existente pela branch. Somente leitura; não cria PR."""

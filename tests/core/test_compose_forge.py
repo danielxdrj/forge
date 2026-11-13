@@ -221,7 +221,7 @@ def test_frontend_shell_tabs_and_theme():
     assert ".pill-ok" in css
     assert ".pill-warn" in css
     assert ".teia-page" in css
-    assert "340px" in css
+    assert "360px" in css
     assert ".teia-web" in css
     assert "#0E0E10" in css
     assert ".pill-danger" in css
