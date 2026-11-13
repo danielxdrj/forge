@@ -8,6 +8,7 @@ from fastapi.responses import JSONResponse
 
 from ..errors import AuthorizationError, DraftError
 from ..investigations.service import InvestigationRuleError, InvestigationService
+from ..storage.seed import list_active_allowed_repos
 
 
 def register_investigation_routes(
@@ -37,6 +38,15 @@ def register_investigation_routes(
             "repo_not_allowed": 400,
         }.get(exc.code, 400)
         return json_error(status, exc.code, hint=exc.hint or None)
+
+    @app.get("/api/investigations/repos")
+    def api_investigation_repos(request: Request):
+        """Repositórios elegíveis para a investigação livre (editor ou owner; /api/repos exige editor)."""
+        principal = need_editor_or_owner(request)
+        if isinstance(principal, JSONResponse):
+            return principal
+        rows = list_active_allowed_repos(request.app.state.repo)
+        return {"repos": [f"{r.owner}/{r.repo_name}" for r in rows]}
 
     @app.post("/api/investigations/run")
     async def api_run_investigation(request: Request):

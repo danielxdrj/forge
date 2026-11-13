@@ -11,8 +11,35 @@
   const TYPE_LABEL = {};
   TYPES.forEach(function (t) { TYPE_LABEL[t.id] = t.label; });
 
+  const WHO_CACHE_KEY = "forge-who";
+
+  function cacheWho(who) {
+    try {
+      window.sessionStorage.setItem(WHO_CACHE_KEY, JSON.stringify(who));
+    } catch (err) {
+      /* quota ou modo privado: segue sem cache */
+    }
+  }
+
+  function readCachedWho() {
+    try {
+      const raw = window.sessionStorage.getItem(WHO_CACHE_KEY);
+      return raw ? JSON.parse(raw) : null;
+    } catch (err) {
+      return null;
+    }
+  }
+
+  function clearCachedWho() {
+    try {
+      window.sessionStorage.removeItem(WHO_CACHE_KEY);
+    } catch (err) {
+      /* ignore */
+    }
+  }
+
   const state = {
-    who: null,
+    who: readCachedWho(),
     pending: null,
     pollTimer: null,
     enabled: true,
@@ -156,10 +183,12 @@
     const res = await api("/api/auth/whoami");
     if (res.status === 401) {
       state.who = null;
+      clearCachedWho();
       return;
     }
     if (res.ok) {
       state.who = res.data;
+      cacheWho(res.data);
     }
   }
 
@@ -208,16 +237,18 @@
 
   async function afterLogin() {
     await loadWhoami();
+    render();
     if (isReader()) {
       await loadConnections();
+      render();
     }
-    render();
   }
 
   async function logout() {
     await api("/api/auth/logout", { method: "POST", body: {} });
     stopPoll();
     state.who = null;
+    clearCachedWho();
     state.pending = null;
     state.connections = [];
     render();
@@ -404,6 +435,29 @@
         conn.setAttribute("hidden", "");
       }
     }
+    const agentes = document.getElementById("nav-agentes");
+    if (agentes) {
+      if (isReader()) {
+        agentes.removeAttribute("hidden");
+      } else {
+        agentes.setAttribute("hidden", "");
+      }
+    }
+  }
+
+  function pageHeader(eyebrow, title, subtitle) {
+    return el("header", { class: "page-header" }, [
+      el("p", { class: "page-eyebrow", text: eyebrow }),
+      el("h2", { class: "page-title", text: title }),
+      subtitle ? el("p", { class: "page-subtitle", text: subtitle }) : null,
+    ]);
+  }
+
+  function readonlySeal() {
+    return el("p", { class: "banner banner-info seal-readonly" }, [
+      el("span", { class: "pill pill-ok", text: "SOMENTE LEITURA" }),
+      el("span", { text: "Agentes não alteram dados nem recebem suas credenciais de escrita." }),
+    ]);
   }
 
   function rolePill(role) {
@@ -643,7 +697,7 @@
         el("td", { text: hosts }),
         el("td", null, [el("span", {
           class: "pill " + (conn.secret_set ? "pill-ok" : "pill-muted"),
-          text: conn.secret_set ? "definido" : "ausente",
+          text: conn.secret_set ? "•••• definido" : "ausente",
         })]),
         el("td", null, actions),
       ]));
@@ -693,6 +747,8 @@
       renderLogin(app);
       return;
     }
+    app.appendChild(pageHeader("04 — CONEXÕES", "Conexões", "Conectores somente leitura para banco de dados, FTP/SFTP e Portainer."));
+    app.appendChild(readonlySeal());
     if (!isReader()) {
       app.appendChild(el("section", { class: "card" }, [
         el("p", { class: "error", text: "Só owner ou editor acessam Conexões. Owner cria/edita/apaga; editor lista e testa." }),
@@ -717,14 +773,17 @@
     try {
       await api("/api/health");
       await loadWhoami();
+      state.loading = false;
+      render();
       if (isReader()) {
         await loadConnections();
+        render();
       }
     } catch (err) {
       state.error = "api_unreachable";
+      state.loading = false;
+      render();
     }
-    state.loading = false;
-    render();
   }
 
   boot();

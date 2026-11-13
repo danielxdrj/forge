@@ -218,7 +218,36 @@ class AgentCatalogService:
             f"SELECT {AGENT_COLUMNS} FROM agents ORDER BY lower(name), id",
         )
         agents = [_agent_from_row(r) for r in rows]
-        return {"agents": [a.as_json() for a in agents], "metrics": self._metrics(agents)}
+        stats = self._agent_stats([a.id for a in agents])
+        agent_views = []
+        for a in agents:
+            view = a.as_json()
+            view.update(stats.get(a.id) or {"last_execution_at": None, "success_rate": None})
+            agent_views.append(view)
+        return {"agents": agent_views, "metrics": self._metrics(agents)}
+
+    def _agent_stats(self, agent_ids: list[str]) -> dict[str, dict]:
+        """Última execução e taxa de sucesso (até as 20 mais recentes) por agente."""
+        if not agent_ids:
+            return {}
+        placeholders = ",".join("?" for _ in agent_ids)
+        rows = self._repo.fetch(
+            f"SELECT agent_id, started_at, status FROM agent_executions "
+            f"WHERE agent_id IN ({placeholders}) ORDER BY started_at DESC",
+            tuple(agent_ids),
+        )
+        by_agent: dict[str, list[tuple[str, str]]] = {}
+        for agent_id, started_at, status in rows:
+            by_agent.setdefault(agent_id, []).append((started_at, status))
+        out: dict[str, dict] = {}
+        for agent_id, items in by_agent.items():
+            window = items[:20]
+            ok = sum(1 for _, status in window if status == "ok")
+            out[agent_id] = {
+                "last_execution_at": items[0][0],
+                "success_rate": round(100 * ok / len(window)) if window else None,
+            }
+        return out
 
     def get_agent(self, principal: Principal, agent_id: str) -> dict:
         self._require_reader(principal)

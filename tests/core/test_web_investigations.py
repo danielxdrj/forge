@@ -129,6 +129,24 @@ def test_run_list_get_investigation(tmp_path):
     assert got.json()["id"] == data["id"]
 
 
+def test_list_repos_works_for_owner_without_editor_role(tmp_path):
+    settings = _settings(tmp_path)
+    repo = open_repository(settings.database_url)
+    seed_allowed_repos(repo)
+    bootstrap(repo, FakeGitHub(), "dona", 1000)
+    app = create_app(
+        repo, settings, transport=Scripted(user=(1000, "dona")),
+        investigation_provider=FakeAdapter(), drafts_dir=tmp_path / "drafts",
+    )
+    client = TestClient(app, base_url="http://127.0.0.1:8090")
+    _login(client)
+    listed = client.get("/api/investigations/repos", headers=HOST)
+    assert listed.status_code == 200
+    assert REPO in listed.json()["repos"]
+    denied = client.get("/api/repos", headers=HOST)
+    assert denied.status_code == 403
+
+
 def test_run_requires_editor_role(tmp_path):
     client, _repo = _app(tmp_path, editor=False)
     csrf = _login(client)

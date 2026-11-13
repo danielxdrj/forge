@@ -115,6 +115,22 @@ def test_list_and_get_agent_with_metrics_and_executions(make_repo):
     assert len(detail["executions"]) == 2
 
 
+def test_list_agents_includes_last_execution_and_success_rate(make_repo):
+    repo = make_repo()
+    svc = _svc(repo)
+    dona = actor(repo, "dona")
+    a1 = svc.create(dona, {"name": "a1", "scope": "development"})
+    a2 = svc.create(dona, {"name": "a2", "scope": "development"})
+    svc.record_execution(a1.id, status="ok", event="run 1", started_at="2026-01-01T00:00:00+00:00")
+    svc.record_execution(a1.id, status="error", event="run 2", started_at="2026-01-02T00:00:00+00:00")
+    listed = svc.list_agents(dona)
+    by_id = {a["id"]: a for a in listed["agents"]}
+    assert by_id[a1.id]["last_execution_at"] == "2026-01-02T00:00:00+00:00"
+    assert by_id[a1.id]["success_rate"] == 50
+    assert by_id[a2.id]["last_execution_at"] is None
+    assert by_id[a2.id]["success_rate"] is None
+
+
 def test_update_status_pauses_agent(make_repo):
     repo = make_repo()
     svc = _svc(repo)
