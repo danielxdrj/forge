@@ -77,10 +77,14 @@ class SqlRepository:
 
     def _fetch(self, sql: str, params: tuple = ()) -> list[tuple]:
         cur = self._conn.cursor()
-        cur.execute(self._q(sql), params)
-        rows = cur.fetchall()
-        self._conn.commit()
-        return rows
+        try:
+            cur.execute(self._q(sql), params)
+            rows = cur.fetchall()
+            self._conn.commit()
+            return rows
+        except Exception:
+            self._conn.rollback()
+            raise
 
     @staticmethod
     def _audit_write(actor: str, action: str, target: str, result: str) -> tuple[str, tuple]:
