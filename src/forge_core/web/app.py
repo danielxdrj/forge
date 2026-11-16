@@ -11,6 +11,7 @@ from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field
 
 from ..agent_catalog.service import AgentCatalogService
+from ..ai_settings import AiSettings
 from ..auth.github import DeviceFlow, DeviceFlowError, Transport, UrllibTransport
 from ..auth.store import AuthStore, Principal
 from ..config import Settings
@@ -29,6 +30,7 @@ from ..obsidian.vault import ObsidianVault
 from ..radar.service import RadarScheduler, RadarService
 from ..storage.sql import SqlRepository
 from .agents import register_agent_catalog_routes
+from .ai_settings import register_ai_settings_routes
 from .connections import register_connection_routes
 from .context_graph import register_context_graph_routes
 from .graphs import register_graph_routes
@@ -113,13 +115,14 @@ def create_app(
     notes = NoteService(repo, store)
     issue_delete = IssueDeleteService(repo, store, gh)
     agent_catalog = AgentCatalogService(repo, store)
+    ai_settings = AiSettings(repo, store)
     investigations = InvestigationService(
-        repo, store, provider=investigation_provider, gh=gh, graph_dir=settings.graph_dir,
+        repo, store, provider=investigation_provider, gh=gh, ai_settings=ai_settings, graph_dir=settings.graph_dir,
         graph_prompt_max_nodes=settings.graph_prompt_max_nodes,
         graph_prompt_max_chars=settings.graph_prompt_max_chars,
         claude_max_turns=settings.claude_max_turns,
     )
-    radar = RadarService(repo, store, settings, gh=gh, provider=radar_provider)
+    radar = RadarService(repo, store, settings, gh=gh, provider=radar_provider, ai_settings=ai_settings)
     radar_scheduler = RadarScheduler(radar, settings)
     obsidian_vault = obsidian if obsidian is not None else ObsidianVault.from_settings(settings)
     issues = issue_importer if issue_importer is not None else CompletedIssueImporter(
@@ -145,6 +148,7 @@ def create_app(
     app.state.issue_delete = issue_delete
     app.state.agent_catalog = agent_catalog
     app.state.radar = radar
+    app.state.ai_settings = ai_settings
     app.state.radar_scheduler = radar_scheduler
 
     def _audit(actor: str, action: str, target: str, result: str) -> None:
@@ -539,6 +543,13 @@ def create_app(
         app,
         issue_delete,
         json_error=_json_error,
+        need_owner=_need_owner,
+    )
+    register_ai_settings_routes(
+        app,
+        ai_settings,
+        json_error=_json_error,
+        need_editor_or_owner=_need_editor_or_owner,
         need_owner=_need_owner,
     )
     register_radar_routes(

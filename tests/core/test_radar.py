@@ -7,6 +7,7 @@ import pytest
 from auth_helpers import TEST_CLIENT_ID, FakeGitHub, actor, bootstrap, person
 
 from forge_core.agents.provider import ProviderResponse
+from forge_core.ai_settings import AiSettings
 from forge_core.auth.store import AuthStore
 from forge_core.config import load_settings
 from forge_core.draft.github_gh import _open_item
@@ -196,9 +197,10 @@ def _settings(tmp_path, **env):
 
 def _svc(repo, tmp_path, gh=None, provider=None):
     seed_allowed_repos(repo)
+    store = AuthStore(repo)
     return RadarService(
-        repo, AuthStore(repo), _settings(tmp_path), gh=gh or FakeBoardGh(),
-        provider=provider or FakeSummary(), clock=lambda: NOW,
+        repo, store, _settings(tmp_path), gh=gh or FakeBoardGh(),
+        provider=provider or FakeSummary(), clock=lambda: NOW, ai_settings=AiSettings(repo, store, env={}),
     )
 
 
@@ -227,8 +229,29 @@ def test_run_saves_report_summary_and_agent_execution(make_repo, tmp_path):
     )
     assert execs == [("ok", "1 para concluir já, 1 paradas, 2 abertas", 300, 9000, "claude-opus-5-5", 0.12)]
     assert report["usage"]["cost_usd"] == 0.12
+    assert report["reused_summary"] is False
     svc.run_now("schedule", "sistema:radar")
     assert len(repo.fetch("SELECT id FROM agents WHERE name = ?", (AGENT_NAME,))) == 1
+
+
+def test_unchanged_backlog_reuses_summary_without_calling_engine(make_repo, tmp_path):
+    repo = make_repo()
+    provider = FakeSummary()
+    gh = FakeBoardGh()
+    svc = _svc(repo, tmp_path, gh=gh, provider=provider)
+    first = svc.run_now("manual", "tester")
+    second = svc.run_now("schedule", "sistema:radar")
+    assert len(provider.prompts) == 1
+    assert second["summary"] == first["summary"]
+    assert second["reused_summary"] is True
+    assert second["usage"] == {}
+    reused = [row for row in repo.fetch("SELECT event, cost_usd FROM agent_executions")
+              if row[0].endswith("sem mudanças, resumo reaproveitado")]
+    assert reused == [(reused[0][0], None)]
+    gh.items = gh.items + [_item(3, prioridade="Urgente", title="Nova urgência")]
+    third = svc.run_now("schedule", "sistema:radar")
+    assert third["reused_summary"] is False
+    assert len(provider.prompts) == 2
 
 
 def test_summary_failure_keeps_report(make_repo, tmp_path):
@@ -257,8 +280,10 @@ def test_overview_history_and_roles(make_repo, tmp_path):
     ana = actor(repo, "ana")
     empty = svc.overview(ana)
     assert empty["latest"] is None
-    assert empty["schedule"] == ["11:00", "15:40", "17:50"]
-    assert empty["next_run"].startswith("2026-11-16T15:40")
+    assert empty["auto"] is True
+    assert empty["time"] == "11:00"
+    assert empty["schedule"] == ["11:00"]
+    assert empty["next_run"].startswith("2026-11-17T11:00")
     first = svc.run_now("manual", ana.identity_id)
     assert svc.overview(ana)["latest"]["id"] == first["id"]
     history = svc.history(ana)
@@ -292,30 +317,34 @@ def test_next_run_uses_local_timezone():
     assert next_run(NOW, (), "America/Sao_Paulo") is None
 
 
-def test_scheduler_fires_once_per_slot(make_repo, tmp_path):
+def test_scheduler_fires_once_a_day_and_respects_toggle(make_repo, tmp_path):
     repo = make_repo()
     gh = FakeBoardGh()
     svc = _svc(repo, tmp_path, gh=gh)
+    dona = actor(repo, "dona")
+    ai = AiSettings(repo, AuthStore(repo), env={})
     clock = {"now": datetime(2026, 11, 16, 13, 59, tzinfo=UTC)}
     sched = RadarScheduler(svc, _settings(tmp_path), clock=lambda: clock["now"])
     assert sched.tick() is False
     clock["now"] = datetime(2026, 11, 16, 14, 0, 30, tzinfo=UTC)
     assert sched.tick() is True
     assert sched.tick() is False
-    clock["now"] = datetime(2026, 11, 16, 14, 30, tzinfo=UTC)
-    assert sched.tick() is False
     clock["now"] = datetime(2026, 11, 16, 18, 45, tzinfo=UTC)
+    assert sched.tick() is False
+    ai.update(dona, {"radar": {"auto": False}})
+    clock["now"] = datetime(2026, 11, 17, 14, 1, tzinfo=UTC)
+    assert sched.tick() is False
+    ai.update(dona, {"radar": {"auto": True, "time": "16:30"}})
+    clock["now"] = datetime(2026, 11, 17, 19, 31, tzinfo=UTC)
     assert sched.tick() is True
     assert gh.calls == 2
 
 
 def test_radar_settings_validation(tmp_path):
     settings = _settings(tmp_path)
-    assert settings.radar_times == ("11:00", "15:40", "17:50")
     assert settings.radar_stale_days == 14
     assert settings.radar_timezone == "America/Sao_Paulo"
-    assert _settings(tmp_path, FORGE_RADAR_TIMES="").radar_times == ()
-    for env in ({"FORGE_RADAR_TIMES": "25:00"}, {"FORGE_RADAR_STALE_DAYS": "0"}, {"FORGE_RADAR_TIMEZONE": "Lua/Base"}):
+    for env in ({"FORGE_RADAR_STALE_DAYS": "0"}, {"FORGE_RADAR_TIMEZONE": "Lua/Base"}):
         with pytest.raises(ConfigError):
             _settings(tmp_path, **env)
 
@@ -344,7 +373,7 @@ def test_radar_routes(tmp_path):
     csrf = _login(client)
     overview = client.get("/api/radar", headers=HOST)
     assert overview.status_code == 200
-    assert overview.json()["schedule"] == ["11:00", "15:40", "17:50"]
+    assert overview.json()["schedule"] == ["11:00"]
     report = app.state.radar.run_now("manual", "tester")
     listed = client.get("/api/radar/reports", headers=HOST).json()["reports"]
     assert listed[0]["id"] == report["id"]

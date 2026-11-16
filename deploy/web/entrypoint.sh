@@ -51,7 +51,9 @@ materialize_secrets() {
     val=""
   }
   _write_optional_secret forge_connections_key FORGE_CONNECTIONS_KEY
-  unset FORGE_PG_OWNER_PASSWORD FORGE_PG_APP_PASSWORD FORGE_CONNECTIONS_KEY || true
+  # Chave da API da Anthropic: opcional. Sem ela, o motor "API" fica desligado na tela.
+  _write_optional_secret forge_anthropic_api_key FORGE_ANTHROPIC_API_KEY
+  unset FORGE_PG_OWNER_PASSWORD FORGE_PG_APP_PASSWORD FORGE_CONNECTIONS_KEY FORGE_ANTHROPIC_API_KEY || true
   chmod 0600 "${dest_dir}/forge_pg_owner_password" "${dest_dir}/forge_pg_app_password"
 }
 
@@ -62,6 +64,9 @@ if [ "$(id -u)" = "0" ]; then
   chown forge:forge /run/secrets/forge_pg_owner_password /run/secrets/forge_pg_app_password
   if [ -f /run/secrets/forge_connections_key ]; then
     chown forge:forge /run/secrets/forge_connections_key
+  fi
+  if [ -f /run/secrets/forge_anthropic_api_key ]; then
+    chown forge:forge /run/secrets/forge_anthropic_api_key
   fi
   exec setpriv --reuid=1000 --regid=1000 --init-groups -- python -m forge_core.web
 fi

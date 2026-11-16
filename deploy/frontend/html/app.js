@@ -73,6 +73,13 @@
       error: "",
       notice: "",
     },
+    ai: {
+      data: null,
+      form: null,
+      saving: false,
+      error: "",
+      modal: null,
+    },
     radar: {
       overview: null,
       report: null,
@@ -683,6 +690,12 @@
       project_scope: "O gh do servidor não tem acesso ao board. Rode gh auth refresh -s project no container.",
       project_schema: "Não foi possível ler o board Backlog de TI.",
       busy: "Já existe uma análise em andamento.",
+      anthropic_not_configured: "A chave da API da Anthropic não está configurada no servidor.",
+      anthropic_auth: "A chave da API da Anthropic foi recusada. Confira a chave no .env.",
+      anthropic_rate_limit: "Limite de uso da API da Anthropic atingido. Tente mais tarde.",
+      invalid_time: "Horário inválido. Use HH:MM.",
+      invalid_model: "Modelo inválido.",
+      invalid_engine: "Motor inválido.",
       invalid_mode: "Modo de pedido inválido.",
       issue_unavailable: "Não foi possível ler a issue no GitHub agora.",
       invalid_repos: "Lista de repositórios inválida.",
@@ -2484,6 +2497,208 @@
     ]);
   }
 
+  // --- Motor e agenda (configurações de IA) -------------------------------------------------
+
+  async function loadAiSettings() {
+    const res = await api("/api/ai-settings");
+    if (res.ok) {
+      state.ai.data = res.data;
+    }
+    return res.ok;
+  }
+
+  function aiFormFrom(data) {
+    return {
+      radar: Object.assign({}, data.radar),
+      investigation: Object.assign({}, data.investigation),
+    };
+  }
+
+  async function openAiSettings() {
+    if (state.radar.modal) {
+      state.radar.modal.close();
+    }
+    if (state.ai.modal) {
+      return;
+    }
+    state.ai.error = "";
+    const ok = await loadAiSettings();
+    if (!ok) {
+      showToast("Não foi possível carregar as configurações.");
+      return;
+    }
+    state.ai.form = aiFormFrom(state.ai.data);
+    state.ai.modal = openModal({
+      title: "Motor e agenda",
+      subtitle: "Quando o radar roda sozinho e qual modelo cada uso de IA chama.",
+      variant: "sheet",
+      build: function () {},
+      onClose: function () { state.ai.modal = null; },
+    });
+    paintAiSettings();
+  }
+
+  function engineChoice(use, disabled) {
+    const form = state.ai.form[use];
+    const apiReady = !!(state.ai.data.api && state.ai.data.api.configured);
+    const serverEngine = state.ai.data.server_engine === "cursor" ? "Cursor CLI" : "Claude Code CLI";
+    const options = [
+      ["cli", serverEngine, "Pela assinatura. Cada chamada carrega o contexto da CLI (~25 mil tokens)."],
+      ["api", "API da Anthropic", apiReady ? "Só o pedido e a resposta; cobrado por token na sua conta da API." : "Desligada: configure a chave da API (veja abaixo)."],
+    ];
+    return el("div", { class: "segmented", role: "radiogroup", "aria-label": "Motor" }, options.map(function (opt) {
+      const active = form.engine === opt[0];
+      const blocked = disabled || (opt[0] === "api" && !apiReady);
+      return el("button", {
+        type: "button",
+        role: "radio",
+        "aria-checked": active ? "true" : "false",
+        class: "segmented-option" + (active ? " active" : ""),
+        disabled: blocked ? "disabled" : null,
+        onClick: function () {
+          form.engine = opt[0];
+          paintAiSettings();
+        },
+      }, [
+        el("span", { class: "segmented-title", text: opt[1] }),
+        el("span", { class: "segmented-sub", text: opt[2] }),
+      ]);
+    }));
+  }
+
+  function modelSelect(use, disabled) {
+    const form = state.ai.form[use];
+    const id = "ai-model-" + use;
+    const sel = el("select", {
+      id: id,
+      disabled: disabled ? "disabled" : null,
+      onChange: function (ev) { form.model = ev.target.value; },
+    });
+    const defaultLabel = form.engine === "api" ? "Padrão (Claude Opus 5.5)" : "Padrão do motor";
+    sel.appendChild(el("option", { value: "", text: defaultLabel }));
+    (state.ai.data.models || []).forEach(function (m) {
+      const opt = el("option", { value: m.id, text: m.label + " — " + m.hint });
+      if (form.model === m.id) {
+        opt.selected = true;
+      }
+      sel.appendChild(opt);
+    });
+    return el("div", { class: "field" }, [el("label", { text: "Modelo", for: id }), sel]);
+  }
+
+  function paintAiSettings() {
+    const modal = state.ai.modal;
+    if (!modal || !state.ai.data || !state.ai.form) {
+      return;
+    }
+    const body = modal.body;
+    body.replaceChildren();
+    const data = state.ai.data;
+    const form = state.ai.form;
+    const locked = !data.can_edit;
+
+    if (locked) {
+      body.appendChild(el("p", { class: "banner banner-info", text: "Só o owner altera estas configurações. Você pode consultar." }));
+    }
+
+    const radar = el("div", { class: "agent-section" }, [
+      el("div", { class: "radar-section-head" }, [el("h3", { text: "Radar de prioridades" })]),
+    ]);
+    const autoBox = el("input", {
+      id: "ai-radar-auto",
+      type: "checkbox",
+      disabled: locked ? "disabled" : null,
+      onChange: function (ev) { form.radar.auto = ev.target.checked; paintAiSettings(); },
+    });
+    autoBox.checked = !!form.radar.auto;
+    const timeInput = el("input", {
+      id: "ai-radar-time",
+      type: "time",
+      value: form.radar.time || "11:00",
+      disabled: (locked || !form.radar.auto) ? "disabled" : null,
+      onChange: function (ev) { form.radar.time = ev.target.value; },
+    });
+    radar.appendChild(el("div", { class: "toggle-row" }, [
+      el("label", { class: "check toggle-check", for: "ai-radar-auto" }, [
+        autoBox,
+        el("span", { text: "Rodar automaticamente uma vez por dia" }),
+      ]),
+      el("div", { class: "toggle-time" }, [
+        el("label", { text: "às", for: "ai-radar-time" }),
+        timeInput,
+      ]),
+    ]));
+    radar.appendChild(el("p", { class: "field-hint", text: form.radar.auto
+      ? "Horário de Brasília. \"Analisar agora\" continua disponível no painel do radar."
+      : "Desligado: o radar só roda quando você clicar em \"Analisar agora\"." }));
+    radar.appendChild(el("label", { text: "Motor" }));
+    radar.appendChild(engineChoice("radar", locked));
+    radar.appendChild(modelSelect("radar", locked));
+    radar.appendChild(el("p", { class: "field-hint", text: "O resumo do radar é curto: Haiku 5.5 costuma bastar. Se o board não mudou desde a última rodada, o resumo é reaproveitado e nenhum modelo é chamado." }));
+    body.appendChild(radar);
+
+    const inv = el("div", { class: "agent-section" }, [
+      el("div", { class: "radar-section-head" }, [el("h3", { text: "Investigação" })]),
+    ]);
+    inv.appendChild(el("label", { text: "Motor" }));
+    inv.appendChild(engineChoice("investigation", locked));
+    inv.appendChild(modelSelect("investigation", locked));
+    inv.appendChild(el("p", { class: "field-hint", text: "Investigação lê o grafo de código e escreve hipóteses: Sonnet 5.5 ou Opus 5.5 são as escolhas mais seguras." }));
+    body.appendChild(inv);
+
+    const apiReady = !!(data.api && data.api.configured);
+    body.appendChild(el("div", { class: "agent-section" }, [
+      el("div", { class: "radar-section-head" }, [
+        el("h3", { text: "API da Anthropic" }),
+        el("span", { class: "status " + (apiReady ? "status-ok" : "status-muted"), text: apiReady ? "Configurada" : "Não configurada" }),
+      ]),
+      el("p", { class: "radar-section-hint", text: apiReady
+        ? "A chave está no servidor (nunca é exibida). As opções \"API da Anthropic\" acima estão liberadas."
+        : "Para liberar: crie uma chave em console.anthropic.com, coloque em FORGE_ANTHROPIC_API_KEY no arquivo .env do Forge e recrie o backend. A chave nunca aparece nesta tela." }),
+    ]));
+
+    if (state.ai.error) {
+      body.appendChild(el("p", { class: "banner banner-error", text: errorMessage(state.ai.error) }));
+    }
+    if (!locked) {
+      body.appendChild(actionsRow([
+        el("button", { type: "button", text: "Cancelar", onClick: function () { modal.close(); } }),
+        el("button", {
+          type: "button",
+          class: "primary",
+          text: state.ai.saving ? "Salvando…" : "Salvar",
+          disabled: state.ai.saving ? "disabled" : null,
+          onClick: function () { saveAiSettings(); },
+        }),
+      ]));
+    }
+  }
+
+  async function saveAiSettings() {
+    const time = document.getElementById("ai-radar-time");
+    if (time && time.value) {
+      state.ai.form.radar.time = time.value;
+    }
+    state.ai.saving = true;
+    state.ai.error = "";
+    paintAiSettings();
+    const res = await api("/api/ai-settings", { method: "POST", body: state.ai.form });
+    state.ai.saving = false;
+    if (!res.ok) {
+      state.ai.error = (res.data && res.data.error) || "error";
+      paintAiSettings();
+      return;
+    }
+    state.ai.data = res.data;
+    state.ai.form = aiFormFrom(res.data);
+    if (state.ai.modal) {
+      state.ai.modal.close();
+    }
+    await loadRadarOverview();
+    showToast("Configurações salvas.");
+    render();
+  }
+
   // --- Radar de prioridades ------------------------------------------------------------------
 
   function fmtDateTime(iso) {
@@ -2501,14 +2716,6 @@
       return "hoje, " + time;
     }
     return d.toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" }) + ", " + time;
-  }
-
-  function joinTimes(times) {
-    const list = (times || []).slice();
-    if (list.length <= 1) {
-      return list.join("");
-    }
-    return list.slice(0, -1).join(", ") + " e " + list[list.length - 1];
   }
 
   async function loadRadarOverview() {
@@ -2691,10 +2898,13 @@
     const ov = state.radar.overview || {};
     const report = state.radar.report;
 
-    const scheduleText = (ov.schedule && ov.schedule.length)
-      ? "Roda às " + joinTimes(ov.schedule) + (ov.next_run ? " · próxima " + fmtDateTime(ov.next_run) : "")
-      : "Agenda desligada; rode manualmente.";
-    const toolbar = el("div", { class: "radar-toolbar" }, [el("p", { class: "radar-schedule", text: scheduleText })]);
+    const scheduleText = ov.auto
+      ? "Automático todo dia às " + (ov.time || "11:00") + (ov.next_run ? " · próxima " + fmtDateTime(ov.next_run) : "")
+      : "Automático desligado: rode com \"Analisar agora\".";
+    const toolbar = el("div", { class: "radar-toolbar" }, [el("p", { class: "radar-schedule" }, [
+      el("span", { class: "status " + (ov.auto ? "status-ok" : "status-muted"), text: scheduleText }),
+      el("button", { type: "button", class: "sm quiet", text: "Motor e agenda", onClick: function () { openAiSettings(); } }),
+    ])]);
     const controls = el("div", { class: "radar-controls" });
     if (state.radar.history.length) {
       const sel = el("select", {
@@ -2788,7 +2998,10 @@
     root.appendChild(pageHeader(
       "Investigação",
       "Descreva um problema, erro ou sintoma; o agente investiga os repositórios em modo somente leitura e sugere próximos passos.",
-      canEditNotes() ? [radarButton()] : null,
+      canEditNotes() ? [
+        el("button", { type: "button", class: "quiet", text: "Motor e agenda", onClick: function () { openAiSettings(); } }),
+        radarButton(),
+      ] : null,
     ));
     root.appendChild(readonlySeal());
     if (!canEditNotes()) {
@@ -3387,7 +3600,7 @@
     } else {
       usageSection.appendChild(usageBar(stats));
       usageSection.appendChild(el("dl", { class: "meta-list agent-cost" }, [
-        el("dt", { text: "Média por execução" }), el("dd", { text: fmtUsd(stats.avg_cost_usd) + " · " + fmtInt(stats.executions_with_usage) + " execuções com uso informado" }),
+        el("dt", { text: "Média por execução" }), el("dd", { text: fmtUsd(stats.avg_cost_usd) + " · " + fmtInt(stats.executions_with_usage) + (stats.executions_with_usage === 1 ? " execução" : " execuções") + " com uso informado" }),
         el("dt", { text: "Últimos 30 dias" }), el("dd", { text: fmtUsd(stats.cost_usd_30d) + " em " + fmtInt(stats.executions_30d) + " execuções" }),
       ]));
     }

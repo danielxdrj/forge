@@ -57,9 +57,12 @@ services:
       FORGE_PG_OWNER_PASSWORD: ${FORGE_PG_OWNER_PASSWORD:?defina FORGE_PG_OWNER_PASSWORD}
       FORGE_PG_APP_PASSWORD: ${FORGE_PG_APP_PASSWORD:?defina FORGE_PG_APP_PASSWORD}
       FORGE_CONNECTIONS_KEY: ${FORGE_CONNECTIONS_KEY:-}
+      # API da Anthropic (opcional). Vazia = opção "API da Anthropic" desligada na tela.
+      FORGE_ANTHROPIC_API_KEY: ${FORGE_ANTHROPIC_API_KEY:-}
       FORGE_SECRET_OWNER_PASSWORD_FILE: /run/secrets/forge_pg_owner_password
       FORGE_SECRET_APP_PASSWORD_FILE: /run/secrets/forge_pg_app_password
       FORGE_SECRET_CONNECTIONS_KEY_FILE: /run/secrets/forge_connections_key
+      FORGE_SECRET_ANTHROPIC_API_KEY_FILE: /run/secrets/forge_anthropic_api_key
       FORGE_TRUST_FORWARDED: "true"
       FORGE_TRUSTED_PROXIES: forge_frontend
       FORGE_WEB_HOSTS: "127.0.0.1:${FORGE_FRONTEND_HOST_PORT:-8090},localhost:${FORGE_FRONTEND_HOST_PORT:-8090},127.0.0.1:8091,localhost:8091"
@@ -72,7 +75,6 @@ services:
       FORGE_GRAPH_EDGE_LIMIT: ${FORGE_GRAPH_EDGE_LIMIT:-1500}
       FORGE_GRAPH_EXTRACT_TIMEOUT: ${FORGE_GRAPH_EXTRACT_TIMEOUT:-1800}
       FORGE_ENGINE: ${FORGE_ENGINE:-claude}
-      FORGE_RADAR_TIMES: ${FORGE_RADAR_TIMES:-11:00,15:40,17:50}
       FORGE_RADAR_STALE_DAYS: ${FORGE_RADAR_STALE_DAYS:-14}
       FORGE_RADAR_TIMEZONE: ${FORGE_RADAR_TIMEZONE:-America/Sao_Paulo}
       FORGE_CLAUDE_BIN: /usr/local/bin/claude

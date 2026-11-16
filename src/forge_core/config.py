@@ -35,10 +35,8 @@ _MAX_GRAPH_EXTRACT_TIMEOUT = 7200
 _DEFAULT_GRAPH_PROMPT_MAX_NODES = 40
 _DEFAULT_GRAPH_PROMPT_MAX_CHARS = 6000
 _DEFAULT_CLAUDE_MAX_TURNS = 8
-_DEFAULT_RADAR_TIMES = ("11:00", "15:40", "17:50")
 _DEFAULT_RADAR_STALE_DAYS = 14
 _DEFAULT_RADAR_TIMEZONE = "America/Sao_Paulo"
-_HHMM = re.compile(r"^([01][0-9]|2[0-3]):[0-5][0-9]$")
 
 
 @dataclass(frozen=True)
@@ -66,7 +64,6 @@ class Settings:
     graph_prompt_max_nodes: int = _DEFAULT_GRAPH_PROMPT_MAX_NODES
     graph_prompt_max_chars: int = _DEFAULT_GRAPH_PROMPT_MAX_CHARS
     claude_max_turns: int = _DEFAULT_CLAUDE_MAX_TURNS
-    radar_times: tuple[str, ...] = _DEFAULT_RADAR_TIMES
     radar_stale_days: int = _DEFAULT_RADAR_STALE_DAYS
     radar_timezone: str = _DEFAULT_RADAR_TIMEZONE
 
@@ -250,11 +247,6 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
     except ValueError:
         problems.append("FORGE_CLAUDE_MAX_TURNS inválido: use um inteiro entre 1 e 100")
 
-    times_raw = env.get("FORGE_RADAR_TIMES", ",".join(_DEFAULT_RADAR_TIMES))
-    radar_times = tuple(sorted({t.strip() for t in times_raw.split(",") if t.strip()}))
-    if any(not _HHMM.fullmatch(t) for t in radar_times):
-        problems.append("FORGE_RADAR_TIMES inválido: use horários HH:MM separados por vírgula (vazio desliga a agenda)")
-
     radar_stale_days = _DEFAULT_RADAR_STALE_DAYS
     stale_raw = env.get("FORGE_RADAR_STALE_DAYS", str(_DEFAULT_RADAR_STALE_DAYS)).strip()
     try:
@@ -285,7 +277,7 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
         graph_extract_timeout=extract_timeout,
         graph_prompt_max_nodes=prompt_nodes, graph_prompt_max_chars=prompt_chars,
         claude_max_turns=claude_max_turns,
-        radar_times=radar_times, radar_stale_days=radar_stale_days, radar_timezone=radar_timezone,
+        radar_stale_days=radar_stale_days, radar_timezone=radar_timezone,
     )
 
 

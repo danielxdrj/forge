@@ -216,6 +216,7 @@ class InvestigationService:
         *,
         provider=None,
         gh: GhCli | None = None,
+        ai_settings=None,
         graph_dir=None,
         graph_prompt_max_nodes: int | None = None,
         graph_prompt_max_chars: int | None = None,
@@ -226,6 +227,7 @@ class InvestigationService:
         self._store = store
         self._provider = provider
         self._gh = gh
+        self._ai = ai_settings
         self._graph_dir = graph_dir
         self._graph_prompt_max_nodes = graph_prompt_max_nodes
         self._graph_prompt_max_chars = graph_prompt_max_chars
@@ -458,6 +460,8 @@ class InvestigationService:
     def _adapter(self):
         if self._provider is not None:
             return self._provider
+        if self._ai is not None:
+            return self._ai.adapter_for("investigation", self._env)
         env = self._env or os.environ
         timeout = int(env.get("FORGE_CLAUDE_TIMEOUT", "120") or 120)
         adapter = select_engine_adapter(env, timeout=timeout)

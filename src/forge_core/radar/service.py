@@ -3,8 +3,9 @@
 Fluxo de uma rodada (agendada ou manual):
 1. lê os itens abertos do board Backlog de TI via `gh` (somente leitura);
 2. pontua com `scoring.analyze` (regra fixa, auditável);
-3. pede ao motor um resumo curto do topo. Se o motor falhar, o relatório sai mesmo
-   assim, sem resumo: a ordem nunca depende da IA;
+3. pede ao motor configurado (aba Investigação → Motor e agenda) um resumo curto do topo.
+   Se as listas forem as mesmas da última rodada com resumo, reaproveita o resumo e não
+   chama o motor. Se o motor falhar, o relatório sai sem resumo: a ordem nunca depende da IA;
 4. grava o relatório em `radar_reports` (append-only) e uma execução em `agent_executions`.
 
 Nada é escrito no GitHub. O prompt leva só chave, título, campos do board e motivos,
@@ -12,6 +13,7 @@ já com segredos mascarados.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -23,6 +25,7 @@ from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from ..agent_catalog.service import EXECUTION_COLUMNS, usage_columns
+from ..ai_settings import AiSettings
 from ..auth.store import AuthStore, Principal
 from ..config import Settings
 from ..draft.claude_cli import READONLY_DISALLOWED_TOOLS, ClaudeCliAdapter
@@ -77,10 +80,12 @@ class RadarService:
         *,
         gh: GhCli | None = None,
         provider=None,
+        ai_settings: AiSettings | None = None,
         clock: Callable[[], datetime] | None = None,
         env=None,
     ):
         self._repo = repo
+        self._ai = ai_settings
         self._store = store
         self._settings = settings
         self._gh = gh
@@ -100,15 +105,24 @@ class RadarService:
     def overview(self, principal: Principal) -> dict:
         _require_editor_or_owner(self._store, principal)
         latest = self._reports(limit=1)
+        auto, time = self.schedule()
         return {
             "busy": self._busy,
-            "schedule": list(self._settings.radar_times),
+            "auto": auto,
+            "time": time,
+            "schedule": [time] if auto else [],
             "timezone": self._settings.radar_timezone,
-            "next_run": next_run(self._clock(), self._settings.radar_times, self._settings.radar_timezone),
+            "next_run": next_run(self._clock(), (time,) if auto else (), self._settings.radar_timezone),
             "stale_days": self._settings.radar_stale_days,
             "last_error": self._last_error,
             "latest": latest[0] if latest else None,
         }
+
+    def schedule(self) -> tuple[bool, str]:
+        """(agenda ligada, horário HH:MM) lidos das configurações do painel."""
+        if self._ai is None:
+            return False, "11:00"
+        return self._ai.radar_schedule()
 
     def history(self, principal: Principal) -> list[dict]:
         _require_editor_or_owner(self._store, principal)
@@ -197,10 +211,17 @@ class RadarService:
             return self._load(report_id)
         allowed = {f"{r.owner}/{r.repo_name}".lower() for r in list_active_allowed_repos(self._repo)}
         result = analyze(items, now=now, stale_days=self._settings.radar_stale_days, allowed_repos=allowed)
-        summary, summary_error, usage, cost = self._summary(result)
+        fingerprint = _fingerprint(result)
+        previous = self._last_summary_for(fingerprint)
+        if previous is not None:
+            summary, summary_error, usage, cost, reused = previous, "", {}, None, True
+        else:
+            summary, summary_error, usage, cost = self._summary(result)
+            reused = False
         payload = {
             **result, "stale_days": self._settings.radar_stale_days, "summary_error": summary_error,
             "usage": {**usage, "cost_usd": cost} if (usage or cost is not None) else {},
+            "fingerprint": fingerprint, "reused_summary": reused,
         }
         self._save(report_id, now, reason, "ok", "", summary, payload, actor)
         log.info("radar.run reason=%s result=ok open=%s now=%s", reason, result["stats"]["open"], result["stats"]["now"])
@@ -237,9 +258,27 @@ class RadarService:
         usage = dict(getattr(response, "usage", None) or {})
         return text, "", usage, getattr(response, "cost", None)
 
+    def _last_summary_for(self, fingerprint: str) -> str | None:
+        """Resumo da última rodada ok, se as listas forem as mesmas (nada mudou no topo)."""
+        rows = self._repo.fetch(
+            "SELECT summary, payload FROM radar_reports WHERE status = 'ok' AND summary <> '' "
+            "ORDER BY created_at DESC, id LIMIT 1",
+        )
+        if not rows:
+            return None
+        try:
+            payload = json.loads(rows[0][1] or "{}")
+        except (TypeError, json.JSONDecodeError):
+            return None
+        if isinstance(payload, dict) and payload.get("fingerprint") == fingerprint:
+            return rows[0][0]
+        return None
+
     def _adapter(self):
         if self._provider is not None:
             return self._provider
+        if self._ai is not None:
+            return self._ai.adapter_for("radar", self._env)
         env = self._env or os.environ
         timeout = int(env.get("FORGE_CLAUDE_TIMEOUT", "120") or 120)
         adapter = select_engine_adapter(env, timeout=timeout)
@@ -288,7 +327,7 @@ class RadarService:
             return rows[0][0]
         agent_id = str(uuid.uuid4())
         ts = self._clock().isoformat()
-        trigger = "agenda: " + ", ".join(self._settings.radar_times) if self._settings.radar_times else "manual"
+        trigger = "agenda diária (configurável) e manual"
         engine = getattr(self._provider, "name", "") or os.environ.get("FORGE_ENGINE", "") or ""
         with self._repo.transaction() as tx:
             tx.execute(
@@ -314,6 +353,8 @@ class RadarService:
                 f"{stats.get('now', 0)} para concluir já, {stats.get('stale', 0)} paradas, "
                 f"{stats.get('open', 0)} abertas"
             )
+            if report.get("reused_summary"):
+                event += " · sem mudanças, resumo reaproveitado"
             log_text = report.get("summary") or ""
         else:
             status = "error"
@@ -352,9 +393,20 @@ def _report_from_row(row) -> dict:
         "stale": payload.get("stale") or [],
         "investigate": payload.get("investigate") or [],
         "usage": payload.get("usage") or {},
+        "reused_summary": bool(payload.get("reused_summary")),
         "manual": reason == "manual",
         "created_by": created_by if reason == "manual" else "",
     }
+
+
+def _fingerprint(result: dict) -> str:
+    """Impressão das listas e motivos: igual quando o topo do backlog não mudou."""
+    parts = []
+    for section in ("now", "stale", "investigate"):
+        for entry in result.get(section) or []:
+            why = entry.get("reasons", []) + entry.get("investigate_reasons", [])
+            parts.append(f"{section}|{entry.get('key')}|{entry.get('status')}|{entry.get('prioridade')}|{';'.join(why)}")
+    return hashlib.sha256("\n".join(parts).encode("utf-8")).hexdigest()
 
 
 def _slots(times: tuple[str, ...]) -> list[tuple[int, int]]:
@@ -384,10 +436,11 @@ def next_run(now: datetime, times: tuple[str, ...], timezone: str) -> str | None
 
 
 class RadarScheduler:
-    """Dispara a rodada nos horários configurados (fuso local). Uma vez por horário por dia.
+    """Dispara a rodada uma vez por dia no horário configurado (fuso local), se a agenda estiver ligada.
 
-    Checa a cada `tick_seconds`. Se o servidor subir até `window_minutes` depois do horário,
-    a rodada daquele horário ainda acontece; depois disso, espera o próximo.
+    Lê a configuração a cada `tick_seconds`, então ligar/desligar ou mudar o horário vale sem
+    reiniciar. Se o servidor subir até `window_minutes` depois do horário, a rodada daquele dia
+    ainda acontece; depois disso, espera o dia seguinte.
     """
 
     def __init__(
@@ -400,7 +453,6 @@ class RadarScheduler:
         window_minutes: int = 10,
     ):
         self._service = service
-        self._slots = _slots(settings.radar_times)
         self._tz = ZoneInfo(settings.radar_timezone)
         self._clock = clock or (lambda: datetime.now(UTC))
         self._tick = tick_seconds
@@ -410,7 +462,7 @@ class RadarScheduler:
         self._thread: threading.Thread | None = None
 
     def start(self) -> None:
-        if self._thread is not None or not self._slots:
+        if self._thread is not None:
             return
         self._stop.clear()
         self._thread = threading.Thread(target=self._loop, name="forge-radar-schedule", daemon=True)
@@ -425,8 +477,11 @@ class RadarScheduler:
 
     def tick(self) -> bool:
         """Roda se algum horário venceu agora. Devolve True se disparou."""
+        auto, time = self._service.schedule()
+        if not auto:
+            return False
         local = self._clock().astimezone(self._tz)
-        for hh, mm in self._slots:
+        for hh, mm in _slots((time,)):
             key = (local.date().isoformat(), hh, mm)
             if key in self._done:
                 continue

@@ -546,7 +546,7 @@ input, select, textarea, button {
   color: var(--fg);
 }
 
-input[type="text"], input[type="password"], input[type="search"], input:not([type]), select, textarea {
+input[type="text"], input[type="password"], input[type="search"], input[type="time"], input:not([type]), select, textarea {
   width: 100%;
   min-height: var(--control-h);
   padding: 0.4375rem 0.75rem;
@@ -2070,3 +2070,20 @@ ul.pending { margin: var(--space-1) 0 var(--space-2); padding-left: var(--space-
 }
 .exec-only-mobile { display: none; }
 @media (max-width: 600px) { .exec-only-mobile { display: block; } }
+
+/* Linha de liga/desliga com horário (Motor e agenda). */
+.toggle-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+.toggle-check { min-height: var(--control-h); font-size: var(--text-md); }
+.toggle-time { display: flex; align-items: center; gap: var(--space-2); }
+.toggle-time label { margin: 0; font-weight: 400; color: var(--muted); }
+.toggle-time input { width: 7.5rem; }
+.radar-schedule { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1) var(--space-3); }
+.radar-schedule .status { white-space: normal; }
+.agent-section .segmented { margin-bottom: var(--space-1); }
+.segmented-option:disabled { opacity: 0.55; }
