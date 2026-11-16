@@ -41,6 +41,9 @@ def main() -> int:
         radar = getattr(app.state, "radar", None)
         if radar is not None:
             radar.ensure_agent()
+        investigations = getattr(app.state, "investigations", None)
+        if investigations is not None:
+            investigations.ensure_agent()
         radar_scheduler = getattr(app.state, "radar_scheduler", None)
         if radar_scheduler is not None:
             radar_scheduler.start()

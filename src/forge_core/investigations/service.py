@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -43,6 +44,8 @@ MAX_ISSUE_COMMENTS = 10
 MAX_COMMENT_BYTES = 1500
 PREVIEW_EXCERPT_CHARS = 600
 MODES = ("manual", "issue")
+AGENT_NAME = "Agente de investigação"
+AGENT_DESCRIPTION = "Investiga problemas e issues em modo somente leitura e sugere próximos passos."
 
 AUTO_REQUEST = """Investigue a issue abaixo como um pedido de investigação:
 - entenda o problema relatado e o comportamento esperado;
@@ -261,6 +264,8 @@ class InvestigationService:
             prompt = self._build_prompt(description, repos, connection_meta)
         adapter = self._adapter()
         try:
+            started = time.monotonic()
+            started_at = _now()
             response = adapter.complete(prompt)
         except DraftError:
             raise
@@ -288,7 +293,61 @@ class InvestigationService:
                 f"ok: mode={mode} repos={len(repos)} connections={len(connection_ids)} "
                 f"bytes={len(result.encode('utf-8'))}",
             )
+        self._record_execution(started_at, started, title, response)
         return self._load(inv_id)
+
+    # --- agente na aba Agentes ---
+
+    def engine_text(self) -> str:
+        if self._ai is None:
+            return ""
+        values = self._ai.values()
+        engine = "API da Anthropic" if values.get("investigation.engine") == "api" else "Claude Code CLI"
+        model = values.get("investigation.model") or ("claude-opus-5-5" if values.get("investigation.engine") == "api" else "")
+        labels = {"claude-opus-5-5": "Claude Opus 5.5", "claude-sonnet-5-5": "Claude Sonnet 5.5",
+                  "claude-haiku-5-5": "Claude Haiku 5.5"}
+        return f"{engine} · {labels.get(model, 'modelo padrão')}"
+
+    def ensure_agent(self) -> str:
+        """Cadastra o agente de investigação na aba Agentes (idempotente) e sincroniza o motor."""
+        rows = self._repo.fetch("SELECT id, engine FROM agents WHERE name = ?", (AGENT_NAME,))
+        ts = _now()
+        if rows:
+            agent_id, engine = rows[0]
+            if engine != self.engine_text():
+                with self._repo.transaction() as tx:
+                    tx.execute("UPDATE agents SET engine = ?, updated_at = ? WHERE id = ?",
+                               (self.engine_text(), ts, agent_id))
+            return agent_id
+        agent_id = str(uuid.uuid4())
+        with self._repo.transaction() as tx:
+            tx.execute(
+                "INSERT INTO agents (id, name, description, scope, status, trigger, engine, "
+                "permissions_read, permissions_write, permissions_denied, created_at, updated_at) "
+                "VALUES (?, ?, ?, 'development', 'active', ?, ?, ?, '[]', ?, ?, ?)",
+                (agent_id, AGENT_NAME, AGENT_DESCRIPTION, "manual (pedido na aba Investigação)", self.engine_text(),
+                 json.dumps(["repositórios da allowlist", "issues", "grafo de código", "metadados de conexões"],
+                            ensure_ascii=False),
+                 json.dumps(["banco de dados", "FTP", "Portainer"], ensure_ascii=False), ts, ts),
+            )
+            tx.audit("sistema:investigacao", "agent.register", f"agent:{agent_id}", "ok: investigação")
+        return agent_id
+
+    def _record_execution(self, started_at: str, started: float, title: str, response) -> None:
+        from ..agent_catalog.service import EXECUTION_COLUMNS, usage_columns
+
+        try:
+            agent_id = self.ensure_agent()
+            with self._repo.transaction() as tx:
+                tx.execute(
+                    f"INSERT INTO agent_executions ({EXECUTION_COLUMNS}) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (str(uuid.uuid4()), agent_id, started_at, _now(), "ok", title[:200],
+                     int((time.monotonic() - started) * 1000), "",
+                     *usage_columns(getattr(response, "usage", None), getattr(response, "cost", None))),
+                )
+        except Exception:  # noqa: BLE001 - registro na aba Agentes não pode derrubar a investigação
+            return
 
     def issue_request_preview(self, principal: Principal, raw_issue_key) -> dict:
         """Prévia do pedido automático (o que vai ao motor), sem rodar nada."""

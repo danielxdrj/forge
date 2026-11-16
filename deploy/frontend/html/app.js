@@ -2252,9 +2252,9 @@
       cardHead("Nova investigação", [engineLabel ? el("div", { class: "card-actions" }, [el("button", {
         type: "button",
         class: "sm quiet",
-        title: "Motor e modelo usados nas investigações",
+        title: "Configurar o agente de investigação (aba Agentes)",
         text: "Motor: " + engineLabel,
-        onClick: function () { openInvestigationEngine(); },
+        onClick: function () { openAgentByName("Agente de investigação"); },
       })]) : null]),
       el("p", { class: "card-desc", text: "Descreva o problema ou use uma issue existente como pedido. A investigação roda em modo somente leitura." }),
     ]);
@@ -2575,9 +2575,10 @@
   function agentConfigSection() {
     const data = state.agentes.detail;
     const cfg = data && data.config;
-    if (!cfg || cfg.kind !== "radar") {
+    if (!cfg || (cfg.kind !== "radar" && cfg.kind !== "investigation")) {
       return null;
     }
+    const isRadar = cfg.kind === "radar";
     if (!state.agentes.configForm) {
       state.agentes.configForm = { auto: !!cfg.auto, time: cfg.time || "13:00", engine: cfg.engine, model: cfg.model || "" };
     }
@@ -2596,6 +2597,7 @@
       onChange: function (ev) { form.auto = ev.target.checked; paintAgentDetail(); },
     });
     autoBox.checked = !!form.auto;
+    if (isRadar) {
     section.appendChild(el("label", { text: "Agenda" }));
     section.appendChild(el("div", { class: "toggle-row" }, [
       el("label", { class: "check toggle-check", for: "agent-cfg-auto" }, [
@@ -2616,10 +2618,13 @@
     section.appendChild(el("p", { class: "field-hint", text: form.auto
       ? "Roda sozinho todo dia nesse horário (Brasília). \"Analisar agora\" continua no painel do radar."
       : "Desligado: só roda quando alguém clicar em \"Analisar agora\" no painel do radar." }));
+    }
     section.appendChild(el("label", { text: "Motor" }));
     section.appendChild(engineChoice(form, cfg, locked, paintAgentDetail));
     section.appendChild(modelSelect(form, cfg, "agent-cfg-model", locked));
-    section.appendChild(el("p", { class: "field-hint", text: "O resumo do radar é curto: Haiku 5.5 costuma bastar. Se o board não mudou desde a última rodada, o resumo é reaproveitado sem chamar modelo." }));
+    section.appendChild(el("p", { class: "field-hint", text: isRadar
+      ? "O resumo do radar é curto: Haiku 5.5 costuma bastar. Se o board não mudou desde a última rodada, o resumo é reaproveitado sem chamar modelo."
+      : "A investigação lê o grafo de código e escreve hipóteses: Sonnet 5.5 ou Opus 5.5 são as escolhas mais seguras." }));
     section.appendChild(apiStatusBlock(cfg));
     if (state.agentes.configError) {
       section.appendChild(el("p", { class: "banner banner-error", text: errorMessage(state.agentes.configError) }));
@@ -2667,17 +2672,21 @@
     }
   }
 
-  async function openRadarAgent() {
+  async function openAgentByName(name) {
     if (state.radar.modal) {
       state.radar.modal.close();
     }
     const res = await api("/api/agents");
-    const agent = res.ok ? (res.data.agents || []).filter(function (a) { return a.name === "Radar de prioridades"; })[0] : null;
+    const agent = res.ok ? (res.data.agents || []).filter(function (a) { return a.name === name; })[0] : null;
     if (!agent) {
-      showToast("O agente do radar ainda não está cadastrado.");
+      showToast("Agente ainda não cadastrado. Recrie o backend para registrá-lo.");
       return;
     }
     openAgentDetail(agent.id);
+  }
+
+  function openRadarAgent() {
+    openAgentByName("Radar de prioridades");
   }
 
   // --- Motor da investigação (fica na Investigação: não é um agente) -------------------------
@@ -2688,80 +2697,6 @@
       state.ai.data = res.data;
     }
     return res.ok;
-  }
-
-  async function openInvestigationEngine() {
-    if (state.ai.modal) {
-      return;
-    }
-    state.ai.error = "";
-    const ok = await loadAiSettings();
-    if (!ok) {
-      showToast("Não foi possível carregar o motor da investigação.");
-      return;
-    }
-    state.ai.form = { investigation: Object.assign({}, state.ai.data.investigation) };
-    state.ai.modal = openModal({
-      title: "Motor da investigação",
-      subtitle: "Qual motor e modelo as investigações usam.",
-      build: function () {},
-      onClose: function () { state.ai.modal = null; },
-    });
-    paintAiSettings();
-  }
-
-  function paintAiSettings() {
-    const modal = state.ai.modal;
-    if (!modal || !state.ai.data || !state.ai.form) {
-      return;
-    }
-    const body = modal.body;
-    body.replaceChildren();
-    const data = state.ai.data;
-    const form = state.ai.form.investigation;
-    const locked = !data.can_edit;
-    if (locked) {
-      body.appendChild(el("p", { class: "banner banner-info", text: "Só o owner altera. Você pode consultar." }));
-    }
-    body.appendChild(el("label", { text: "Motor" }));
-    body.appendChild(engineChoice(form, data, locked, paintAiSettings));
-    body.appendChild(modelSelect(form, data, "ai-model-investigation", locked));
-    body.appendChild(el("p", { class: "field-hint", text: "A investigação lê o grafo de código e escreve hipóteses: Sonnet 5.5 ou Opus 5.5 são as escolhas mais seguras." }));
-    body.appendChild(apiStatusBlock(data));
-    if (state.ai.error) {
-      body.appendChild(el("p", { class: "banner banner-error", text: errorMessage(state.ai.error) }));
-    }
-    if (!locked) {
-      body.appendChild(actionsRow([
-        el("button", { type: "button", text: "Cancelar", onClick: function () { modal.close(); } }),
-        el("button", {
-          type: "button",
-          class: "primary",
-          text: state.ai.saving ? "Salvando…" : "Salvar",
-          disabled: state.ai.saving ? "disabled" : null,
-          onClick: function () { saveAiSettings(); },
-        }),
-      ]));
-    }
-  }
-
-  async function saveAiSettings() {
-    state.ai.saving = true;
-    state.ai.error = "";
-    paintAiSettings();
-    const res = await api("/api/ai-settings", { method: "POST", body: { investigation: state.ai.form.investigation } });
-    state.ai.saving = false;
-    if (!res.ok) {
-      state.ai.error = (res.data && res.data.error) || "error";
-      paintAiSettings();
-      return;
-    }
-    state.ai.data = res.data;
-    if (state.ai.modal) {
-      state.ai.modal.close();
-    }
-    showToast("Motor da investigação salvo.");
-    render();
   }
 
   // --- Radar de prioridades ------------------------------------------------------------------

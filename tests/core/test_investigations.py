@@ -291,3 +291,21 @@ def test_issue_request_preview_is_redacted_and_counts_comments(make_repo):
     assert "ghp_" not in preview["body_excerpt"]
     assert preview["repo"] == REPO
     assert adapter.prompts == []
+
+
+def test_run_records_execution_on_investigation_agent(make_repo):
+    from forge_core.investigations.service import AGENT_NAME
+
+    repo = make_repo()
+    adapter = FakeAdapter()
+    adapter.complete = lambda prompt, max_tokens=None: ProviderResponse(
+        text="ok", usage={"input_tokens": 10, "output_tokens": 20, "model": "claude-sonnet-5-5"}, cost=0.01,
+    )
+    svc = _svc(repo, provider=adapter)
+    svc.run(actor(repo, "ana"), {"description": "Investigar lentidão", "repos": [REPO]})
+    rows = repo.fetch(
+        "SELECT e.status, e.output_tokens, e.cost_usd FROM agent_executions e JOIN agents a ON a.id = e.agent_id "
+        "WHERE a.name = ?", (AGENT_NAME,),
+    )
+    assert rows == [("ok", 20, 0.01)]
+    assert svc.ensure_agent() == svc.ensure_agent()

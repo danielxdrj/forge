@@ -21,6 +21,7 @@ from ..connections.vault import ConnectionsVault
 from ..errors import AuthenticationError, AuthorizationError, DraftError
 from ..graphs.context import ContextGraph
 from ..graphs.indexer import GraphIndexer
+from ..investigations.service import AGENT_NAME as INVESTIGATION_AGENT_NAME
 from ..investigations.service import InvestigationService
 from ..issues.delete import IssueDeleteService
 from ..issues.importer import CompletedIssueImporter
@@ -562,9 +563,12 @@ def create_app(
     )
     def _agent_config(principal: Principal, agent: dict) -> dict | None:
         """Configuração própria do agente. Hoje só o Radar de prioridades tem."""
+        view = ai_settings.view(principal)
+        if agent.get("name") == INVESTIGATION_AGENT_NAME:
+            return {"kind": "investigation", **view["investigation"], "models": view["models"],
+                    "server_engine": view["server_engine"], "api": view["api"], "can_edit": view["can_edit"]}
         if agent.get("name") != RADAR_AGENT_NAME:
             return None
-        view = ai_settings.view(principal)
         return {
             "kind": "radar",
             **view["radar"],
@@ -576,11 +580,15 @@ def create_app(
         }
 
     def _save_agent_config(principal: Principal, agent: dict, body: dict):
+        use = "investigation" if agent.get("name") == INVESTIGATION_AGENT_NAME else "radar"
+        if use == "investigation":
+            body = {k: v for k, v in body.items() if k in ("engine", "model")}
         try:
-            ai_settings.update(principal, {"radar": body})
+            ai_settings.update(principal, {use: body})
         except SettingsError as exc:
             return _json_error(400, exc.code, hint=exc.hint or None)
         radar.sync_agent()
+        investigations.ensure_agent()
         return _agent_config(principal, agent)
 
     register_agent_catalog_routes(
