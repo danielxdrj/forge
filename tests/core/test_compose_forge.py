@@ -211,13 +211,12 @@ def test_frontend_shell_tabs_and_theme():
     assert "--bg: #121212" in css
     assert "--wine: #990000" in css
     assert "#E35A5A" in css
-    assert "--group-tasks:" in css
-    assert "--group-eng:" in css
-    assert "--group-delivery:" in css
-    assert "--group-ops:" in css
-    assert "--group-auto:" in css
-    assert "--group-sec:" in css
-    assert "--group-core:" in css
+    # Tokens do design system: escala tipográfica, espaçamento e cores de estado.
+    for token in ("--text-md:", "--text-2xl:", "--space-4:", "--radius:", "--accent:", "--danger:", "--ok:", "--warn:"):
+        assert token in css, token
+    # O vinho é sinal, não moldura: nenhuma divisória usa a cor da marca.
+    assert "--divider" not in css
+    assert ".status-ok" in css
     assert ".pill-ok" in css
     assert ".pill-warn" in css
     assert ".teia-page" in css
@@ -263,7 +262,7 @@ def test_frontend_shell_tabs_and_theme():
     assert "Teia de contexto" in html
     assert 'id="session"' in html
     assert "Em construção" in js
-    assert "issue-select" in js
+    assert "issue-list-scroll" in js
     assert "/api/notes" in js
     assert "Atualizar grafo" in js
     assert "vault_disabled" in js
