@@ -80,7 +80,8 @@ def _query_for(repo, full_repo: str, number: int, key: str) -> str:
     if rows:
         return f"{rows[0][0] or ''} {rows[0][1] or ''}"
     notes = repo.fetch(
-        "SELECT title, body FROM investigation_notes WHERE issue_key = ? ORDER BY updated_at DESC, id LIMIT 3",
+        "SELECT title, body FROM investigation_notes WHERE kind = 'note' AND issue_key = ? "
+        "ORDER BY updated_at DESC, id LIMIT 3",
         (key,),
     )
     bits = [key]

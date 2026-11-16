@@ -29,8 +29,24 @@ log = logging.getLogger("forge_core.draft")
 
 SKIP_PERMISSIONS = "--dangerously-skip-permissions"
 READONLY_TOOLS = "Read,Grep,Glob"
+READONLY_DISALLOWED_TOOLS = "Bash,Write,Edit,WebFetch"
+DEFAULT_MAX_TURNS = 8
 Runner = Callable[..., subprocess.CompletedProcess]
 WhichFn = Callable[[str], str | None]
+
+
+def resolve_max_turns(env: Mapping[str, str], *, override: int | None = None) -> int:
+    """`FORGE_CLAUDE_MAX_TURNS` (padrão 8). `override` tem precedência (ex.: Settings.claude_max_turns)."""
+    if override is not None:
+        return max(1, int(override))
+    raw = (env.get("FORGE_CLAUDE_MAX_TURNS") or "").strip()
+    if not raw:
+        return DEFAULT_MAX_TURNS
+    try:
+        value = int(raw)
+    except ValueError:
+        return DEFAULT_MAX_TURNS
+    return value if value > 0 else DEFAULT_MAX_TURNS
 
 
 def resolve_claude_bin(env: Mapping[str, str], *, which: WhichFn | None = None) -> str:
@@ -93,6 +109,9 @@ class ClaudeCliAdapter:
         isolate_git: bool = False,
         readonly: bool = True,
         model: str | None = None,
+        max_turns: int | None = None,
+        permission_mode: str | None = None,
+        disallowed_tools: str | None = None,
         **_ignored,
     ):
         self.agent_bin = agent_bin
@@ -106,6 +125,9 @@ class ClaudeCliAdapter:
         self.isolate_git = isolate_git
         self.readonly = readonly
         self.model = model
+        self.max_turns = max_turns
+        self.permission_mode = permission_mode
+        self.disallowed_tools = disallowed_tools
         self.last_workspace: str | None = None
         self.last_argv: list[str] | None = None
         self.last_child_env: dict[str, str] | None = None
@@ -123,7 +145,7 @@ class ClaudeCliAdapter:
             self.last_workspace = workspace
         scratch = tempfile.mkdtemp(prefix=SCRATCH_PREFIX)
         try:
-            argv = self._argv_for(agent_bin)
+            argv = self._argv_for(agent_bin, env)
             self.last_argv = list(argv)
             if SKIP_PERMISSIONS in argv or any(f in argv for f in FORBIDDEN_FLAGS):
                 raise DraftError("unsafe_flags")
@@ -159,12 +181,17 @@ class ClaudeCliAdapter:
                 shutil.rmtree(workspace, ignore_errors=True)
             shutil.rmtree(scratch, ignore_errors=True)
 
-    def _argv_for(self, agent_bin: str) -> list[str]:
+    def _argv_for(self, agent_bin: str, env: Mapping[str, str]) -> list[str]:
         argv = [agent_bin, "-p", "--output-format", "json"]
         if self.readonly:
             argv.extend(["--allowedTools", READONLY_TOOLS])
+        if self.permission_mode:
+            argv.extend(["--permission-mode", self.permission_mode])
+        if self.disallowed_tools:
+            argv.extend(["--disallowedTools", self.disallowed_tools])
         if self.model:
             argv.extend(["--model", self.model])
+        argv.extend(["--max-turns", str(resolve_max_turns(env, override=self.max_turns))])
         if SKIP_PERMISSIONS in argv:
             raise DraftError("unsafe_flags")
         return argv

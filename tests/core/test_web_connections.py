@@ -5,14 +5,14 @@ import pytest
 
 fastapi = pytest.importorskip("fastapi")
 cryptography = pytest.importorskip("cryptography")
+from auth_helpers import TEST_CLIENT_ID, FakeGitHub, bootstrap
 from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 
-from auth_helpers import TEST_CLIENT_ID, FakeGitHub, bootstrap
 from forge_core.auth.store import AuthStore
+from forge_core.config import load_settings
 from forge_core.connections.probes import ProbeError
 from forge_core.connections.vault import ConnectionsVault
-from forge_core.config import load_settings
 from forge_core.storage import open_repository
 from forge_core.web.app import create_app
 from forge_core.web.security import CSRF_COOKIE, CSRF_HEADER, SESSION_COOKIE
@@ -139,6 +139,8 @@ def test_owner_creates_lists_tests_without_leaking_secret(tmp_path):
     assert listed.status_code == 200
     assert listed.json()["enabled"] is True
     assert listed.json()["connections"][0]["id"] == data["id"]
+    assert listed.json()["readonly"] is True
+    assert listed.json()["policy"]
     assert SECRET not in listed.text
     tested = client.post(
         f"/api/connections/{data['id']}/test", headers=_h(csrf), json={},

@@ -151,3 +151,14 @@ def test_grants_script_never_revokes_or_grants_delete_truncate():
     for line in text.splitlines():
         if line.startswith("GRANT"):
             assert "DELETE" not in line and "TRUNCATE" not in line
+
+
+def test_writer_can_use_agents_catalog_tables(pg_env):
+    writer, owner_repo, _ = pg_env
+    reprovision(_owner(owner_repo), _role(writer))
+    assert _has(writer, "agents", "SELECT") and _has(writer, "agents", "INSERT") and _has(writer, "agents", "UPDATE")
+    assert not _has(writer, "agents", "DELETE") and not _has(writer, "agents", "TRUNCATE")
+    assert _has(writer, "agent_approvals", "SELECT") and _has(writer, "agent_approvals", "INSERT")
+    assert _has(writer, "agent_approvals", "UPDATE") and not _has(writer, "agent_approvals", "DELETE")
+    assert _has(writer, "agent_executions", "SELECT") and _has(writer, "agent_executions", "INSERT")
+    assert not _has(writer, "agent_executions", "UPDATE") and not _has(writer, "agent_executions", "DELETE")

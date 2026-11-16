@@ -3,13 +3,14 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field
 
+from ..agent_catalog.service import AgentCatalogService
 from ..auth.github import DeviceFlow, DeviceFlowError, Transport, UrllibTransport
 from ..auth.store import AuthStore, Principal
 from ..config import Settings
@@ -19,14 +20,19 @@ from ..connections.vault import ConnectionsVault
 from ..errors import AuthenticationError, AuthorizationError, DraftError
 from ..graphs.context import ContextGraph
 from ..graphs.indexer import GraphIndexer
+from ..investigations.service import InvestigationService
+from ..issues.delete import IssueDeleteService
 from ..issues.importer import CompletedIssueImporter
 from ..logging import redact
 from ..notes.service import NoteService
 from ..obsidian.vault import ObsidianVault
 from ..storage.sql import SqlRepository
+from .agents import register_agent_catalog_routes
 from .connections import register_connection_routes
 from .context_graph import register_context_graph_routes
 from .graphs import register_graph_routes
+from .investigations import register_investigation_routes
+from .issue_delete import register_issue_delete_routes
 from .issues import register_issue_import_routes
 from .notes import register_note_routes
 from .obsidian import register_obsidian_routes
@@ -82,11 +88,12 @@ def create_app(
     obsidian: ObsidianVault | None = None,
     graph_indexer: GraphIndexer | None = None,
     issue_importer: CompletedIssueImporter | None = None,
+    investigation_provider=None,
 ) -> FastAPI:
     if not settings.github_client_id:
         raise ValueError("FORGE_GITHUB_CLIENT_ID é obrigatória para o painel web")
     clock_mono = monotonic or time.monotonic
-    clock_wall = wall or (lambda: datetime.now(timezone.utc).isoformat())
+    clock_wall = wall or (lambda: datetime.now(UTC).isoformat())
     flow = DeviceFlow(settings.github_client_id, transport or UrllibTransport(), clock=clock_mono)
     store = AuthStore(repo, verify=flow.identity, clock=clock_wall)
     pending = PendingStore(clock_mono)
@@ -95,10 +102,20 @@ def create_app(
     tasks = TaskService(repo)
     panel = WebTaskService(
         repo, tasks, provider, gh, drafts_dir=drafts_dir, graph_dir=settings.graph_dir,
+        graph_prompt_max_nodes=settings.graph_prompt_max_nodes,
+        graph_prompt_max_chars=settings.graph_prompt_max_chars,
     )
     connections_vault = vault if vault is not None else ConnectionsVault.from_env()
     connections = ConnectionService(repo, store, connections_vault, probes)
     notes = NoteService(repo, store)
+    issue_delete = IssueDeleteService(repo, store, gh)
+    agent_catalog = AgentCatalogService(repo, store)
+    investigations = InvestigationService(
+        repo, store, provider=investigation_provider, graph_dir=settings.graph_dir,
+        graph_prompt_max_nodes=settings.graph_prompt_max_nodes,
+        graph_prompt_max_chars=settings.graph_prompt_max_chars,
+        claude_max_turns=settings.claude_max_turns,
+    )
     obsidian_vault = obsidian if obsidian is not None else ObsidianVault.from_settings(settings)
     issues = issue_importer if issue_importer is not None else CompletedIssueImporter(
         repo, settings, gh=gh,
@@ -119,6 +136,9 @@ def create_app(
     app.state.graphs = graphs
     app.state.context_graph = context_graph
     app.state.issues = issues
+    app.state.investigations = investigations
+    app.state.issue_delete = issue_delete
+    app.state.agent_catalog = agent_catalog
 
     def _audit(actor: str, action: str, target: str, result: str) -> None:
         repo.record_audit(actor, action, target, redact(result))
@@ -500,6 +520,26 @@ def create_app(
         need_owner=_need_owner,
         audit=_audit,
         graph_dir=settings.graph_dir,
+    )
+    register_investigation_routes(
+        app,
+        investigations,
+        json_error=_json_error,
+        need_editor_or_owner=_need_editor_or_owner,
+        panel=panel,
+    )
+    register_issue_delete_routes(
+        app,
+        issue_delete,
+        json_error=_json_error,
+        need_owner=_need_owner,
+    )
+    register_agent_catalog_routes(
+        app,
+        agent_catalog,
+        json_error=_json_error,
+        need_editor_or_owner=_need_editor_or_owner,
+        need_owner=_need_owner,
     )
 
     return app

@@ -32,6 +32,9 @@ _DEFAULT_GRAPH_NODE_LIMIT = 500
 _DEFAULT_GRAPH_EDGE_LIMIT = 1500
 _DEFAULT_GRAPH_EXTRACT_TIMEOUT = 1800
 _MAX_GRAPH_EXTRACT_TIMEOUT = 7200
+_DEFAULT_GRAPH_PROMPT_MAX_NODES = 40
+_DEFAULT_GRAPH_PROMPT_MAX_CHARS = 6000
+_DEFAULT_CLAUDE_MAX_TURNS = 8
 
 
 @dataclass(frozen=True)
@@ -56,6 +59,9 @@ class Settings:
     graph_node_limit: int = _DEFAULT_GRAPH_NODE_LIMIT
     graph_edge_limit: int = _DEFAULT_GRAPH_EDGE_LIMIT
     graph_extract_timeout: int = _DEFAULT_GRAPH_EXTRACT_TIMEOUT
+    graph_prompt_max_nodes: int = _DEFAULT_GRAPH_PROMPT_MAX_NODES
+    graph_prompt_max_chars: int = _DEFAULT_GRAPH_PROMPT_MAX_CHARS
+    claude_max_turns: int = _DEFAULT_CLAUDE_MAX_TURNS
 
 
 def _allow_folders(raw: str) -> tuple[str, ...]:
@@ -210,6 +216,33 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
             "FORGE_GRAPH_EXTRACT_TIMEOUT inválido: use um inteiro entre 60 e 7200 (segundos)"
         )
 
+    prompt_nodes = _DEFAULT_GRAPH_PROMPT_MAX_NODES
+    prompt_nodes_raw = env.get("FORGE_GRAPH_PROMPT_MAX_NODES", str(_DEFAULT_GRAPH_PROMPT_MAX_NODES)).strip()
+    try:
+        prompt_nodes = int(prompt_nodes_raw)
+        if prompt_nodes < 1 or prompt_nodes > 1000:
+            problems.append("FORGE_GRAPH_PROMPT_MAX_NODES inválido: use um inteiro entre 1 e 1000")
+    except ValueError:
+        problems.append("FORGE_GRAPH_PROMPT_MAX_NODES inválido: use um inteiro entre 1 e 1000")
+
+    prompt_chars = _DEFAULT_GRAPH_PROMPT_MAX_CHARS
+    prompt_chars_raw = env.get("FORGE_GRAPH_PROMPT_MAX_CHARS", str(_DEFAULT_GRAPH_PROMPT_MAX_CHARS)).strip()
+    try:
+        prompt_chars = int(prompt_chars_raw)
+        if prompt_chars < 200 or prompt_chars > 100000:
+            problems.append("FORGE_GRAPH_PROMPT_MAX_CHARS inválido: use um inteiro entre 200 e 100000")
+    except ValueError:
+        problems.append("FORGE_GRAPH_PROMPT_MAX_CHARS inválido: use um inteiro entre 200 e 100000")
+
+    claude_max_turns = _DEFAULT_CLAUDE_MAX_TURNS
+    turns_raw = env.get("FORGE_CLAUDE_MAX_TURNS", str(_DEFAULT_CLAUDE_MAX_TURNS)).strip()
+    try:
+        claude_max_turns = int(turns_raw)
+        if claude_max_turns < 1 or claude_max_turns > 100:
+            problems.append("FORGE_CLAUDE_MAX_TURNS inválido: use um inteiro entre 1 e 100")
+    except ValueError:
+        problems.append("FORGE_CLAUDE_MAX_TURNS inválido: use um inteiro entre 1 e 100")
+
     if problems:
         raise ConfigError("Configuração inválida:\n- " + "\n- ".join(problems))
     return Settings(
@@ -221,6 +254,8 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
         graph_dir=graph_dir, graph_poll_seconds=graph_poll, graphify_bin=graphify_bin,
         graph_node_limit=node_limit, graph_edge_limit=edge_limit,
         graph_extract_timeout=extract_timeout,
+        graph_prompt_max_nodes=prompt_nodes, graph_prompt_max_chars=prompt_chars,
+        claude_max_turns=claude_max_turns,
     )
 
 

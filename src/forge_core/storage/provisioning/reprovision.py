@@ -20,7 +20,7 @@ from pathlib import Path
 
 from ...errors import ForgeError
 
-APPEND_ONLY = ("audit_log", "task_history", "task_changes", "agent_runs", "approval_consumptions", "grant_consumptions", "dispatch_requests")
+APPEND_ONLY = ("audit_log", "task_history", "task_changes", "agent_runs", "approval_consumptions", "grant_consumptions", "dispatch_requests", "agent_executions")
 WRITER_MAY_DELETE = frozenset({"connections", "connection_hosts", "investigation_notes"})
 _ROLE = re.compile(r"^[a-z_][a-z0-9_]{0,62}$")
 SCRIPT = Path(__file__).with_name("postgres_roles.sql")

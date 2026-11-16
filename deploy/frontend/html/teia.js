@@ -1,29 +1,35 @@
 (function (global) {
   "use strict";
 
-  const COLORS = {
-    issue: "#E35A5A",
-    pr: "#8FBF9A",
-    note: "#C4A484",
-    vault: "#D0D0D0",
-    file: "#D4B46A",
-    module: "#D4A0A8",
-    class: "#E38A8A",
-    function: "#E8C989",
-  };
-  const BG = "#0E0E10";
-  const EDGE = "rgba(180,180,186,0.22)";
-  const EDGE_DIM = "rgba(180,180,186,0.05)";
-  const EDGE_HOT = "rgba(227,90,90,0.45)";
-  const LABEL = "rgba(244,244,244,0.94)";
-  const HALO = "rgba(10,10,12,0.88)";
-  const WINE = "#990000";
+  const REPO_PALETTE = [
+    "#B5473A", "#3F7D63", "#3E6E9E", "#B98B2E",
+    "#7D5BA6", "#4FA7A3", "#C2577B", "#6B7A3F",
+  ];
+  const NEUTRAL_NODE = "#8A8680";
   const MIN_K = 0.08;
   const MAX_K = 8;
   const ZOOM_LABELS = 1.35;
+  const CELL = 48;
 
-  function colorOf(type) {
-    return COLORS[type] || "#B0B0B0";
+  function hashStr(s) {
+    let h = 0;
+    for (let i = 0; i < s.length; i += 1) {
+      h = (h * 31 + s.charCodeAt(i)) | 0;
+    }
+    return Math.abs(h);
+  }
+
+  function repoColorIndex(repo) {
+    const key = String(repo || "");
+    if (!key) {
+      return -1;
+    }
+    return hashStr(key) % REPO_PALETTE.length;
+  }
+
+  function colorForRepo(repo) {
+    const idx = repoColorIndex(repo);
+    return idx === -1 ? NEUTRAL_NODE : REPO_PALETTE[idx];
   }
 
   function clamp(v, lo, hi) {
@@ -67,11 +73,38 @@
     return adj;
   }
 
+  function readTheme() {
+    const cs = global.getComputedStyle(document.documentElement);
+    function v(name, fallback) {
+      const value = cs.getPropertyValue(name).trim();
+      return value || fallback;
+    }
+    return {
+      bg: v("--teia-bg", "#0E0E10"),
+      edge: v("--teia-edge", "rgba(180,180,186,0.22)"),
+      edgeDim: v("--teia-edge-dim", "rgba(180,180,186,0.05)"),
+      edgeHot: v("--teia-edge-hot", "rgba(227,90,90,0.45)"),
+      label: v("--teia-label", "rgba(244,244,244,0.94)"),
+      halo: v("--teia-halo", "rgba(10,10,12,0.88)"),
+      hoverStroke: v("--teia-node-stroke-hover", "rgba(255,255,255,0.7)"),
+      selectStroke: v("--accent", "#990000"),
+    };
+  }
+
+  function presolve(simulation, cap) {
+    let i = 0;
+    while (i < cap && simulation.alpha() > simulation.alphaMin()) {
+      simulation.tick();
+      i += 1;
+    }
+  }
+
   function create(canvas, options) {
     const opts = options || {};
     const onSelect = typeof opts.onSelect === "function" ? opts.onSelect : function () {};
     const ctx = canvas.getContext("2d");
     const cam = { x: 0, y: 0, k: 1 };
+    let theme = readTheme();
     let dpr = 1;
     let cssW = 0;
     let cssH = 0;
@@ -79,13 +112,13 @@
     let links = [];
     let adj = {};
     let sim = null;
+    let grid = new Map();
     let selectedId = null;
     let hoverId = null;
     let hubIds = {};
     let frame = 0;
-    let running = false;
     let interacting = false;
-    let fitOnce = false;
+    let pendingFit = false;
     let drag = null;
     let moved = false;
     const prevPos = {};
@@ -97,10 +130,54 @@
       frame = global.requestAnimationFrame(function () {
         frame = 0;
         draw();
-        if (running || interacting) {
+        if (interacting) {
           kick();
         }
       });
+    }
+
+    function cellKey(x, y) {
+      return Math.floor(x / CELL) + ":" + Math.floor(y / CELL);
+    }
+
+    function gridAdd(node) {
+      const key = cellKey(node.x, node.y);
+      node._cell = key;
+      let bucket = grid.get(key);
+      if (!bucket) {
+        bucket = [];
+        grid.set(key, bucket);
+      }
+      bucket.push(node);
+    }
+
+    function gridRemove(node) {
+      const key = node._cell;
+      if (!key) {
+        return;
+      }
+      const bucket = grid.get(key);
+      if (!bucket) {
+        return;
+      }
+      const idx = bucket.indexOf(node);
+      if (idx !== -1) {
+        bucket.splice(idx, 1);
+      }
+    }
+
+    function gridMove(node) {
+      const key = cellKey(node.x, node.y);
+      if (key === node._cell) {
+        return;
+      }
+      gridRemove(node);
+      gridAdd(node);
+    }
+
+    function rebuildGrid() {
+      grid = new Map();
+      nodes.forEach(function (n) { n._cell = null; gridAdd(n); });
     }
 
     function resize() {
@@ -116,6 +193,10 @@
       if (canvas.height !== ph) {
         canvas.height = ph;
       }
+      if (pendingFit && cssW >= 2 && cssH >= 2 && nodes.length) {
+        zoomToFit();
+        pendingFit = false;
+      }
       kick();
     }
 
@@ -128,17 +209,27 @@
     }
 
     function hitNode(wx, wy) {
+      const cx = Math.floor(wx / CELL);
+      const cy = Math.floor(wy / CELL);
       let best = null;
       let bestD = Infinity;
-      for (let i = nodes.length - 1; i >= 0; i -= 1) {
-        const n = nodes[i];
-        const dx = wx - n.x;
-        const dy = wy - n.y;
-        const r = n.r + 4 / cam.k;
-        const d2 = dx * dx + dy * dy;
-        if (d2 <= r * r && d2 < bestD) {
-          best = n;
-          bestD = d2;
+      for (let gx = cx - 1; gx <= cx + 1; gx += 1) {
+        for (let gy = cy - 1; gy <= cy + 1; gy += 1) {
+          const bucket = grid.get(gx + ":" + gy);
+          if (!bucket) {
+            continue;
+          }
+          for (let i = bucket.length - 1; i >= 0; i -= 1) {
+            const n = bucket[i];
+            const dx = wx - n.x;
+            const dy = wy - n.y;
+            const r = n.r + 4 / cam.k;
+            const d2 = dx * dx + dy * dy;
+            if (d2 <= r * r && d2 < bestD) {
+              best = n;
+              bestD = d2;
+            }
+          }
         }
       }
       return best;
@@ -198,10 +289,9 @@
 
     function stopSim() {
       if (sim) {
-        sim.on("tick", null).on("end", null).stop();
+        sim.stop();
         sim = null;
       }
-      running = false;
     }
 
     function setData(rawNodes, rawEdges, settings) {
@@ -261,37 +351,20 @@
         .alpha(1)
         .alphaDecay(n > 300 ? 0.028 : 0.0228)
         .alphaMin(0.001);
-      fitOnce = true;
-      running = true;
-      sim.on("tick", function () {
-        running = true;
-        if (fitOnce && sim.alpha() < 0.12) {
-          fitOnce = false;
-          zoomToFit();
-        }
-        nodes.forEach(function (n) {
-          prevPos[n.id] = { x: n.x, y: n.y };
-        });
-        kick();
-      });
-      sim.on("end", function () {
-        running = false;
-        if (fitOnce) {
-          fitOnce = false;
-          zoomToFit();
-        }
-        kick();
-      });
+      // A simulação começa a ticar sozinha (timer interno do d3). Paramos e pré-computamos
+      // de forma síncrona para desenhar já estável, sem o "puxão" visual de uma animação longa.
+      sim.stop();
+      presolve(sim, n > 300 ? 360 : 320);
+      nodes.forEach(function (nd) { prevPos[nd.id] = { x: nd.x, y: nd.y }; });
+      rebuildGrid();
+      pendingFit = true;
       resize();
-      if (fitOnce) {
-        zoomToFit();
-      }
-      kick();
+      draw();
     }
 
     function addAround(originId, rawNodes, rawEdges) {
       const engine = global.d3force;
-      if (!engine || !originId) {
+      if (!engine || !originId || !sim) {
         return;
       }
       let origin = null;
@@ -345,27 +418,20 @@
           links.push({ source: a, target: b, type: e.type || "contains" });
         }
       });
-      const adjSrc = {};
-      links.forEach(function (e) {
-        const s = e.source.id;
-        const t = e.target.id;
-        if (!adjSrc[s]) { adjSrc[s] = {}; }
-        if (!adjSrc[t]) { adjSrc[t] = {}; }
-        adjSrc[s][t] = true;
-        adjSrc[t][s] = true;
-      });
-      adj = adjSrc;
-      if (!sim) {
-        return;
-      }
+      adj = adjacency(links.map(function (e) {
+        return { source: e.source.id, target: e.target.id };
+      }));
       sim.nodes(nodes);
       const linkF = sim.force("link");
       if (linkF) {
         linkF.links(links);
       }
-      sim.alpha(0.38).restart();
-      running = true;
-      kick();
+      // Reaquecimento local e limitado: só a vizinhança nova se ajusta, sem reanimar o grafo todo.
+      sim.alpha(0.3);
+      presolve(sim, 90);
+      nodes.forEach(function (n) { prevPos[n.id] = { x: n.x, y: n.y }; });
+      rebuildGrid();
+      draw();
     }
 
     function focusSet() {
@@ -400,7 +466,7 @@
         return;
       }
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      ctx.fillStyle = BG;
+      ctx.fillStyle = theme.bg;
       ctx.fillRect(0, 0, cssW, cssH);
       ctx.save();
       ctx.translate(cam.x, cam.y);
@@ -410,7 +476,7 @@
       links.forEach(function (e) {
         const hot = focus && focus[e.source.id] && focus[e.target.id];
         const dim = focus && !hot;
-        ctx.strokeStyle = hot ? EDGE_HOT : dim ? EDGE_DIM : EDGE;
+        ctx.strokeStyle = hot ? theme.edgeHot : dim ? theme.edgeDim : theme.edge;
         ctx.lineWidth = (hot ? 1.15 : 0.7) / cam.k;
         ctx.beginPath();
         ctx.moveTo(e.source.x, e.source.y);
@@ -425,15 +491,15 @@
         ctx.globalAlpha = inFocus ? 1 : 0.16;
         ctx.beginPath();
         ctx.arc(n.x, n.y, n.r, 0, Math.PI * 2);
-        ctx.fillStyle = colorOf(n.type);
+        ctx.fillStyle = colorForRepo(n.repo);
         ctx.fill();
         if (isSel) {
           ctx.lineWidth = 2.4 / cam.k;
-          ctx.strokeStyle = WINE;
+          ctx.strokeStyle = theme.selectStroke;
           ctx.stroke();
         } else if (isHov) {
           ctx.lineWidth = 1.6 / cam.k;
-          ctx.strokeStyle = "rgba(255,255,255,0.7)";
+          ctx.strokeStyle = theme.hoverStroke;
           ctx.stroke();
         }
         ctx.globalAlpha = 1;
@@ -451,9 +517,9 @@
           const text = String(n.label || n.id).slice(0, 32);
           const x = n.x + n.r + 5 / cam.k;
           const y = n.y;
-          ctx.strokeStyle = HALO;
+          ctx.strokeStyle = theme.halo;
           ctx.strokeText(text, x, y);
-          ctx.fillStyle = LABEL;
+          ctx.fillStyle = theme.label;
           ctx.fillText(text, x, y);
         });
       }
@@ -476,10 +542,6 @@
       if (node) {
         drag = { kind: "node", node: node, x: ev.clientX, y: ev.clientY };
         interacting = true;
-        if (sim) {
-          sim.alphaTarget(0.28).restart();
-          running = true;
-        }
         node.fx = node.x;
         node.fy = node.y;
       } else {
@@ -497,7 +559,7 @@
         const next = node ? node.id : null;
         if (next !== hoverId) {
           hoverId = next;
-          canvas.style.cursor = next ? "pointer" : "grab";
+          canvas.classList.toggle("teia-hover", !!next);
           kick();
         }
         return;
@@ -515,11 +577,14 @@
         kick();
         return;
       }
+      // Reaquecimento nenhum: só o nó arrastado se move; o resto do grafo fica parado.
       const node = drag.node;
       node.fx = w.x;
       node.fy = w.y;
       node.x = w.x;
       node.y = w.y;
+      prevPos[node.id] = { x: node.x, y: node.y };
+      gridMove(node);
       drag.x = ev.clientX;
       drag.y = ev.clientY;
       kick();
@@ -535,15 +600,8 @@
       interacting = false;
       canvas.classList.remove("dragging");
       if (kind === "node" && node) {
-        if (sim) {
-          sim.alphaTarget(0);
-        }
-        global.setTimeout(function () {
-          if (node.fx !== null) {
-            node.fx = null;
-            node.fy = null;
-          }
-        }, 700);
+        node.fx = null;
+        node.fy = null;
         if (!moved) {
           selectedId = node.id;
           onSelect(node.id);
@@ -572,11 +630,22 @@
       kick();
     }
 
+    function dblclick(ev) {
+      const w = toWorld(ev.clientX, ev.clientY);
+      if (hitNode(w.x, w.y)) {
+        return;
+      }
+      selectedId = null;
+      onSelect(null);
+      kick();
+    }
+
     canvas.addEventListener("pointerdown", pointerDown);
     canvas.addEventListener("pointermove", pointerMove);
     canvas.addEventListener("pointerup", pointerUp);
     canvas.addEventListener("pointercancel", pointerUp);
     canvas.addEventListener("wheel", wheel, { passive: false });
+    canvas.addEventListener("dblclick", dblclick);
     canvas.addEventListener("contextmenu", function (ev) { ev.preventDefault(); });
 
     let ro = null;
@@ -586,6 +655,15 @@
     }
     global.addEventListener("resize", resize);
 
+    let themeObserver = null;
+    if (global.MutationObserver) {
+      themeObserver = new global.MutationObserver(function () {
+        theme = readTheme();
+        draw();
+      });
+      themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+    }
+
     resize();
 
     return {
@@ -593,14 +671,22 @@
       addAround: addAround,
       setSelected: setSelected,
       resize: resize,
-      zoomToFit: function () { zoomToFit(); kick(); },
+      zoomToFit: function () { zoomToFit(); pendingFit = false; kick(); },
       destroy: function () {
         stopSim();
         if (ro) { ro.disconnect(); }
+        if (themeObserver) { themeObserver.disconnect(); }
         global.removeEventListener("resize", resize);
       },
     };
   }
 
-  global.ForgeTeia = { create: create, COLORS: COLORS };
+  global.ForgeTeia = {
+    create: create,
+    colorForRepo: colorForRepo,
+    repoSwatchClass: function (repo) {
+      const idx = repoColorIndex(repo);
+      return idx === -1 ? "teia-swatch-neutral" : "teia-swatch-" + idx;
+    },
+  };
 })(typeof window !== "undefined" ? window : globalThis);

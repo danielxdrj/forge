@@ -131,9 +131,12 @@ def _collect_issues(repo, gh: GhCli | None) -> tuple[list[dict], str | None]:
         except DraftError as exc:
             error = exc.code
     for row in repo.fetch(
-        "SELECT issue_key, title FROM investigation_notes ORDER BY updated_at DESC, id"
+        "SELECT issue_key, title FROM investigation_notes WHERE kind = 'note' "
+        "ORDER BY updated_at DESC, id"
     ):
         key = row[0]
+        if not key:
+            continue
         if key in seen:
             continue
         repo_name, _sep, number = key.partition("#")

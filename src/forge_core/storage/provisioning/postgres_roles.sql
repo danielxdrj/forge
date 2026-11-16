@@ -21,5 +21,9 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON connections, connection_hosts TO <PAPEL_
 GRANT SELECT, INSERT, UPDATE, DELETE ON investigation_notes TO <PAPEL_APP>;
 -- Issues concluídas importadas (somente leitura no GitHub). Upsert no Forge.
 GRANT SELECT, INSERT, UPDATE ON completed_issues TO <PAPEL_APP>;
+-- Catálogo/governança da aba Agentes (0019): cadastro e aprovação. Sem DELETE.
+GRANT SELECT, INSERT, UPDATE ON agents, agent_approvals TO <PAPEL_APP>;
+-- Execuções do catálogo: append-only (sem UPDATE/DELETE).
+GRANT SELECT, INSERT ON agent_executions TO <PAPEL_APP>;
 -- Sem DELETE nas demais: projeto e repositório são desativados (active=0), nunca apagados.
 -- Sem UPDATE/DELETE/TRUNCATE em audit_log e sem ser dono de nenhuma tabela.

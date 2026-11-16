@@ -14,7 +14,13 @@ from ..draft.cursor_cli import resolve_cursor_model
 from ..draft.engine import select_engine_adapter
 from ..draft.github_gh import GhCli
 from ..draft.service import ask_confirm
-from ..errors import AuthenticationError, AuthorizationError, ConfigError, DraftError, ForgeError
+from ..errors import (
+    AuthenticationError,
+    AuthorizationError,
+    ConfigError,
+    DraftError,
+    ForgeError,
+)
 from ..storage.sql import open_repository
 from ..tasks.service import TaskService
 from .gitops import GitCli
@@ -110,7 +116,11 @@ def _execute(args, argv, env, transport, provider, gh, git, out, err, stdin) -> 
             adapter = select_engine_adapter(
                 env, implementer=True, model=model or None, timeout=timeout,
             )
-        service = ResolverService(tasks, adapter, gh_cli, git=git_cli, attempts=attempts)
+        service = ResolverService(
+            tasks, adapter, gh_cli, git=git_cli, attempts=attempts,
+            graph_dir=settings.graph_dir, graph_prompt_max_nodes=settings.graph_prompt_max_nodes,
+            graph_prompt_max_chars=settings.graph_prompt_max_chars,
+        )
         if args.retomar:
             result = service.load_resume(
                 args.retomar, principal,

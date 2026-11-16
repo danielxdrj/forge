@@ -163,3 +163,13 @@ def test_postgres_owner_blocked_by_trigger(pg_env, sql):
     with pytest.raises(psycopg.errors.RaiseException):
         owner._run([(sql, ())])
     assert len([a for a in writer.list_audit() if a.action == "task.create"]) == 1
+
+
+@pg
+def test_fetch_rolls_back_aborted_transaction(pg_env):
+    import psycopg
+
+    writer, _, _ = pg_env
+    with pytest.raises(psycopg.errors.UndefinedTable):
+        writer.fetch("SELECT 1 FROM table_that_does_not_exist")
+    assert writer.fetch("SELECT 1")[0][0] == 1

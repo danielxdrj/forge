@@ -36,6 +36,8 @@
     loading: true,
     issues: [],
     issuesError: "",
+    issueQuery: "",
+    issueRepoFilter: "",
     selectedIssue: "",
     notes: [],
     selectedNoteId: "",
@@ -57,10 +59,60 @@
     teiaSelected: null,
     teiaExpanded: {},
     relatedIssues: [],
+    invest: {
+      repos: [],
+      connections: [],
+      list: [],
+      current: null,
+      form: { description: "", repos: [], connectionIds: [], issueKey: "" },
+      busy: false,
+      error: "",
+      notice: "",
+    },
+    agentes: {
+      items: [],
+      metrics: null,
+      approvals: [],
+      selectedId: "",
+      selected: null,
+      executions: [],
+      form: null,
+      busy: false,
+      error: "",
+      notice: "",
+    },
   };
   let teiaCtl = null;
   let teiaCanvas = null;
   let teiaKey = "";
+  const WHO_CACHE_KEY = "forge-who";
+
+  function cacheWho(who) {
+    try {
+      window.sessionStorage.setItem(WHO_CACHE_KEY, JSON.stringify(who));
+    } catch (err) {
+      /* quota ou modo privado: segue sem cache */
+    }
+  }
+
+  function readCachedWho() {
+    try {
+      const raw = window.sessionStorage.getItem(WHO_CACHE_KEY);
+      return raw ? JSON.parse(raw) : null;
+    } catch (err) {
+      return null;
+    }
+  }
+
+  function clearCachedWho() {
+    try {
+      window.sessionStorage.removeItem(WHO_CACHE_KEY);
+    } catch (err) {
+      /* ignore */
+    }
+  }
+
+  state.who = readCachedWho();
   const TEIA_TYPES = [
     { id: "issue", label: "Issues" },
     { id: "pr", label: "PRs" },
@@ -121,6 +173,90 @@
     return node;
   }
 
+  function pageHeader(eyebrow, title, subtitle) {
+    return el("header", { class: "page-header" }, [
+      el("p", { class: "page-eyebrow", text: eyebrow }),
+      el("h2", { class: "page-title", text: title }),
+      subtitle ? el("p", { class: "page-subtitle", text: subtitle }) : null,
+    ]);
+  }
+
+  function relativeTime(iso) {
+    if (!iso) {
+      return "—";
+    }
+    const then = new Date(iso).getTime();
+    if (Number.isNaN(then)) {
+      return "—";
+    }
+    const sec = Math.round((Date.now() - then) / 1000);
+    if (sec < 5) {
+      return "agora";
+    }
+    if (sec < 60) {
+      return "há " + sec + " s";
+    }
+    const min = Math.round(sec / 60);
+    if (min < 60) {
+      return "há " + min + " min";
+    }
+    const hour = Math.round(min / 60);
+    if (hour < 24) {
+      return "há " + hour + " h";
+    }
+    const day = Math.round(hour / 24);
+    return "há " + day + " d";
+  }
+
+  function splitCsv(text) {
+    return String(text || "")
+      .split(",")
+      .map(function (s) { return s.trim(); })
+      .filter(Boolean);
+  }
+
+  function openModal(opts) {
+    const trigger = document.activeElement;
+    const titleId = "modal-title-" + Math.random().toString(36).slice(2, 8);
+    const overlay = el("div", { class: "modal-overlay" });
+    function close() {
+      document.removeEventListener("keydown", onKey);
+      overlay.remove();
+      if (trigger && typeof trigger.focus === "function") {
+        trigger.focus();
+      }
+    }
+    function onKey(ev) {
+      if (ev.key === "Escape") {
+        close();
+      }
+    }
+    const dialog = el("div", {
+      class: "modal-dialog", role: "dialog", "aria-modal": "true", "aria-labelledby": titleId,
+    });
+    const head = el("div", { class: "modal-head" }, [
+      el("h2", { id: titleId, text: opts.title }),
+      el("button", { type: "button", class: "modal-close", "aria-label": "Fechar", text: "×", onClick: close }),
+    ]);
+    const body = el("div", { class: "modal-body" });
+    dialog.appendChild(head);
+    dialog.appendChild(body);
+    overlay.appendChild(dialog);
+    document.addEventListener("keydown", onKey);
+    overlay.addEventListener("mousedown", function (ev) {
+      if (ev.target === overlay) {
+        close();
+      }
+    });
+    document.body.appendChild(overlay);
+    opts.build(body, close);
+    const focusable = dialog.querySelector("input, textarea, select, button:not(.modal-close)");
+    if (focusable) {
+      focusable.focus();
+    }
+    return { close: close, body: body };
+  }
+
   function safeLink(url, label) {
     const href = githubHref(url || "");
     if (!href) {
@@ -176,10 +312,12 @@
     const res = await api("/api/auth/whoami");
     if (res.status === 401) {
       state.who = null;
+      clearCachedWho();
       return;
     }
     if (res.ok) {
       state.who = res.data;
+      cacheWho(res.data);
     }
   }
 
@@ -229,16 +367,19 @@
 
   async function afterLogin() {
     await loadWhoami();
+    render();
     if (isEditor()) {
       await loadEditorData();
+      render();
     }
     if (canEditNotes() && activeTab() === "investigacao") {
       await loadInvestigacao();
+      render();
     }
     if (canEditNotes() && activeTab() === "teia") {
       await loadTeia();
+      render();
     }
-    render();
   }
 
   function isEditor() {
@@ -278,6 +419,7 @@
     await api("/api/auth/logout", { method: "POST", body: {} });
     stopPoll();
     state.who = null;
+    clearCachedWho();
     state.pending = null;
     state.draft = null;
     state.tasks = [];
@@ -457,6 +599,29 @@
       path_forbidden: "Caminho fora da allowlist do vault.",
       file_too_large: "Arquivo do vault acima do limite.",
       issues_import: "Falha ao importar issues concluídas.",
+      invalid_description: "Descreva o problema (até 8 KiB).",
+      invalid_repos: "Lista de repositórios inválida.",
+      invalid_connection_ids: "Lista de conexões inválida.",
+      secret_in_prompt: "O contexto tocaria um segredo; ajuste a descrição.",
+      repo_required: "Escolha um repositório para a tarefa.",
+      provider_missing: "Nenhum motor de LLM configurado no servidor.",
+      claude_cli_missing: "Claude Code CLI não está disponível no container.",
+      cursor_cli_missing: "Cursor CLI não está disponível no container.",
+      claude_cli_error: "Falha ao rodar o Claude Code CLI.",
+      provider_error: "Falha no motor de investigação.",
+      confirm_mismatch: "Confirmação não bate com owner/repo#número.",
+      issue_delete_forbidden: "Sem permissão de admin para apagar; é possível fechar como não planejada.",
+      invalid_issue_delete: "Não foi possível identificar a issue.",
+      invalid_name: "Informe um nome para o agente.",
+      invalid_scope: "Escolha um escopo válido.",
+      invalid_status: "Status inválido.",
+      invalid_trigger: "Gatilho inválido.",
+      invalid_engine: "Motor inválido.",
+      invalid_permissions: "Lista de permissões inválida.",
+      write_denied_resource: "Banco, FTP/SFTP e Portainer nunca recebem permissão de escrita.",
+      name_taken: "Já existe um agente com esse nome.",
+      already_decided: "Esta aprovação já foi decidida.",
+      invalid_decision: "Decisão inválida.",
     };
     let text = map[code] || code;
     const fields = detail && Array.isArray(detail.fields) ? detail.fields : [];
@@ -471,7 +636,7 @@
 
   function activeTab() {
     const hash = (window.location.hash || "").replace(/^#/, "");
-    if (hash === "investigacao" || hash === "teia") {
+    if (hash === "investigacao" || hash === "teia" || hash === "agentes") {
       return hash;
     }
     return "tarefas";
@@ -501,6 +666,14 @@
     const issue = document.getElementById("issue-select");
     if (issue) {
       state.selectedIssue = issue.value;
+    }
+    const issueQuery = document.getElementById("issue-filter-text");
+    const issueRepoFilter = document.getElementById("issue-filter-repo");
+    if (issueQuery) {
+      state.issueQuery = issueQuery.value;
+    }
+    if (issueRepoFilter) {
+      state.issueRepoFilter = issueRepoFilter.value;
     }
     const noteTitle = document.getElementById("note-title");
     const noteBody = document.getElementById("note-body");
@@ -536,6 +709,7 @@
     if (document.getElementById("teia-type-issue")) {
       state.teiaTypes = types;
     }
+    snapshotInvestForm();
   }
 
   function renderNav() {
@@ -550,6 +724,14 @@
         conn.removeAttribute("hidden");
       } else {
         conn.setAttribute("hidden", "");
+      }
+    }
+    const agentes = document.getElementById("nav-agentes");
+    if (agentes) {
+      if (canEditNotes()) {
+        agentes.removeAttribute("hidden");
+      } else {
+        agentes.setAttribute("hidden", "");
       }
     }
   }
@@ -656,6 +838,7 @@
   }
 
   function renderEditor(root) {
+    root.appendChild(pageHeader("01 — TAREFAS", "Tarefas", "Gere, revise e publique tarefas a partir de um contexto escrito, para os repositórios da allowlist."));
     if (!isEditor()) {
       root.appendChild(el("section", { class: "card" }, [
         el("p", { class: "error", text: "Só quem tem o papel editor pode criar tarefas. O owner não implica editor; peça grant --role editor." }),
@@ -770,7 +953,7 @@
       el("th", { text: "Status" }),
     ];
     if (kind === "published") {
-      cols.push(el("th", { text: "Issue" }), el("th", { text: "PR" }));
+      cols.push(el("th", { text: "Issue" }), el("th", { text: "PR" }), el("th", { text: "" }));
     } else {
       cols.push(el("th", { text: "" }));
     }
@@ -786,6 +969,14 @@
       if (kind === "published") {
         cells.push(el("td", null, [publishedIssueLink(task.issue_url)]));
         cells.push(el("td", null, [safeLink(task.pr_url, "PR")]));
+        const parts = splitOwnerRepo(task.repo);
+        const number = issueNumberFromUrl(task.issue_url);
+        const del = deleteIssueButton(parts.owner, parts.repo, number, async function () {
+          state.notice = "Issue apagada.";
+          await loadEditorData();
+          render();
+        });
+        cells.push(el("td", null, [del]));
       } else {
         cells.push(el("td", null, [el("button", {
           type: "button",
@@ -815,6 +1006,193 @@
     ]);
   }
 
+  function mdInline(text, target) {
+    const re = /\*\*(.+?)\*\*|`([^`]+)`/g;
+    let last = 0;
+    let m;
+    while ((m = re.exec(text))) {
+      if (m.index > last) {
+        target.appendChild(document.createTextNode(text.slice(last, m.index)));
+      }
+      if (m[1] !== undefined) {
+        target.appendChild(el("strong", { text: m[1] }));
+      } else {
+        target.appendChild(el("code", { text: m[2] }));
+      }
+      last = re.lastIndex;
+    }
+    if (last < text.length) {
+      target.appendChild(document.createTextNode(text.slice(last)));
+    }
+    return target;
+  }
+
+  function renderMarkdownNodes(text) {
+    const lines = String(text || "").replace(/\r\n/g, "\n").split("\n");
+    const out = [];
+    let para = [];
+    let i = 0;
+    function flushPara() {
+      if (para.length) {
+        out.push(mdInline(para.join(" "), el("p", null, [])));
+        para = [];
+      }
+    }
+    while (i < lines.length) {
+      const line = lines[i];
+      const heading = /^(#{1,4})\s+(.*)$/.exec(line);
+      if (heading) {
+        flushPara();
+        const tag = "h" + Math.min(6, heading[1].length + 2);
+        out.push(mdInline(heading[2], el(tag, null, [])));
+        i += 1;
+        continue;
+      }
+      if (/^[-*]\s+/.test(line)) {
+        flushPara();
+        const ul = el("ul", { class: "markdown-list" }, []);
+        while (i < lines.length && /^[-*]\s+/.test(lines[i])) {
+          ul.appendChild(mdInline(lines[i].replace(/^[-*]\s+/, ""), el("li", null, [])));
+          i += 1;
+        }
+        out.push(ul);
+        continue;
+      }
+      if (line.trim() === "") {
+        flushPara();
+        i += 1;
+        continue;
+      }
+      para.push(line.trim());
+      i += 1;
+    }
+    flushPara();
+    if (!out.length) {
+      out.push(el("p", { class: "muted", text: "Sem resultado." }));
+    }
+    return out;
+  }
+
+  function readonlySeal() {
+    return el("p", { class: "banner banner-info seal-readonly" }, [
+      el("span", { class: "pill pill-ok", text: "SOMENTE LEITURA" }),
+      el("span", { text: "Agentes não alteram dados nem recebem suas credenciais de escrita." }),
+    ]);
+  }
+
+  async function loadInvestRepos() {
+    const res = await api("/api/investigations/repos");
+    state.invest.repos = res.ok ? (res.data.repos || []) : [];
+  }
+
+  async function loadInvestConnections() {
+    const res = await api("/api/connections");
+    if (res.ok && res.data.enabled !== false && Array.isArray(res.data.connections)) {
+      state.invest.connections = res.data.connections;
+    } else {
+      state.invest.connections = [];
+    }
+  }
+
+  async function loadInvestList() {
+    const res = await api("/api/investigations");
+    state.invest.list = res.ok ? (res.data.investigations || []) : [];
+  }
+
+  function toggleInvestRepo(repo, checked) {
+    const list = state.invest.form.repos;
+    const idx = list.indexOf(repo);
+    if (checked && idx === -1) {
+      list.push(repo);
+    } else if (!checked && idx !== -1) {
+      list.splice(idx, 1);
+    }
+  }
+
+  function toggleInvestConnection(id, checked) {
+    const list = state.invest.form.connectionIds;
+    const idx = list.indexOf(id);
+    if (checked && idx === -1) {
+      list.push(id);
+    } else if (!checked && idx !== -1) {
+      list.splice(idx, 1);
+    }
+  }
+
+  function snapshotInvestForm() {
+    const desc = document.getElementById("invest-description");
+    if (desc) {
+      state.invest.form.description = desc.value;
+    }
+    const issueKey = document.getElementById("invest-issue-key");
+    if (issueKey) {
+      state.invest.form.issueKey = issueKey.value;
+    }
+  }
+
+  async function runInvestigation() {
+    snapshotInvestForm();
+    const form = state.invest.form;
+    if (!form.description.trim()) {
+      state.invest.error = "invalid_description";
+      render();
+      return;
+    }
+    state.invest.busy = true;
+    state.invest.error = "";
+    state.invest.notice = "";
+    render();
+    const body = {
+      description: form.description,
+      repos: form.repos.slice(),
+      connection_ids: form.connectionIds.slice(),
+    };
+    if (form.issueKey && form.issueKey.trim()) {
+      body.issue_key = form.issueKey.trim();
+    }
+    const res = await api("/api/investigations/run", { method: "POST", body: body });
+    state.invest.busy = false;
+    if (!res.ok) {
+      state.invest.error = (res.data && res.data.error) || "error";
+      render();
+      return;
+    }
+    state.invest.current = res.data;
+    state.invest.notice = "Investigação concluída.";
+    await loadInvestList();
+    render();
+  }
+
+  async function openInvestigation(id) {
+    const res = await api("/api/investigations/" + encodeURIComponent(id));
+    if (!res.ok) {
+      state.invest.error = (res.data && res.data.error) || "error";
+      render();
+      return;
+    }
+    state.invest.current = res.data;
+    state.invest.notice = "";
+    render();
+  }
+
+  async function investigationToTask(id, repo) {
+    state.invest.busy = true;
+    state.invest.error = "";
+    render();
+    const res = await api("/api/investigations/" + encodeURIComponent(id) + "/to-task", {
+      method: "POST",
+      body: repo ? { repo: repo } : {},
+    });
+    state.invest.busy = false;
+    if (!res.ok) {
+      state.invest.error = (res.data && res.data.error) || "error";
+      render();
+      return;
+    }
+    state.invest.notice = "Rascunho de tarefa criado a partir da investigação. Veja na aba Tarefas.";
+    render();
+  }
+
   async function loadInvestigacao() {
     if (!canEditNotes()) {
       return;
@@ -835,6 +1213,9 @@
     }
     await loadNotes();
     await loadRelated();
+    await loadInvestRepos();
+    await loadInvestConnections();
+    await loadInvestList();
   }
 
   async function loadNotes() {
@@ -889,6 +1270,291 @@
     state.notice = "Issues concluídas: " + imported + " novas, " + updated + " atualizadas.";
     await loadInvestigacao();
     render();
+  }
+
+  function splitOwnerRepo(full) {
+    const parts = String(full || "").split("/");
+    return { owner: parts[0] || "", repo: parts[1] || "" };
+  }
+
+  function issueNumberFromUrl(url) {
+    const m = /\/issues\/(\d+)/.exec(String(url || ""));
+    return m ? parseInt(m[1], 10) : null;
+  }
+
+  function openDeleteIssueModal(owner, repoName, number, onDeleted) {
+    const expected = owner + "/" + repoName + "#" + number;
+    const form = { confirm: "", busy: false, error: "" };
+    let modal = null;
+    function paint(body) {
+      body.replaceChildren();
+      body.appendChild(el("p", null, [
+        el("span", { text: "Isto apaga a issue " }),
+        el("span", { class: "modal-confirm-key", text: expected }),
+        el("span", { text: " no GitHub (ou fecha como não planejada) e remove os registros locais no Forge." }),
+      ]));
+      body.appendChild(el("label", { text: "Digite \"" + expected + "\" para confirmar", for: "delete-issue-confirm" }));
+      const input = el("input", {
+        id: "delete-issue-confirm", type: "text", value: form.confirm, autocomplete: "off",
+        onInput: function (ev) { form.confirm = ev.target.value; paint(body); },
+      });
+      body.appendChild(input);
+      if (form.error === "issue_delete_forbidden") {
+        body.appendChild(el("p", { class: "warn", text: errorMessage("issue_delete_forbidden") }));
+      } else if (form.error) {
+        body.appendChild(el("p", { class: "error", text: errorMessage(form.error) }));
+      }
+      const matches = form.confirm.trim() === expected;
+      const row = el("div", { class: "row" });
+      row.appendChild(el("button", {
+        type: "button",
+        class: "danger",
+        text: form.busy ? "Aguarde…" : "Apagar issue",
+        disabled: (!matches || form.busy) ? "disabled" : null,
+        onClick: function () { submit(body, "delete"); },
+      }));
+      if (form.error === "issue_delete_forbidden") {
+        row.appendChild(el("button", {
+          type: "button",
+          text: form.busy ? "Aguarde…" : "Fechar como não planejada",
+          disabled: form.busy ? "disabled" : null,
+          onClick: function () { submit(body, "close"); },
+        }));
+      }
+      row.appendChild(el("button", { type: "button", text: "Cancelar", onClick: function () { modal.close(); } }));
+      body.appendChild(row);
+      input.focus();
+      input.setSelectionRange(input.value.length, input.value.length);
+    }
+    async function submit(body, mode) {
+      if (form.confirm.trim() !== expected) {
+        return;
+      }
+      form.busy = true;
+      form.error = "";
+      paint(body);
+      const payload = { confirm: form.confirm.trim() };
+      if (mode === "close") {
+        payload.fallback = "close";
+      }
+      const res = await api(
+        "/api/issues/" + encodeURIComponent(owner) + "/" + encodeURIComponent(repoName) + "/" + number + "/delete",
+        { method: "POST", body: payload },
+      );
+      form.busy = false;
+      if (!res.ok) {
+        form.error = (res.data && res.data.error) || "error";
+        paint(body);
+        return;
+      }
+      modal.close();
+      if (typeof onDeleted === "function") {
+        onDeleted();
+      }
+    }
+    modal = openModal({ title: "Apagar issue", build: paint });
+  }
+
+  function trashIcon() {
+    const ns = "http://www.w3.org/2000/svg";
+    const svg = document.createElementNS(ns, "svg");
+    svg.setAttribute("viewBox", "0 0 16 16");
+    svg.setAttribute("width", "13");
+    svg.setAttribute("height", "13");
+    svg.setAttribute("aria-hidden", "true");
+    const path = document.createElementNS(ns, "path");
+    path.setAttribute("fill", "none");
+    path.setAttribute("stroke", "currentColor");
+    path.setAttribute("stroke-width", "1.5");
+    path.setAttribute("stroke-linecap", "round");
+    path.setAttribute("stroke-linejoin", "round");
+    path.setAttribute("d", "M5.5 6.2v5M8 6.2v5M10.5 6.2v5M3.5 4.3h9M6.2 4.3V3.2h3.6v1.1M4.2 4.3l.5 8.2h6.6l.5-8.2");
+    svg.appendChild(path);
+    return svg;
+  }
+
+  function deleteIssueButton(owner, repoName, number, onDeleted, compact) {
+    if (!owner || !repoName || !number || !isOwner()) {
+      return null;
+    }
+    const key = owner + "/" + repoName + "#" + number;
+    const btn = el("button", {
+      type: "button",
+      class: compact ? "danger issue-delete-btn" : "danger",
+      title: "Apagar issue",
+      "aria-label": "Apagar issue " + key,
+      onClick: function (ev) {
+        ev.stopPropagation();
+        openDeleteIssueModal(owner, repoName, number, onDeleted);
+      },
+    });
+    if (compact) {
+      btn.appendChild(trashIcon());
+      btn.appendChild(el("span", { text: "Apagar" }));
+    } else {
+      btn.textContent = "Apagar issue";
+    }
+    return btn;
+  }
+
+  function issueRowKey(item) {
+    if (item.repo && item.number) {
+      const repo = String(item.repo);
+      const slash = repo.lastIndexOf("/");
+      const short = slash >= 0 ? repo.slice(slash + 1) : repo;
+      return short + "#" + item.number;
+    }
+    return item.issue_key || "";
+  }
+
+  function uniqueIssueRepos() {
+    const seen = {};
+    const out = [];
+    state.issues.forEach(function (item) {
+      const repo = item.repo || "";
+      if (repo && !seen[repo]) {
+        seen[repo] = true;
+        out.push(repo);
+      }
+    });
+    out.sort();
+    return out;
+  }
+
+  function filteredIssues() {
+    const q = (state.issueQuery || "").trim().toLowerCase();
+    const repo = state.issueRepoFilter || "";
+    return state.issues.filter(function (item) {
+      if (repo && item.repo !== repo) {
+        return false;
+      }
+      if (!q) {
+        return true;
+      }
+      const hay = [item.issue_key, item.title, item.repo, item.number].join(" ").toLowerCase();
+      return hay.indexOf(q) !== -1;
+    });
+  }
+
+  function onIssueDeleted(item) {
+    return async function () {
+      state.notice = "Issue " + item.issue_key + " apagada.";
+      await loadInvestigacao();
+      render();
+    };
+  }
+
+  function paintIssueRows(list) {
+    list.replaceChildren();
+    const items = filteredIssues();
+    if (!items.length) {
+      list.appendChild(el("p", {
+        class: "muted issue-list-empty",
+        text: state.issues.length ? "Nenhuma issue corresponde ao filtro." : "Nenhuma issue carregada.",
+      }));
+      return;
+    }
+    items.forEach(function (item) {
+      const parts = splitOwnerRepo(item.repo);
+      const row = el("div", {
+        class: "issue-row" + (state.selectedIssue === item.issue_key ? " active" : ""),
+      });
+      const pick = el("button", {
+        type: "button",
+        class: "issue-row-pick",
+        onClick: function () { selectIssue(item.issue_key); },
+      }, [
+        el("span", { class: "issue-row-key", text: issueRowKey(item) }),
+        el("span", { class: "issue-row-title", text: item.title || item.issue_key || "(sem título)" }),
+      ]);
+      row.appendChild(pick);
+      const del = deleteIssueButton(parts.owner, parts.repo, item.number, onIssueDeleted(item), true);
+      if (del) {
+        row.appendChild(del);
+      }
+      list.appendChild(row);
+    });
+  }
+
+  function renderIssuePicker() {
+    const issueBox = el("section", { class: "card" }, [
+      el("h2", { text: "Issue" }),
+      el("label", { text: "Issue do GitHub", for: "issue-select" }),
+    ]);
+    const select = el("select", {
+      id: "issue-select",
+      onChange: function (ev) { selectIssue(ev.target.value); },
+    });
+    select.appendChild(el("option", { value: "", text: "Selecione uma issue" }));
+    state.issues.forEach(function (item) {
+      const label = item.issue_key + (item.title ? " — " + item.title : "");
+      const opt = el("option", { value: item.issue_key, text: label });
+      if (state.selectedIssue === item.issue_key) {
+        opt.selected = true;
+      }
+      select.appendChild(opt);
+    });
+    issueBox.appendChild(select);
+    if (state.issuesError) {
+      issueBox.appendChild(el("p", { class: "muted", text: state.issuesError }));
+    }
+    const repoWrap = el("div", null, [
+      el("label", { text: "Repositório", for: "issue-filter-repo" }),
+    ]);
+    const toolbar = el("div", { class: "issue-toolbar" }, [
+      el("div", null, [
+        el("label", { text: "Filtrar", for: "issue-filter-text" }),
+        el("input", {
+          id: "issue-filter-text",
+          type: "text",
+          value: state.issueQuery || "",
+          placeholder: "Buscar por título, repo ou número",
+          onInput: function (ev) {
+            state.issueQuery = ev.target.value;
+            const list = document.getElementById("issue-list-scroll");
+            if (list) {
+              paintIssueRows(list);
+            }
+          },
+        }),
+      ]),
+      repoWrap,
+    ]);
+    const repoSel = el("select", {
+      id: "issue-filter-repo",
+      onChange: function (ev) {
+        state.issueRepoFilter = ev.target.value;
+        const list = document.getElementById("issue-list-scroll");
+        if (list) {
+          paintIssueRows(list);
+        }
+      },
+    });
+    repoSel.appendChild(el("option", { value: "", text: "Todos os repositórios" }));
+    uniqueIssueRepos().forEach(function (repo) {
+      const opt = el("option", { value: repo, text: repo });
+      if (state.issueRepoFilter === repo) {
+        opt.selected = true;
+      }
+      repoSel.appendChild(opt);
+    });
+    repoWrap.appendChild(repoSel);
+    issueBox.appendChild(toolbar);
+    const list = el("div", { class: "issue-list-scroll", id: "issue-list-scroll" });
+    paintIssueRows(list);
+    issueBox.appendChild(list);
+    if (isOwner()) {
+      issueBox.appendChild(el("div", { class: "issue-list-actions" }, [
+        el("button", {
+          type: "button",
+          class: "primary",
+          text: state.busy ? "Aguarde…" : "Importar issues concluídas",
+          disabled: state.busy ? "disabled" : null,
+          onClick: function () { importCompletedIssues(); },
+        }),
+      ]));
+    }
+    return issueBox;
   }
 
   async function openNote(noteId) {
@@ -1081,6 +1747,39 @@
       file: "Arquivo", module: "Módulo", class: "Classe", function: "Função",
     };
     return map[type] || type || "";
+  }
+
+  function teiaStatus() {
+    if (state.graphBusy) {
+      return { cls: "pill-warn", text: "INDEXANDO" };
+    }
+    const hasData = (state.teia.nodes || []).length > 0 || (state.graphs || []).length > 0;
+    if (hasData) {
+      return { cls: "pill-ok", text: "ATIVO" };
+    }
+    return { cls: "pill-muted", text: "DESLIGADO" };
+  }
+
+  function teiaLegendRepos() {
+    const seen = {};
+    const out = [];
+    (state.teia.nodes || []).forEach(function (n) {
+      const repo = n.repo || "";
+      if (repo && !seen[repo]) {
+        seen[repo] = true;
+        out.push(repo);
+      }
+    });
+    if (!out.length) {
+      (state.graphs || []).forEach(function (g) {
+        if (g.repo && !seen[g.repo]) {
+          seen[g.repo] = true;
+          out.push(g.repo);
+        }
+      });
+    }
+    out.sort();
+    return out;
   }
 
   function teiaCountText() {
@@ -1319,7 +2018,130 @@
     }
   }
 
+  function renderInvestForm(root) {
+    const card = el("section", { class: "card card-eng" }, [
+      el("div", { class: "card-head" }, [
+        el("span", { class: "icon-box icon-eng", text: "B" }),
+        el("h2", { text: "Nova investigação" }),
+        el("span", { class: "pill pill-eng", text: "LIVRE" }),
+      ]),
+      el("p", { class: "muted", text: "Descreva o problema, erro ou sintoma. Escolha repositórios e, se quiser, conexões e uma issue existente." }),
+    ]);
+    card.appendChild(el("label", { text: "Descrição", for: "invest-description" }));
+    const desc = el("textarea", { id: "invest-description", class: "preview" });
+    desc.value = state.invest.form.description || "";
+    card.appendChild(desc);
+
+    card.appendChild(el("p", { class: "teia-k", text: "Repositórios" }));
+    if (!state.invest.repos.length) {
+      card.appendChild(el("p", { class: "muted", text: "Nenhum repositório elegível." }));
+    } else {
+      const reposBox = el("div", { class: "teia-types" });
+      state.invest.repos.forEach(function (repo) {
+        const id = "invest-repo-" + repo.replace(/[^a-z0-9]/gi, "-");
+        const box = el("input", { id: id, type: "checkbox", onChange: function (ev) { toggleInvestRepo(repo, ev.target.checked); } });
+        if (state.invest.form.repos.indexOf(repo) !== -1) {
+          box.checked = true;
+        }
+        reposBox.appendChild(el("label", { class: "teia-type", for: id }, [box, el("span", { text: repo })]));
+      });
+      card.appendChild(reposBox);
+    }
+
+    if (state.invest.connections.length) {
+      card.appendChild(el("p", { class: "teia-k", text: "Conexões (metadados; sem segredo)" }));
+      const connBox = el("div", { class: "teia-types" });
+      state.invest.connections.forEach(function (conn) {
+        const id = "invest-conn-" + conn.id;
+        const box = el("input", { id: id, type: "checkbox", onChange: function (ev) { toggleInvestConnection(conn.id, ev.target.checked); } });
+        if (state.invest.form.connectionIds.indexOf(conn.id) !== -1) {
+          box.checked = true;
+        }
+        connBox.appendChild(el("label", { class: "teia-type", for: id }, [box, el("span", { text: conn.name + " (" + conn.type + ")" })]));
+      });
+      card.appendChild(connBox);
+    }
+
+    card.appendChild(el("label", { text: "Issue existente (opcional)", for: "invest-issue-key" }));
+    const issueSel = el("select", { id: "invest-issue-key" });
+    issueSel.appendChild(el("option", { value: "", text: "Nenhuma" }));
+    state.issues.forEach(function (item) {
+      const label = item.issue_key + (item.title ? " — " + item.title : "");
+      const opt = el("option", { value: item.issue_key, text: label });
+      if (state.invest.form.issueKey === item.issue_key) {
+        opt.selected = true;
+      }
+      issueSel.appendChild(opt);
+    });
+    card.appendChild(issueSel);
+
+    if (state.invest.error) {
+      card.appendChild(el("p", { class: "error", text: errorMessage(state.invest.error) }));
+    }
+    card.appendChild(el("button", {
+      type: "button",
+      class: "primary",
+      text: state.invest.busy ? "Investigando…" : "Rodar investigação",
+      disabled: state.invest.busy ? "disabled" : null,
+      onClick: function () { runInvestigation(); },
+    }));
+    root.appendChild(card);
+  }
+
+  function renderInvestResult(root) {
+    const view = state.invest.current;
+    if (!view) {
+      return;
+    }
+    const card = el("section", { class: "card card-eng" }, [
+      el("div", { class: "card-head" }, [
+        el("h2", { text: view.title || "Resultado" }),
+        el("span", { class: "pill pill-eng", text: view.engine || "motor" }),
+      ]),
+      el("p", { class: "muted", text: (view.repos || []).join(", ") || "Sem repositório associado." }),
+    ]);
+    const result = el("div", { class: "markdown-body" }, renderMarkdownNodes(view.result));
+    card.appendChild(result);
+    if (state.invest.notice) {
+      card.appendChild(el("p", { class: "ok", text: state.invest.notice }));
+    }
+    card.appendChild(el("button", {
+      type: "button",
+      class: "primary",
+      text: state.invest.busy ? "Aguarde…" : "Gerar tarefa a partir desta investigação",
+      disabled: state.invest.busy ? "disabled" : null,
+      onClick: function () { investigationToTask(view.id, (view.repos || [])[0] || ""); },
+    }));
+    root.appendChild(card);
+  }
+
+  function renderInvestHistory(root) {
+    const card = el("section", { class: "card card-eng" }, [
+      el("div", { class: "card-head" }, [
+        el("h2", { text: "Histórico de investigações" }),
+        el("span", { class: "pill pill-eng", text: String(state.invest.list.length) }),
+      ]),
+    ]);
+    if (!state.invest.list.length) {
+      card.appendChild(el("p", { class: "muted", text: "Nenhuma investigação ainda." }));
+      root.appendChild(card);
+      return;
+    }
+    const list = el("div", { class: "note-list" });
+    state.invest.list.forEach(function (item) {
+      list.appendChild(el("button", {
+        type: "button",
+        class: "note-item" + (state.invest.current && state.invest.current.id === item.id ? " active" : ""),
+        text: (item.title || "(sem título)") + " · " + (item.repos || []).join(", "),
+        onClick: function () { openInvestigation(item.id); },
+      }));
+    });
+    card.appendChild(list);
+    root.appendChild(card);
+  }
+
   function renderInvestigacao(root) {
+    root.appendChild(pageHeader("02 — INVESTIGAÇÃO", "Investigação", "Descreva um problema, erro ou sintoma; o agente investiga em modo somente leitura e sugere próximos passos."));
     root.appendChild(el("section", { class: "card card-eng" }, [
       el("div", { class: "card-head" }, [
         el("span", { class: "icon-box icon-eng", text: "B" }),
@@ -1329,45 +2151,19 @@
       el("p", { text: "Notas manuais por issue, no banco do Forge. Independente do vault Obsidian." }),
       el("p", { class: "muted", text: "Markdown aparece como texto. O corpo da nota não vai para o log." }),
     ]));
+    root.appendChild(readonlySeal());
     if (!canEditNotes()) {
       root.appendChild(el("section", { class: "card" }, [
         el("p", { class: "error", text: "Só editor ou owner vê as notas da investigação." }),
       ]));
       return;
     }
-    const issueBox = el("section", { class: "card" }, [
-      el("h2", { text: "Issue" }),
-      el("label", { text: "Issue do GitHub", for: "issue-select" }),
-    ]);
-    const select = el("select", {
-      id: "issue-select",
-      onChange: function (ev) { selectIssue(ev.target.value); },
-    });
-    select.appendChild(el("option", { value: "", text: "Selecione uma issue" }));
-    state.issues.forEach(function (item) {
-      const label = item.issue_key + (item.title ? " — " + item.title : "");
-      const opt = el("option", { value: item.issue_key, text: label });
-      if (state.selectedIssue === item.issue_key) {
-        opt.selected = true;
-      }
-      select.appendChild(opt);
-    });
-    issueBox.appendChild(select);
-    if (state.issuesError) {
-      issueBox.appendChild(el("p", { class: "muted", text: state.issuesError }));
-    }
-    if (isOwner()) {
-      issueBox.appendChild(el("div", { class: "row" }, [
-        el("button", {
-          type: "button",
-          class: "primary",
-          text: state.busy ? "Aguarde…" : "Importar issues concluídas",
-          disabled: state.busy ? "disabled" : null,
-          onClick: function () { importCompletedIssues(); },
-        }),
-      ]));
-    }
-    root.appendChild(issueBox);
+    const mainCol = el("div", { class: "investigacao-col-main" });
+    renderInvestForm(mainCol);
+    renderInvestResult(mainCol);
+    renderInvestHistory(mainCol);
+    mainCol.appendChild(el("h2", { class: "section-divider", text: "Notas por issue" }));
+    mainCol.appendChild(renderIssuePicker());
 
     const notesCard = el("section", { class: "card card-eng" }, [
       el("div", { class: "card-head" }, [
@@ -1453,8 +2249,6 @@
       });
       relatedCard.appendChild(relatedList);
     }
-    root.appendChild(el("div", { class: "investigacao-split" }, [notesCard, relatedCard]));
-
     const sources = el("section", { class: "card" }, [
       el("div", { class: "card-head" }, [
         el("h2", { text: "Fontes" }),
@@ -1469,12 +2263,16 @@
         sourceCard("F", "icon-core", "Obsidian", "Vault (aba Teia)"),
       ]),
     ]);
-    root.appendChild(sources);
+    root.appendChild(el("div", { class: "investigacao-cols" }, [
+      mainCol,
+      el("aside", { class: "investigacao-col-side" }, [notesCard, relatedCard, sources]),
+    ]));
   }
 
   function renderTeia(root) {
     const vaultEnabled = !!(state.teia && state.teia.vault);
     const indexing = !!state.graphBusy;
+    const status = teiaStatus();
     if (!canEditNotes()) {
       root.appendChild(el("section", { class: "card" }, [
         el("p", { class: "error", text: "Só editor ou owner lê o vault e o grafo." }),
@@ -1526,10 +2324,8 @@
       el("div", { class: "teia-filter-head" }, [
         el("span", { class: "icon-box icon-core", text: "F" }),
         el("strong", { text: "Teia de contexto" }),
-        el("span", {
-          class: vaultEnabled ? "pill pill-ok" : "pill pill-proposed",
-          text: vaultEnabled ? "VAULT" : "DESLIGADO",
-        }),
+        el("span", { class: "pill " + status.cls, text: status.text }),
+        vaultEnabled ? el("span", { class: "pill pill-muted", text: "VAULT" }) : null,
         el("span", { class: "muted teia-count", text: teiaCountText() }),
       ]),
       el("div", { class: "graph-query teia-filter-row" }, [
@@ -1596,10 +2392,18 @@
     }
 
     const legend = el("ul", { class: "teia-legend" });
-    TEIA_TYPES.concat([{ id: "function", label: "Funções" }]).forEach(function (item) {
-      legend.appendChild(el("li", { class: "teia-legend-" + item.id }, [
-        el("span", { class: "teia-swatch", "aria-hidden": "true" }),
-        el("span", { text: item.label }),
+    const legendRepos = teiaLegendRepos();
+    if (!legendRepos.length) {
+      legend.appendChild(el("li", null, [
+        el("span", { class: "teia-swatch teia-swatch-neutral", "aria-hidden": "true" }),
+        el("span", { text: "Sem repositório" }),
+      ]));
+    }
+    legendRepos.forEach(function (repo) {
+      const cls = window.ForgeTeia ? window.ForgeTeia.repoSwatchClass(repo) : "teia-swatch-neutral";
+      legend.appendChild(el("li", null, [
+        el("span", { class: "teia-swatch " + cls, "aria-hidden": "true" }),
+        el("span", { text: repo }),
       ]));
     });
 
@@ -1612,6 +2416,375 @@
     root.appendChild(el("div", { class: "teia-page" }, [left, right]));
   }
 
+  async function loadAgentDetail(id) {
+    const res = await api("/api/agents/" + encodeURIComponent(id));
+    if (!res.ok) {
+      return;
+    }
+    state.agentes.selectedId = id;
+    state.agentes.selected = res.data.agent;
+    state.agentes.executions = res.data.executions || [];
+  }
+
+  async function loadAgentes() {
+    if (!canEditNotes()) {
+      return;
+    }
+    const res = await api("/api/agents");
+    if (res.ok) {
+      state.agentes.items = res.data.agents || [];
+      state.agentes.metrics = res.data.metrics || null;
+    }
+    const approvals = await api("/api/agents/approvals");
+    if (approvals.ok) {
+      state.agentes.approvals = approvals.data.approvals || [];
+    }
+    const stillThere = state.agentes.items.some(function (a) { return a.id === state.agentes.selectedId; });
+    if (state.agentes.selectedId && stillThere) {
+      await loadAgentDetail(state.agentes.selectedId);
+    } else if (state.agentes.items.length) {
+      await loadAgentDetail(state.agentes.items[0].id);
+    } else {
+      state.agentes.selectedId = "";
+      state.agentes.selected = null;
+      state.agentes.executions = [];
+    }
+  }
+
+  async function selectAgent(id) {
+    await loadAgentDetail(id);
+    render();
+  }
+
+  async function decideApproval(approvalId, decision) {
+    state.agentes.busy = true;
+    state.agentes.error = "";
+    render();
+    const res = await api("/api/agents/approvals/" + encodeURIComponent(approvalId) + "/" + decision, {
+      method: "POST", body: {},
+    });
+    state.agentes.busy = false;
+    if (!res.ok) {
+      state.agentes.error = (res.data && res.data.error) || "error";
+      render();
+      return;
+    }
+    state.agentes.notice = decision === "approve" ? "Aprovação concedida." : "Aprovação recusada.";
+    await loadAgentes();
+    render();
+  }
+
+  function openNewAgentModal() {
+    const form = {
+      name: "", description: "", scope: "development", trigger: "", engine: "",
+      permissions_read: "", permissions_write: "", busy: false, error: "",
+    };
+    let modal = null;
+    function paint(body) {
+      body.replaceChildren();
+      body.appendChild(el("label", { text: "Nome", for: "agent-name" }));
+      const nameInput = el("input", { id: "agent-name", type: "text", value: form.name });
+      body.appendChild(nameInput);
+      body.appendChild(el("label", { text: "Descrição", for: "agent-description" }));
+      const descInput = el("textarea", { id: "agent-description" });
+      descInput.value = form.description;
+      body.appendChild(descInput);
+      body.appendChild(el("label", { text: "Escopo", for: "agent-scope" }));
+      const scopeSel = el("select", { id: "agent-scope" });
+      [["development", "Desenvolvimento"], ["company_system", "Sistema da empresa"]].forEach(function (pair) {
+        const opt = el("option", { value: pair[0], text: pair[1] });
+        if (pair[0] === form.scope) {
+          opt.selected = true;
+        }
+        scopeSel.appendChild(opt);
+      });
+      body.appendChild(scopeSel);
+      body.appendChild(el("label", { text: "Gatilho", for: "agent-trigger" }));
+      const triggerInput = el("input", { id: "agent-trigger", type: "text", value: form.trigger, placeholder: "ex.: issue nova no GitHub" });
+      body.appendChild(triggerInput);
+      body.appendChild(el("label", { text: "Motor", for: "agent-engine" }));
+      const engineInput = el("input", { id: "agent-engine", type: "text", value: form.engine, placeholder: "ex.: claude-code" });
+      body.appendChild(engineInput);
+      body.appendChild(el("label", { text: "Pode ler (separado por vírgula)", for: "agent-read" }));
+      const readInput = el("input", { id: "agent-read", type: "text", value: form.permissions_read, placeholder: "issues, prs, notas do obsidian" });
+      body.appendChild(readInput);
+      body.appendChild(el("label", { text: "Pode alterar (separado por vírgula)", for: "agent-write" }));
+      const writeInput = el("input", { id: "agent-write", type: "text", value: form.permissions_write, placeholder: "etiquetas, rascunhos de issue" });
+      body.appendChild(writeInput);
+      body.appendChild(el("p", { class: "muted", text: "Banco de dados, FTP/SFTP e Portainer nunca recebem escrita, mesmo com aprovação." }));
+      if (form.error) {
+        body.appendChild(el("p", { class: "error", text: errorMessage(form.error) }));
+      }
+      body.appendChild(el("div", { class: "row" }, [
+        el("button", {
+          type: "button", class: "primary",
+          text: form.busy ? "Criando…" : "Criar agente",
+          disabled: form.busy ? "disabled" : null,
+          onClick: function () { submit(body); },
+        }),
+        el("button", { type: "button", text: "Cancelar", onClick: function () { modal.close(); } }),
+      ]));
+    }
+    async function submit(body) {
+      form.name = document.getElementById("agent-name").value;
+      form.description = document.getElementById("agent-description").value;
+      form.scope = document.getElementById("agent-scope").value;
+      form.trigger = document.getElementById("agent-trigger").value;
+      form.engine = document.getElementById("agent-engine").value;
+      form.permissions_read = document.getElementById("agent-read").value;
+      form.permissions_write = document.getElementById("agent-write").value;
+      form.busy = true;
+      form.error = "";
+      paint(body);
+      const payload = {
+        name: form.name,
+        description: form.description,
+        scope: form.scope,
+        trigger: form.trigger,
+        engine: form.engine,
+        permissions_read: splitCsv(form.permissions_read),
+        permissions_write: splitCsv(form.permissions_write),
+      };
+      const res = await api("/api/agents", { method: "POST", body: payload });
+      form.busy = false;
+      if (!res.ok) {
+        form.error = (res.data && res.data.error) || "error";
+        paint(body);
+        return;
+      }
+      modal.close();
+      state.agentes.notice = "Agente criado.";
+      await loadAgentes();
+      render();
+    }
+    modal = openModal({ title: "Novo agente", build: paint });
+  }
+
+  function scopeChip(scope) {
+    if (scope === "company_system") {
+      return el("span", { class: "chip chip-danger-outline", text: "Sistema da empresa" });
+    }
+    return el("span", { class: "chip", text: "Desenvolvimento" });
+  }
+
+  function agentStatusPill(status) {
+    const map = {
+      active: { cls: "pill-ok", text: "Ativo" },
+      paused: { cls: "pill-muted", text: "Pausado" },
+      error: { cls: "pill-danger", text: "Com erro" },
+    };
+    const info = map[status] || { cls: "pill-muted", text: status || "—" };
+    return el("span", { class: "pill " + info.cls, text: info.text });
+  }
+
+  function successMeter(rate) {
+    if (rate === null || rate === undefined) {
+      return el("span", { class: "muted", text: "—" });
+    }
+    return el("div", { class: "success-cell" }, [
+      el("span", { class: "success-value", text: rate + "%" }),
+      el("meter", {
+        class: "success-meter", min: "0", max: "100", low: "70", high: "90", optimum: "100",
+        value: String(rate),
+      }),
+    ]);
+  }
+
+  function metricCard(kind, value, total, label) {
+    const valueChildren = [el("span", { text: String(value) })];
+    if (total !== null && total !== undefined) {
+      valueChildren.push(el("span", { class: "metric-total", text: "/ " + total }));
+    }
+    return el("div", { class: "metric-card metric-" + kind }, [
+      el("div", { class: "metric-value" }, valueChildren),
+      el("p", { class: "metric-label", text: label }),
+    ]);
+  }
+
+  function renderAgentMetrics(root) {
+    const m = state.agentes.metrics || { active: 0, total: 0, executions_today: 0, errors_24h: 0, pending_approvals: 0 };
+    root.appendChild(el("div", { class: "metric-grid" }, [
+      metricCard("ok", m.active, m.total, "Agentes ativos"),
+      metricCard("core", m.executions_today, null, "Execuções hoje"),
+      metricCard("danger", m.errors_24h, null, "Erros nas últimas 24 h"),
+      metricCard("warn", m.pending_approvals, null, "Aprovações pendentes"),
+    ]));
+  }
+
+  function renderAgentsTable(root) {
+    const card = el("section", { class: "card card-auto" }, [
+      el("div", { class: "card-head" }, [
+        el("h2", { text: "Agentes" }),
+        el("span", { class: "pill pill-auto", text: String(state.agentes.items.length) }),
+        el("button", {
+          type: "button", class: "primary", text: "+ Novo agente",
+          onClick: function () { openNewAgentModal(); },
+        }),
+      ]),
+    ]);
+    if (!state.agentes.items.length) {
+      card.appendChild(el("p", { class: "muted", text: "Nenhum agente cadastrado ainda. Use \"+ Novo agente\" para criar o primeiro." }));
+      root.appendChild(card);
+      return;
+    }
+    const table = el("table");
+    table.appendChild(el("thead", null, [el("tr", null, [
+      el("th", { text: "Agente" }),
+      el("th", { text: "Escopo" }),
+      el("th", { text: "Status" }),
+      el("th", { text: "Última execução" }),
+      el("th", { text: "Sucesso" }),
+    ])]));
+    const tbody = el("tbody");
+    state.agentes.items.forEach(function (agent) {
+      const selected = agent.id === state.agentes.selectedId;
+      tbody.appendChild(el("tr", {
+        class: "agent-row" + (selected ? " selected" : ""),
+        onClick: function () { selectAgent(agent.id); },
+      }, [
+        el("td", null, [el("div", { class: "agent-name-cell" }, [
+          el("strong", { text: agent.name }),
+          el("span", { text: agent.description || "" }),
+        ])]),
+        el("td", null, [scopeChip(agent.scope)]),
+        el("td", null, [agentStatusPill(agent.status)]),
+        el("td", { text: relativeTime(agent.last_execution_at) }),
+        el("td", null, [successMeter(agent.success_rate)]),
+      ]));
+    });
+    table.appendChild(tbody);
+    card.appendChild(table);
+    card.appendChild(el("p", { class: "muted", text: "Agentes do sistema da empresa rodam isolados e só alteram dados com aprovação humana." }));
+    root.appendChild(card);
+  }
+
+  function renderSelectedAgent(root) {
+    const card = el("section", { class: "card card-auto" }, [
+      el("div", { class: "card-head" }, [
+        el("h2", { text: "Agente selecionado" }),
+      ]),
+    ]);
+    const agent = state.agentes.selected;
+    if (!agent) {
+      card.appendChild(el("p", { class: "muted", text: "Selecione um agente na lista." }));
+      root.appendChild(card);
+      return;
+    }
+    card.appendChild(el("div", { class: "selected-agent-head" }, [
+      el("strong", { text: agent.name }),
+      agentStatusPill(agent.status),
+    ]));
+    card.appendChild(el("p", { class: "agent-trigger-line" }, [
+      el("span", { text: (agent.scope === "company_system" ? "Sistema da empresa" : "Desenvolvimento") + (agent.trigger ? " · gatilho: " + agent.trigger : "") }),
+    ]));
+    card.appendChild(el("p", { class: "teia-k", text: "Execuções recentes" }));
+    const execList = el("div", { class: "exec-list" });
+    if (!state.agentes.executions.length) {
+      execList.appendChild(el("p", { class: "muted", text: "Sem execuções registradas." }));
+    }
+    state.agentes.executions.slice(0, 6).forEach(function (execu) {
+      execList.appendChild(el("div", { class: "exec-item" }, [
+        el("span", { class: "exec-dot exec-dot-" + (execu.status || "running") }),
+        el("span", { text: execu.event || execu.status }),
+        el("span", { class: "exec-time", text: relativeTime(execu.started_at) }),
+      ]));
+    });
+    card.appendChild(execList);
+    const lastLog = state.agentes.executions.length ? state.agentes.executions[0].log : "";
+    if (lastLog) {
+      card.appendChild(el("div", { class: "agent-log", text: lastLog }));
+    }
+    root.appendChild(card);
+  }
+
+  function renderApprovals(root) {
+    const pending = state.agentes.approvals.filter(function (a) { return a.status === "pending"; });
+    const card = el("section", { class: "card card-auto" }, [
+      el("div", { class: "card-head" }, [
+        el("h2", { text: "Aprovações pendentes" }),
+        el("span", { class: "pill pill-auto", text: String(pending.length) }),
+      ]),
+    ]);
+    if (state.agentes.error) {
+      card.appendChild(el("p", { class: "error", text: errorMessage(state.agentes.error) }));
+    }
+    if (!pending.length) {
+      card.appendChild(el("p", { class: "muted", text: "Nenhuma aprovação pendente." }));
+      root.appendChild(card);
+      return;
+    }
+    pending.forEach(function (item) {
+      card.appendChild(el("div", { class: "approval-item" }, [
+        el("div", { class: "approval-info" }, [
+          el("strong", { text: item.action === "write_access" ? "Acesso de escrita · " + item.agent_name : item.agent_name }),
+          el("span", { text: item.agent_name + " · " + relativeTime(item.requested_at) }),
+        ]),
+        el("div", { class: "approval-actions" }, [
+          el("button", {
+            type: "button", class: "primary", text: "Aprovar",
+            disabled: state.agentes.busy ? "disabled" : null,
+            onClick: function () { decideApproval(item.id, "approve"); },
+          }),
+          el("button", {
+            type: "button", text: "Recusar",
+            disabled: state.agentes.busy ? "disabled" : null,
+            onClick: function () { decideApproval(item.id, "reject"); },
+          }),
+        ]),
+      ]));
+    });
+    root.appendChild(card);
+  }
+
+  function renderPermissions(root) {
+    const agent = state.agentes.selected;
+    const card = el("section", { class: "card card-auto" }, [
+      el("div", { class: "card-head" }, [
+        el("h2", { text: "Permissões" }),
+        agent ? el("span", { class: "muted", text: agent.name }) : null,
+      ]),
+    ]);
+    if (!agent) {
+      card.appendChild(el("p", { class: "muted", text: "Selecione um agente para ver as permissões." }));
+      root.appendChild(card);
+      return;
+    }
+    const perms = agent.permissions || { read: [], write: [], denied: [] };
+    const rows = [
+      ["read", "Pode ler", perms.read],
+      ["write", "Pode alterar", perms.write],
+      ["denied", "Sem acesso", perms.denied],
+    ];
+    rows.forEach(function (row) {
+      card.appendChild(el("div", { class: "permission-row" }, [
+        el("span", { class: "permission-dot permission-dot-" + row[0] }),
+        el("div", null, [
+          el("strong", { text: row[1] }),
+          el("span", { text: (row[2] && row[2].length) ? row[2].join(", ") : "—" }),
+        ]),
+      ]));
+    });
+    root.appendChild(card);
+  }
+
+  function renderAgentes(root) {
+    root.appendChild(pageHeader("05 — AGENTES", "Agentes", "Agentes que trabalham no desenvolvimento e no sistema da empresa."));
+    if (!canEditNotes()) {
+      root.appendChild(el("section", { class: "card" }, [
+        el("p", { class: "error", text: "Só editor ou owner vê a aba Agentes." }),
+      ]));
+      return;
+    }
+    renderAgentMetrics(root);
+    const left = el("div", null, []);
+    renderAgentsTable(left);
+    const right = el("div", { class: "agents-right" }, []);
+    renderSelectedAgent(right);
+    renderApprovals(right);
+    renderPermissions(right);
+    root.appendChild(el("div", { class: "agents-layout" }, [left, right]));
+  }
+
   function render() {
     snapshotForm();
     const session = document.getElementById("session");
@@ -1620,7 +2793,9 @@
     renderNav();
     app.replaceChildren();
     const teiaOpen = !state.loading && !!state.who && activeTab() === "teia";
+    const investOpen = !state.loading && !!state.who && activeTab() === "investigacao";
     app.classList.toggle("teia-layout", teiaOpen);
+    app.classList.toggle("investigacao-layout", investOpen);
     document.body.classList.toggle("teia-open", teiaOpen);
     if (state.loading) {
       setPageTitle("Forge");
@@ -1649,6 +2824,11 @@
       renderTeia(app);
       return;
     }
+    if (tab === "agentes") {
+      setPageTitle("Agentes");
+      renderAgentes(app);
+      return;
+    }
     setPageTitle("Tarefas");
     renderEditor(app);
   }
@@ -1659,29 +2839,43 @@
     try {
       await api("/api/health");
       await loadWhoami();
+      state.loading = false;
+      render();
+      const tab = activeTab();
       if (isEditor()) {
         await loadEditorData();
+        render();
       }
-      if (canEditNotes() && activeTab() === "investigacao") {
+      if (canEditNotes() && tab === "investigacao") {
         await loadInvestigacao();
+        render();
       }
-      if (canEditNotes() && activeTab() === "teia") {
+      if (canEditNotes() && tab === "teia") {
         await loadTeia();
+        render();
+      }
+      if (canEditNotes() && tab === "agentes") {
+        await loadAgentes();
+        render();
       }
     } catch (err) {
       state.error = "api_unreachable";
+      state.loading = false;
+      render();
     }
-    state.loading = false;
-    render();
   }
 
   window.addEventListener("hashchange", async function () {
     const tab = activeTab();
+    render();
     if (tab === "investigacao" && canEditNotes()) {
       await loadInvestigacao();
     }
     if (tab === "teia" && canEditNotes()) {
       await loadTeia();
+    }
+    if (tab === "agentes" && canEditNotes()) {
+      await loadAgentes();
     }
     render();
   });
