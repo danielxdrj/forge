@@ -9,6 +9,7 @@ from forge_core.draft.claude_cli import (
     READONLY_DISALLOWED_TOOLS,
     ClaudeCliAdapter,
     parse_claude_result,
+    parse_claude_usage,
     resolve_max_turns,
 )
 from forge_core.draft.engine import select_engine_adapter
@@ -156,3 +157,39 @@ def test_select_engine_uses_claude_when_logged_in(tmp_path):
     )
     assert adapter.name == "claude-cli"
     assert adapter.readonly is True
+
+
+# --- uso e custo por chamada -------------------------------------------------------------------
+
+CLI_PAYLOAD = {
+    "type": "result", "result": "ok", "is_error": False, "num_turns": 1,
+    "total_cost_usd": 0.0916786,
+    "usage": {
+        "input_tokens": 2, "output_tokens": 4,
+        "cache_read_input_tokens": 11873, "cache_creation_input_tokens": 11152,
+    },
+    "modelUsage": {"claude-opus-5-5": {"inputTokens": 2, "outputTokens": 4, "costUSD": 0.0916786}},
+}
+
+
+def test_parse_claude_usage_reads_tokens_model_and_cost():
+    usage, cost = parse_claude_usage(json.dumps(CLI_PAYLOAD).encode())
+    assert usage == {
+        "input_tokens": 2, "output_tokens": 4, "cache_read_tokens": 11873, "cache_write_tokens": 11152,
+        "turns": 1, "model": "claude-opus-5-5",
+    }
+    assert cost == 0.0916786
+
+
+def test_parse_claude_usage_never_raises():
+    assert parse_claude_usage(b"nao e json") == ({}, None)
+    assert parse_claude_usage(json.dumps({"result": "x"}).encode()) == ({}, None)
+
+
+def test_adapter_returns_usage_and_cost(tmp_path):
+    run, _captured = _runner(CLI_PAYLOAD)
+    adapter = ClaudeCliAdapter(agent_bin="claude", runner=run, env={"PATH": "/bin", "HOME": str(tmp_path)})
+    resp = adapter.complete("x")
+    assert resp.text == "ok"
+    assert resp.usage["cache_write_tokens"] == 11152
+    assert resp.cost == 0.0916786

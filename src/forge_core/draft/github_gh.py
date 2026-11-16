@@ -136,6 +136,45 @@ query($owner: String!, $name: String!, $number: Int!) {
 }
 """
 
+OPEN_ITEMS_QUERY = """
+query($owner: String!, $number: Int!, $first: Int!, $after: String) {
+  organization(login: $owner) {
+    projectV2(number: $number) {
+      items(first: $first, after: $after) {
+        pageInfo { hasNextPage endCursor }
+        nodes {
+          updatedAt
+          fieldValues(first: 30) {
+            nodes {
+              ... on ProjectV2ItemFieldSingleSelectValue {
+                name updatedAt
+                field { ... on ProjectV2SingleSelectField { name } }
+              }
+              ... on ProjectV2ItemFieldIterationValue {
+                title startDate duration
+                field { ... on ProjectV2IterationField { name } }
+              }
+              ... on ProjectV2ItemFieldDateValue {
+                date
+                field { ... on ProjectV2Field { name } }
+              }
+            }
+          }
+          content {
+            ... on Issue {
+              number title url state createdAt updatedAt
+              repository { nameWithOwner }
+              labels(first: 20) { nodes { name } }
+              assignees(first: 5) { nodes { login } }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+"""
+
 DELETE_ISSUE_MUTATION = """
 mutation($id: ID!) {
   deleteIssue(input: {issueId: $id}) {
@@ -283,6 +322,50 @@ class GhCli:
         if not isinstance(data, dict) or "number" not in data:
             raise DraftError("gh_error")
         return data
+
+    def view_issue_request(self, number: int, repo: str) -> dict:
+        """Issue usada como pedido de investigação: título, corpo, labels e comentários. Somente leitura."""
+        text = self._run([
+            "issue", "view", str(int(number)), "--repo", repo,
+            "--json", "number,url,title,body,comments,state,labels",
+        ], max_output=IMPORT_MAX_OUTPUT)
+        data = _json(text)
+        if not isinstance(data, dict) or "number" not in data:
+            raise DraftError("gh_error")
+        return data
+
+    def list_open_project_items(self, limit: int = 300) -> list[dict]:
+        """Itens abertos do board Backlog de TI com campos do projeto. Somente leitura; pagina até `limit`."""
+        cap = max(1, min(int(limit), 500))
+        out: list[dict] = []
+        after = None
+        while len(out) < cap:
+            args = [
+                "api", "graphql",
+                "-F", f"owner={PROJECT_OWNER}",
+                "-F", f"number={PROJECT_NUMBER}",
+                "-F", "first=100",
+            ]
+            if after:
+                args.extend(["-F", f"after={after}"])
+            args.extend(["-f", f"query={OPEN_ITEMS_QUERY}"])
+            payload = _json(self._run(args, max_output=IMPORT_MAX_OUTPUT))
+            if payload.get("errors"):
+                raise DraftError("project_schema")
+            items = ((((payload.get("data") or {}).get("organization") or {}).get("projectV2") or {})
+                     .get("items") or {})
+            nodes = items.get("nodes")
+            if not isinstance(nodes, list):
+                raise DraftError("project_schema")
+            for node in nodes:
+                parsed = _open_item(node)
+                if parsed is not None:
+                    out.append(parsed)
+            info = items.get("pageInfo") or {}
+            if not info.get("hasNextPage") or not info.get("endCursor"):
+                break
+            after = str(info["endCursor"])
+        return out[:cap]
 
     def clone_repo(self, repo: str, dest: str) -> None:
         self._run(["repo", "clone", repo, dest])
@@ -771,6 +854,78 @@ def _done_item(node, allowed: set[str]) -> dict | None:
         "tipo": tipo,
         "prioridade": prioridade,
         "sprint": sprint,
+    }
+
+
+def _open_item(node) -> dict | None:
+    """Normaliza um item aberto do board. Ignora rascunhos (sem issue) e issues fechadas."""
+    if not isinstance(node, dict):
+        return None
+    content = node.get("content")
+    if not isinstance(content, dict) or not content.get("number"):
+        return None
+    if str(content.get("state") or "").upper() != "OPEN":
+        return None
+    repo = str((content.get("repository") or {}).get("nameWithOwner") or "").strip()
+    if not repo:
+        return None
+    fields: dict[str, str] = {}
+    status_changed_at = ""
+    sprint: dict = {}
+    dates: dict[str, str] = {}
+    raw_values = (node.get("fieldValues") or {}).get("nodes") or []
+    for value in raw_values if isinstance(raw_values, list) else []:
+        if not isinstance(value, dict):
+            continue
+        fname = fold_option_name(str((value.get("field") or {}).get("name") or ""))
+        if not fname:
+            continue
+        if value.get("date"):
+            dates[fname] = str(value["date"])[:10]
+            continue
+        text = str(value.get("name") or value.get("title") or "").strip()
+        if not text:
+            continue
+        if fname in STATUS_FIELD_ALIASES:
+            fields["status"] = text
+            status_changed_at = str(value.get("updatedAt") or "")
+        elif fname in FIELD_ALIASES["sprint"]:
+            sprint = {
+                "title": text,
+                "start": str(value.get("startDate") or "")[:10],
+                "duration": value.get("duration"),
+            }
+        else:
+            for kind in ("tipo", "prioridade", "size", "escopo"):
+                if fname in FIELD_ALIASES[kind]:
+                    fields[kind] = text
+    try:
+        number = int(content["number"])
+    except (TypeError, ValueError):
+        return None
+    assignees = [
+        str(a.get("login") or "") for a in ((content.get("assignees") or {}).get("nodes") or [])
+        if isinstance(a, dict) and a.get("login")
+    ]
+    return {
+        "repo": repo,
+        "number": number,
+        "title": str(content.get("title") or ""),
+        "url": str(content.get("url") or ""),
+        "created_at": str(content.get("createdAt") or ""),
+        "issue_updated_at": str(content.get("updatedAt") or ""),
+        "item_updated_at": str(node.get("updatedAt") or ""),
+        "status": fields.get("status", ""),
+        "status_changed_at": status_changed_at,
+        "tipo": fields.get("tipo", ""),
+        "prioridade": fields.get("prioridade", ""),
+        "size": fields.get("size", ""),
+        "escopo": fields.get("escopo", ""),
+        "sprint": sprint,
+        "start_date": dates.get("start date", ""),
+        "target_date": dates.get("target date", ""),
+        "labels": _label_names(content.get("labels")),
+        "assignees": assignees,
     }
 
 

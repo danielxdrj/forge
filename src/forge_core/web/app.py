@@ -11,6 +11,7 @@ from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field
 
 from ..agent_catalog.service import AgentCatalogService
+from ..ai_settings import AiSettings, SettingsError
 from ..auth.github import DeviceFlow, DeviceFlowError, Transport, UrllibTransport
 from ..auth.store import AuthStore, Principal
 from ..config import Settings
@@ -20,14 +21,18 @@ from ..connections.vault import ConnectionsVault
 from ..errors import AuthenticationError, AuthorizationError, DraftError
 from ..graphs.context import ContextGraph
 from ..graphs.indexer import GraphIndexer
+from ..investigations.service import AGENT_NAME as INVESTIGATION_AGENT_NAME
 from ..investigations.service import InvestigationService
 from ..issues.delete import IssueDeleteService
 from ..issues.importer import CompletedIssueImporter
 from ..logging import redact
 from ..notes.service import NoteService
 from ..obsidian.vault import ObsidianVault
+from ..radar.service import AGENT_NAME as RADAR_AGENT_NAME
+from ..radar.service import RadarScheduler, RadarService
 from ..storage.sql import SqlRepository
 from .agents import register_agent_catalog_routes
+from .ai_settings import register_ai_settings_routes
 from .connections import register_connection_routes
 from .context_graph import register_context_graph_routes
 from .graphs import register_graph_routes
@@ -37,6 +42,7 @@ from .issues import register_issue_import_routes
 from .notes import register_note_routes
 from .obsidian import register_obsidian_routes
 from .pending import PendingLogin, PendingStore
+from .radar import register_radar_routes
 from .security import (
     CSRF_COOKIE,
     CSRF_HEADER,
@@ -89,6 +95,7 @@ def create_app(
     graph_indexer: GraphIndexer | None = None,
     issue_importer: CompletedIssueImporter | None = None,
     investigation_provider=None,
+    radar_provider=None,
 ) -> FastAPI:
     if not settings.github_client_id:
         raise ValueError("FORGE_GITHUB_CLIENT_ID é obrigatória para o painel web")
@@ -110,12 +117,15 @@ def create_app(
     notes = NoteService(repo, store)
     issue_delete = IssueDeleteService(repo, store, gh)
     agent_catalog = AgentCatalogService(repo, store)
+    ai_settings = AiSettings(repo, store)
     investigations = InvestigationService(
-        repo, store, provider=investigation_provider, graph_dir=settings.graph_dir,
+        repo, store, provider=investigation_provider, gh=gh, ai_settings=ai_settings, graph_dir=settings.graph_dir,
         graph_prompt_max_nodes=settings.graph_prompt_max_nodes,
         graph_prompt_max_chars=settings.graph_prompt_max_chars,
         claude_max_turns=settings.claude_max_turns,
     )
+    radar = RadarService(repo, store, settings, gh=gh, provider=radar_provider, ai_settings=ai_settings)
+    radar_scheduler = RadarScheduler(radar, settings)
     obsidian_vault = obsidian if obsidian is not None else ObsidianVault.from_settings(settings)
     issues = issue_importer if issue_importer is not None else CompletedIssueImporter(
         repo, settings, gh=gh,
@@ -139,6 +149,9 @@ def create_app(
     app.state.investigations = investigations
     app.state.issue_delete = issue_delete
     app.state.agent_catalog = agent_catalog
+    app.state.radar = radar
+    app.state.ai_settings = ai_settings
+    app.state.radar_scheduler = radar_scheduler
 
     def _audit(actor: str, action: str, target: str, result: str) -> None:
         repo.record_audit(actor, action, target, redact(result))
@@ -534,12 +547,58 @@ def create_app(
         json_error=_json_error,
         need_owner=_need_owner,
     )
+    register_ai_settings_routes(
+        app,
+        ai_settings,
+        json_error=_json_error,
+        need_editor_or_owner=_need_editor_or_owner,
+        need_owner=_need_owner,
+        on_change=radar.sync_agent,
+    )
+    register_radar_routes(
+        app,
+        radar,
+        json_error=_json_error,
+        need_editor_or_owner=_need_editor_or_owner,
+    )
+    def _agent_config(principal: Principal, agent: dict) -> dict | None:
+        """Configuração própria do agente. Hoje só o Radar de prioridades tem."""
+        view = ai_settings.view(principal)
+        if agent.get("name") == INVESTIGATION_AGENT_NAME:
+            return {"kind": "investigation", **view["investigation"], "models": view["models"],
+                    "server_engine": view["server_engine"], "api": view["api"], "can_edit": view["can_edit"]}
+        if agent.get("name") != RADAR_AGENT_NAME:
+            return None
+        return {
+            "kind": "radar",
+            **view["radar"],
+            "models": view["models"],
+            "server_engine": view["server_engine"],
+            "api": view["api"],
+            "can_edit": view["can_edit"],
+            "timezone": settings.radar_timezone,
+        }
+
+    def _save_agent_config(principal: Principal, agent: dict, body: dict):
+        use = "investigation" if agent.get("name") == INVESTIGATION_AGENT_NAME else "radar"
+        if use == "investigation":
+            body = {k: v for k, v in body.items() if k in ("engine", "model")}
+        try:
+            ai_settings.update(principal, {use: body})
+        except SettingsError as exc:
+            return _json_error(400, exc.code, hint=exc.hint or None)
+        radar.sync_agent()
+        investigations.ensure_agent()
+        return _agent_config(principal, agent)
+
     register_agent_catalog_routes(
         app,
         agent_catalog,
         json_error=_json_error,
         need_editor_or_owner=_need_editor_or_owner,
         need_owner=_need_owner,
+        agent_config=_agent_config,
+        save_agent_config=_save_agent_config,
     )
 
     return app

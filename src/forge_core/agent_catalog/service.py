@@ -29,6 +29,12 @@ MAX_ENGINE = 60
 MAX_PERMISSIONS = 40
 MAX_PERMISSION_LEN = 80
 EXECUTIONS_PAGE = 20
+DETAIL_EXECUTIONS = 50
+USAGE_FIELDS = ("input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens", "turns", "model", "cost_usd")
+EXECUTION_COLUMNS = (
+    "id, agent_id, started_at, finished_at, status, event, duration_ms, log, "
+    "input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, turns, model, cost_usd"
+)
 
 # Mesmos recursos travados de verdade em connections/readonly.py: escrita nunca é permitida,
 # nem depois de aprovação (coerência com o item 3 — "Sem acesso" é sempre a resposta real).
@@ -90,6 +96,13 @@ class ExecutionView:
     event: str
     duration_ms: int | None
     log: str
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    cache_read_tokens: int | None = None
+    cache_write_tokens: int | None = None
+    turns: int | None = None
+    model: str = ""
+    cost_usd: float | None = None
 
     def as_json(self) -> dict:
         return {
@@ -101,6 +114,16 @@ class ExecutionView:
             "event": self.event,
             "duration_ms": self.duration_ms,
             "log": self.log,
+            "usage": {
+                "input_tokens": self.input_tokens,
+                "output_tokens": self.output_tokens,
+                "cache_read_tokens": self.cache_read_tokens,
+                "cache_write_tokens": self.cache_write_tokens,
+                "total_tokens": _total_tokens(self),
+                "turns": self.turns,
+                "model": self.model,
+                "cost_usd": self.cost_usd,
+            },
         }
 
 
@@ -183,11 +206,43 @@ def _agent_from_row(row) -> AgentView:
     )
 
 
+def _total_tokens(view) -> int | None:
+    parts = [view.input_tokens, view.output_tokens, view.cache_read_tokens, view.cache_write_tokens]
+    if all(v is None for v in parts):
+        return None
+    return sum(int(v or 0) for v in parts)
+
+
 def _execution_from_row(row) -> ExecutionView:
-    ident, agent_id, started_at, finished_at, status, event, duration_ms, log = row
+    (ident, agent_id, started_at, finished_at, status, event, duration_ms, log,
+     input_tokens, output_tokens, cache_read, cache_write, turns, model, cost_usd) = row
     return ExecutionView(
         id=ident, agent_id=agent_id, started_at=started_at, finished_at=finished_at,
         status=status, event=event, duration_ms=duration_ms, log=log,
+        input_tokens=input_tokens, output_tokens=output_tokens,
+        cache_read_tokens=cache_read, cache_write_tokens=cache_write,
+        turns=turns, model=model or "", cost_usd=float(cost_usd) if cost_usd is not None else None,
+    )
+
+
+def usage_columns(usage: dict | None, cost: float | None) -> tuple:
+    """Valores das colunas de uso (0021) a partir de `ProviderResponse.usage`/`.cost`."""
+    data = usage or {}
+
+    def _int(key):
+        value = data.get(key)
+        try:
+            return int(value) if value is not None else None
+        except (TypeError, ValueError):
+            return None
+
+    try:
+        cost_value = float(cost) if cost is not None else None
+    except (TypeError, ValueError):
+        cost_value = None
+    return (
+        _int("input_tokens"), _int("output_tokens"), _int("cache_read_tokens"), _int("cache_write_tokens"),
+        _int("turns"), str(data.get("model") or "")[:120], cost_value,
     )
 
 
@@ -255,12 +310,63 @@ class AgentCatalogService:
         if agent is None:
             raise AgentRuleError("not_found")
         rows = self._repo.fetch(
-            "SELECT id, agent_id, started_at, finished_at, status, event, duration_ms, log "
+            f"SELECT {EXECUTION_COLUMNS} "
             "FROM agent_executions WHERE agent_id = ? ORDER BY started_at DESC, id DESC LIMIT ?",
-            (agent_id, EXECUTIONS_PAGE),
+            (agent_id, DETAIL_EXECUTIONS),
         )
         executions = [_execution_from_row(r) for r in rows]
-        return {"agent": agent.as_json(), "executions": [e.as_json() for e in executions]}
+        approvals = self._repo.fetch(
+            "SELECT ap.id, ap.agent_id, a.name, ap.action, ap.details, ap.status, "
+            "ap.requested_at, ap.decided_at, ap.decided_by "
+            "FROM agent_approvals ap JOIN agents a ON a.id = ap.agent_id "
+            "WHERE ap.agent_id = ? ORDER BY ap.requested_at DESC, ap.id DESC LIMIT 20",
+            (agent_id,),
+        )
+        return {
+            "agent": agent.as_json(),
+            "executions": [e.as_json() for e in executions],
+            "stats": self._usage_stats(agent_id),
+            "approvals": [_approval_from_row(r).as_json() for r in approvals],
+        }
+
+    def _usage_stats(self, agent_id: str) -> dict:
+        """Totais de todas as execuções do agente e dos últimos 30 dias (custo estimado)."""
+        since_30d = (datetime.now(UTC) - timedelta(days=30)).isoformat()
+        rows = self._repo.fetch(
+            "SELECT COUNT(*), "
+            "SUM(CASE WHEN status = 'ok' THEN 1 ELSE 0 END), "
+            "SUM(CASE WHEN status = 'error' THEN 1 ELSE 0 END), "
+            "AVG(duration_ms), "
+            "SUM(input_tokens), SUM(output_tokens), SUM(cache_read_tokens), SUM(cache_write_tokens), "
+            "SUM(cost_usd), "
+            "SUM(CASE WHEN cost_usd IS NOT NULL OR input_tokens IS NOT NULL THEN 1 ELSE 0 END), "
+            "SUM(CASE WHEN started_at >= ? THEN cost_usd ELSE NULL END), "
+            "SUM(CASE WHEN started_at >= ? THEN 1 ELSE 0 END) "
+            "FROM agent_executions WHERE agent_id = ?",
+            (since_30d, since_30d, agent_id),
+        )
+        (total, ok, errors, avg_ms, tin, tout, tcr, tcw, cost, with_usage, cost_30d, total_30d) = rows[0]
+        total = int(total or 0)
+        tokens = [tin, tout, tcr, tcw]
+        total_tokens = None if all(v is None for v in tokens) else sum(int(v or 0) for v in tokens)
+        with_usage = int(with_usage or 0)
+        return {
+            "executions": total,
+            "ok": int(ok or 0),
+            "errors": int(errors or 0),
+            "success_rate": round(100 * int(ok or 0) / total) if total else None,
+            "avg_duration_ms": int(avg_ms) if avg_ms is not None else None,
+            "input_tokens": int(tin) if tin is not None else None,
+            "output_tokens": int(tout) if tout is not None else None,
+            "cache_read_tokens": int(tcr) if tcr is not None else None,
+            "cache_write_tokens": int(tcw) if tcw is not None else None,
+            "total_tokens": total_tokens,
+            "cost_usd": float(cost) if cost is not None else None,
+            "avg_cost_usd": (float(cost) / with_usage) if cost is not None and with_usage else None,
+            "executions_with_usage": with_usage,
+            "cost_usd_30d": float(cost_30d) if cost_30d is not None else None,
+            "executions_30d": int(total_30d or 0),
+        }
 
     def list_approvals(self, principal: Principal) -> list[ApprovalView]:
         self._require_reader(principal)
@@ -360,6 +466,7 @@ class AgentCatalogService:
     def record_execution(
         self, agent_id: str, *, status: str, event: str = "", log: str = "",
         duration_ms: int | None = None, started_at: str | None = None, finished_at: str | None = None,
+        usage: dict | None = None, cost: float | None = None,
     ) -> ExecutionView:
         """Registro de execução (chamado por quem orquestra de fato; aqui só persistimos)."""
         if status not in EXECUTION_STATUSES:
@@ -370,14 +477,14 @@ class AgentCatalogService:
         ts = started_at or _now()
         with self._repo.transaction() as tx:
             tx.execute(
-                "INSERT INTO agent_executions (id, agent_id, started_at, finished_at, status, event, "
-                "duration_ms, log) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                (exec_id, agent_id, ts, finished_at, status, event, duration_ms, redact(log)),
+                f"INSERT INTO agent_executions ({EXECUTION_COLUMNS}) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (exec_id, agent_id, ts, finished_at, status, event, duration_ms, redact(log),
+                 *usage_columns(usage, cost)),
             )
             tx.audit("sistema:agent_catalog", "agent.execution", f"agent:{agent_id}", f"ok: status={status}")
         rows = self._repo.fetch(
-            "SELECT id, agent_id, started_at, finished_at, status, event, duration_ms, log "
-            "FROM agent_executions WHERE id = ?",
+            f"SELECT {EXECUTION_COLUMNS} FROM agent_executions WHERE id = ?",
             (exec_id,),
         )
         return _execution_from_row(rows[0])

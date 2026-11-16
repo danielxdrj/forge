@@ -6,7 +6,7 @@ from auth_helpers import actor
 
 from forge_core.agents.provider import ProviderResponse
 from forge_core.auth.store import AuthStore
-from forge_core.errors import AuthorizationError
+from forge_core.errors import AuthorizationError, DraftError
 from forge_core.investigations.service import (
     InvestigationRuleError,
     InvestigationService,
@@ -155,3 +155,157 @@ def test_note_without_issue_key_allowed(make_repo):
     note = notes.create(ana, {"title": "nota solta", "body": "sem issue"})
     assert note.issue_key is None
     assert notes.get_note(ana, note.id).id == note.id
+
+
+# --- Pedido automático (modo "issue") ---------------------------------------------------------
+
+class FakeIssueGh:
+    """gh falso: só a leitura da issue usada como pedido."""
+
+    def __init__(self, detail=None, error=None):
+        self.detail = detail or {
+            "number": 42,
+            "url": f"https://github.com/{REPO}/issues/42",
+            "title": "Formulário de contato não valida telefone",
+            "body": "Telefone sem DDD passa. Ver FORGE_ENGINE no ambiente. token=ghp_" + "B" * 36,
+            "state": "OPEN",
+            "labels": [{"name": "bug"}, {"name": "site"}],
+            "comments": [
+                {"author": {"login": "maria"}, "body": "Acontece também no celular."},
+                {"author": {"login": "joao"}, "body": ""},
+            ],
+        }
+        self.error = error
+        self.calls = []
+
+    def view_issue_request(self, number, repo):
+        self.calls.append((number, repo))
+        if self.error:
+            raise DraftError(self.error)
+        return self.detail
+
+
+def _issue_svc(repo, gh=None, provider=None):
+    seed_allowed_repos(repo)
+    return InvestigationService(repo, AuthStore(repo), provider=provider or FakeAdapter(), gh=gh or FakeIssueGh())
+
+
+def test_issue_mode_uses_issue_as_request_without_description(make_repo):
+    repo = make_repo()
+    adapter = FakeAdapter()
+    gh = FakeIssueGh()
+    svc = _issue_svc(repo, gh=gh, provider=adapter)
+    ana = actor(repo, "ana")
+    view = svc.run(ana, {"mode": "issue", "issue_key": f"{REPO}#42"})
+    assert gh.calls == [(42, REPO)]
+    prompt = adapter.prompts[0]
+    assert "Formulário de contato não valida telefone" in prompt
+    assert "Telefone sem DDD passa." in prompt
+    assert "labels: bug, site" in prompt
+    assert "@maria: Acontece também no celular." in prompt
+    assert "Investigue a issue abaixo" in prompt
+    assert "ghp_" not in prompt
+    assert view.repos == (REPO,)
+    assert view.issue_key == f"{REPO}#42"
+    assert view.title.startswith(f"{REPO}#42 — ")
+    assert "Pedido automático" in view.description
+
+
+def test_issue_mode_appends_complement(make_repo):
+    repo = make_repo()
+    adapter = FakeAdapter()
+    svc = _issue_svc(repo, provider=adapter)
+    ana = actor(repo, "ana")
+    view = svc.run(ana, {"mode": "issue", "issue_key": f"{REPO}#42", "description": "Foque no front-end."})
+    assert "## Complemento de quem pediu\nFoque no front-end." in adapter.prompts[0]
+    assert view.description == "Foque no front-end."
+
+
+def test_issue_mode_requires_issue(make_repo):
+    repo = make_repo()
+    svc = _issue_svc(repo)
+    ana = actor(repo, "ana")
+    with pytest.raises(InvestigationRuleError) as excinfo:
+        svc.run(ana, {"mode": "issue", "description": "sem issue"})
+    assert excinfo.value.code == "issue_required"
+
+
+def test_issue_mode_rejects_issue_outside_allowlist(make_repo):
+    repo = make_repo()
+    gh = FakeIssueGh()
+    svc = _issue_svc(repo, gh=gh)
+    ana = actor(repo, "ana")
+    with pytest.raises(InvestigationRuleError) as excinfo:
+        svc.run(ana, {"mode": "issue", "issue_key": "evil/out#1"})
+    assert excinfo.value.code == "repo_not_allowed"
+    assert gh.calls == []
+
+
+def test_issue_mode_reports_unavailable_issue(make_repo):
+    repo = make_repo()
+    svc = _issue_svc(repo, gh=FakeIssueGh(error="gh_error"))
+    ana = actor(repo, "ana")
+    with pytest.raises(InvestigationRuleError) as excinfo:
+        svc.run(ana, {"mode": "issue", "issue_key": f"{REPO}#42"})
+    assert excinfo.value.code == "issue_unavailable"
+
+
+def test_issue_mode_without_gh_is_explicit(make_repo):
+    repo = make_repo()
+    seed_allowed_repos(repo)
+    svc = InvestigationService(repo, AuthStore(repo), provider=FakeAdapter())
+    ana = actor(repo, "ana")
+    with pytest.raises(InvestigationRuleError) as excinfo:
+        svc.run(ana, {"mode": "issue", "issue_key": f"{REPO}#42"})
+    assert excinfo.value.code == "gh_missing"
+
+
+def test_invalid_mode_rejected(make_repo):
+    repo = make_repo()
+    svc = _issue_svc(repo)
+    ana = actor(repo, "ana")
+    with pytest.raises(InvestigationRuleError) as excinfo:
+        svc.run(ana, {"mode": "magia", "description": "x"})
+    assert excinfo.value.code == "invalid_mode"
+
+
+def test_manual_mode_still_requires_description(make_repo):
+    repo = make_repo()
+    svc = _issue_svc(repo)
+    ana = actor(repo, "ana")
+    with pytest.raises(InvestigationRuleError) as excinfo:
+        svc.run(ana, {"mode": "manual", "issue_key": f"{REPO}#42"})
+    assert excinfo.value.code == "invalid_description"
+
+
+def test_issue_request_preview_is_redacted_and_counts_comments(make_repo):
+    repo = make_repo()
+    adapter = FakeAdapter()
+    svc = _issue_svc(repo, provider=adapter)
+    ana = actor(repo, "ana")
+    preview = svc.issue_request_preview(ana, f"{REPO}#42")
+    assert preview["title"] == "Formulário de contato não valida telefone"
+    assert preview["labels"] == ["bug", "site"]
+    assert preview["comments_used"] == 1
+    assert preview["comments_total"] == 2
+    assert "ghp_" not in preview["body_excerpt"]
+    assert preview["repo"] == REPO
+    assert adapter.prompts == []
+
+
+def test_run_records_execution_on_investigation_agent(make_repo):
+    from forge_core.investigations.service import AGENT_NAME
+
+    repo = make_repo()
+    adapter = FakeAdapter()
+    adapter.complete = lambda prompt, max_tokens=None: ProviderResponse(
+        text="ok", usage={"input_tokens": 10, "output_tokens": 20, "model": "claude-sonnet-5-5"}, cost=0.01,
+    )
+    svc = _svc(repo, provider=adapter)
+    svc.run(actor(repo, "ana"), {"description": "Investigar lentidão", "repos": [REPO]})
+    rows = repo.fetch(
+        "SELECT e.status, e.output_tokens, e.cost_usd FROM agent_executions e JOIN agents a ON a.id = e.agent_id "
+        "WHERE a.name = ?", (AGENT_NAME,),
+    )
+    assert rows == [("ok", 20, 0.01)]
+    assert svc.ensure_agent() == svc.ensure_agent()

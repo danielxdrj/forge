@@ -17,7 +17,11 @@ def register_agent_catalog_routes(
     json_error,
     need_editor_or_owner,
     need_owner,
+    agent_config=None,
+    save_agent_config=None,
 ):
+    """`agent_config(principal, agent_json)` devolve a configuração própria do agente (ou None);
+    `save_agent_config(principal, agent_json, body)` grava e devolve a nova configuração."""
     def _rule(exc: AgentRuleError) -> JSONResponse:
         status = {
             "not_found": 404,
@@ -72,11 +76,33 @@ def register_agent_catalog_routes(
         if isinstance(principal, JSONResponse):
             return principal
         try:
-            return agents.get_agent(principal, agent_id)
+            detail = agents.get_agent(principal, agent_id)
         except AgentRuleError as exc:
             return _rule(exc)
         except AuthorizationError:
             return json_error(403, "forbidden")
+        detail["config"] = agent_config(principal, detail["agent"]) if agent_config else None
+        return detail
+
+    @app.post("/api/agents/{agent_id}/config")
+    async def api_save_agent_config(request: Request, agent_id: str):
+        principal = need_owner(request)
+        if isinstance(principal, JSONResponse):
+            return principal
+        try:
+            detail = agents.get_agent(principal, agent_id)
+            if save_agent_config is None or (agent_config and agent_config(principal, detail["agent"]) is None):
+                return json_error(400, "agent_not_configurable")
+            body = await request.json()
+            if not isinstance(body, dict):
+                return json_error(400, "invalid_json")
+            return save_agent_config(principal, detail["agent"], body)
+        except AgentRuleError as exc:
+            return _rule(exc)
+        except AuthorizationError:
+            return json_error(403, "forbidden")
+        except (ValueError, json.JSONDecodeError, UnicodeDecodeError):
+            return json_error(400, "invalid_json")
 
     @app.post("/api/agents/{agent_id}")
     async def api_update_agent(request: Request, agent_id: str):

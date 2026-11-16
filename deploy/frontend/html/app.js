@@ -64,10 +64,31 @@
       connections: [],
       list: [],
       current: null,
-      form: { description: "", repos: [], connectionIds: [], issueKey: "" },
+      form: { mode: "manual", description: "", repos: [], connectionIds: [], issueKey: "" },
+      preview: null,
+      previewKey: "",
+      previewBusy: false,
+      previewError: "",
       busy: false,
       error: "",
       notice: "",
+    },
+    ai: {
+      data: null,
+      form: null,
+      saving: false,
+      error: "",
+      modal: null,
+    },
+    radar: {
+      overview: null,
+      report: null,
+      history: [],
+      selectedId: "",
+      busy: false,
+      error: "",
+      pollTimer: null,
+      modal: null,
     },
     agentes: {
       items: [],
@@ -76,6 +97,12 @@
       selectedId: "",
       selected: null,
       executions: [],
+      detail: null,
+      detailModal: null,
+      openExec: {},
+      configForm: null,
+      configSaving: false,
+      configError: "",
       form: null,
       busy: false,
       error: "",
@@ -257,10 +284,14 @@
   function openModal(opts) {
     const trigger = document.activeElement;
     const titleId = "modal-title-" + Math.random().toString(36).slice(2, 8);
-    const overlay = el("div", { class: "modal-overlay" });
+    const sheet = opts.variant === "sheet";
+    const overlay = el("div", { class: "modal-overlay" + (sheet ? " sheet-overlay" : "") });
     function close() {
       document.removeEventListener("keydown", onKey);
       overlay.remove();
+      if (typeof opts.onClose === "function") {
+        opts.onClose();
+      }
       if (trigger && typeof trigger.focus === "function") {
         trigger.focus();
       }
@@ -271,10 +302,13 @@
       }
     }
     const dialog = el("div", {
-      class: "modal-dialog", role: "dialog", "aria-modal": "true", "aria-labelledby": titleId,
+      class: "modal-dialog" + (sheet ? " sheet" : ""), role: "dialog", "aria-modal": "true", "aria-labelledby": titleId,
     });
     const head = el("div", { class: "modal-head" }, [
-      el("h2", { id: titleId, text: opts.title }),
+      el("div", { class: "modal-head-text" }, [
+        el("h2", { id: titleId, text: opts.title }),
+        opts.subtitle ? el("p", { class: "modal-subtitle", text: opts.subtitle }) : null,
+      ]),
       el("button", { type: "button", class: "modal-close", "aria-label": "Fechar", text: "×", onClick: close }),
     ]);
     const body = el("div", { class: "modal-body" });
@@ -289,7 +323,9 @@
     });
     document.body.appendChild(overlay);
     opts.build(body, close);
-    const focusable = dialog.querySelector("input, textarea, select, button:not(.modal-close)");
+    const focusable = sheet
+      ? dialog.querySelector(".modal-close")
+      : dialog.querySelector("input, textarea, select, button:not(.modal-close)");
     if (focusable) {
       focusable.focus();
     }
@@ -653,6 +689,18 @@
       file_too_large: "Arquivo do vault acima do limite.",
       issues_import: "Falha ao importar issues concluídas.",
       invalid_description: "Descreva o problema (até 8 KiB).",
+      issue_required: "Escolha a issue que vira o pedido.",
+      project_scope: "O gh do servidor não tem acesso ao board. Rode gh auth refresh -s project no container.",
+      project_schema: "Não foi possível ler o board Backlog de TI.",
+      busy: "Já existe uma análise em andamento.",
+      anthropic_not_configured: "A chave da API da Anthropic não está configurada no servidor.",
+      anthropic_auth: "A chave da API da Anthropic foi recusada. Confira a chave no .env.",
+      anthropic_rate_limit: "Limite de uso da API da Anthropic atingido. Tente mais tarde.",
+      invalid_time: "Horário inválido. Use HH:MM.",
+      invalid_model: "Modelo inválido.",
+      invalid_engine: "Motor inválido.",
+      invalid_mode: "Modo de pedido inválido.",
+      issue_unavailable: "Não foi possível ler a issue no GitHub agora.",
       invalid_repos: "Lista de repositórios inválida.",
       invalid_connection_ids: "Lista de conexões inválida.",
       secret_in_prompt: "O contexto tocaria um segredo; ajuste a descrição.",
@@ -1172,10 +1220,86 @@
     }
   }
 
+  function setInvestMode(mode) {
+    snapshotInvestForm();
+    state.invest.form.mode = mode === "issue" ? "issue" : "manual";
+    state.invest.error = "";
+    render();
+    if (state.invest.form.mode === "issue" && state.invest.form.issueKey) {
+      loadIssuePreview(state.invest.form.issueKey);
+    }
+  }
+
+  async function loadIssuePreview(key) {
+    const issueKey = String(key || "").trim();
+    state.invest.previewKey = issueKey;
+    state.invest.preview = null;
+    state.invest.previewError = "";
+    if (!issueKey) {
+      render();
+      return;
+    }
+    state.invest.previewBusy = true;
+    render();
+    const res = await api("/api/investigations/issue-preview?issue=" + encodeURIComponent(issueKey));
+    if (state.invest.previewKey !== issueKey) {
+      return;
+    }
+    state.invest.previewBusy = false;
+    if (res.ok) {
+      state.invest.preview = res.data;
+      const repo = res.data.repo;
+      if (repo && state.invest.form.repos.indexOf(repo) === -1) {
+        state.invest.form.repos.push(repo);
+      }
+    } else {
+      state.invest.previewError = (res.data && res.data.error) || "issue_unavailable";
+    }
+    render();
+  }
+
+  function ensureIssueOption(key, title) {
+    if (!key) {
+      return;
+    }
+    const exists = state.issues.some(function (item) { return item.issue_key === key; });
+    if (!exists) {
+      const parts = key.split("#");
+      state.issues.push({
+        issue_key: key,
+        repo: parts[0] || "",
+        number: Number(parts[1]) || null,
+        title: title || "",
+        url: "",
+      });
+    }
+  }
+
+  function investigateIssue(key, title) {
+    snapshotForm();
+    ensureIssueOption(key, title);
+    state.invest.form.mode = "issue";
+    state.invest.form.issueKey = key;
+    state.invest.form.description = "";
+    state.invest.error = "";
+    render({ keepState: true });
+    loadIssuePreview(key);
+    const target = document.getElementById("invest-form");
+    if (target) {
+      target.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  }
+
   async function runInvestigation() {
     snapshotInvestForm();
     const form = state.invest.form;
-    if (!form.description.trim()) {
+    const auto = form.mode === "issue";
+    if (auto && !(form.issueKey || "").trim()) {
+      state.invest.error = "issue_required";
+      render();
+      return;
+    }
+    if (!auto && !form.description.trim()) {
       state.invest.error = "invalid_description";
       render();
       return;
@@ -1185,6 +1309,7 @@
     state.invest.notice = "";
     render();
     const body = {
+      mode: auto ? "issue" : "manual",
       description: form.description,
       repos: form.repos.slice(),
       connection_ids: form.connectionIds.slice(),
@@ -1258,6 +1383,8 @@
     await loadInvestRepos();
     await loadInvestConnections();
     await loadInvestList();
+    await loadRadarOverview();
+    await loadAiSettings();
   }
 
   async function loadNotes() {
@@ -2037,19 +2164,129 @@
     }
   }
 
-  function renderInvestForm(root) {
-    const card = el("section", { class: "card" }, [
-      cardHead("Nova investigação"),
-      el("p", { class: "card-desc", text: "Descreva o problema, o erro ou o sintoma. Escolha os repositórios e, se quiser, conexões e uma issue existente." }),
-    ]);
-    card.appendChild(el("label", { text: "Descrição", for: "invest-description" }));
-    const desc = el("textarea", {
-      id: "invest-description",
-      rows: "6",
-      placeholder: "Ex.: a segunda via do boleto é gerada em dobro quando o cliente clica duas vezes em Reemitir.",
+  function modeSwitch() {
+    const current = state.invest.form.mode === "issue" ? "issue" : "manual";
+    const options = [
+      ["manual", "Escrever o pedido", "Você descreve o que investigar."],
+      ["issue", "Usar uma issue", "A issue vira o pedido."],
+    ];
+    return el("div", { class: "segmented", role: "radiogroup", "aria-label": "Tipo de pedido" }, options.map(function (opt) {
+      const active = current === opt[0];
+      return el("button", {
+        type: "button",
+        role: "radio",
+        "aria-checked": active ? "true" : "false",
+        class: "segmented-option" + (active ? " active" : ""),
+        onClick: function () {
+          if (!active) {
+            setInvestMode(opt[0]);
+          }
+        },
+      }, [
+        el("span", { class: "segmented-title", text: opt[1] }),
+        el("span", { class: "segmented-sub", text: opt[2] }),
+      ]);
+    }));
+  }
+
+  function issueSelect(id, placeholder, onChange) {
+    const sel = el("select", { id: id, onChange: onChange || null });
+    sel.appendChild(el("option", { value: "", text: placeholder }));
+    state.issues.forEach(function (item) {
+      const label = item.issue_key + (item.title ? " — " + item.title : "");
+      const opt = el("option", { value: item.issue_key, text: label });
+      if (state.invest.form.issueKey === item.issue_key) {
+        opt.selected = true;
+      }
+      sel.appendChild(opt);
     });
-    desc.value = state.invest.form.description || "";
-    card.appendChild(desc);
+    return sel;
+  }
+
+  function requestPreview() {
+    const box = el("div", { class: "request-preview", "aria-live": "polite" });
+    if (!state.invest.form.issueKey) {
+      box.appendChild(el("p", { class: "muted", text: "Escolha uma issue para ver o pedido que será enviado." }));
+      return box;
+    }
+    if (state.invest.previewBusy) {
+      box.appendChild(el("p", { class: "login-wait muted" }, [
+        el("span", { class: "spinner", "aria-hidden": "true" }),
+        el("span", { text: "Lendo a issue no GitHub…" }),
+      ]));
+      return box;
+    }
+    if (state.invest.previewError) {
+      box.appendChild(el("p", { class: "field-hint field-error", text: errorMessage(state.invest.previewError) }));
+      return box;
+    }
+    const p = state.invest.preview;
+    if (!p) {
+      return box;
+    }
+    box.appendChild(el("p", { class: "teia-k", text: "Pedido que será enviado" }));
+    box.appendChild(el("div", { class: "request-preview-title" }, [
+      el("strong", { text: p.title || p.issue_key }),
+      p.url ? safeLink(p.url, "Abrir ↗") : null,
+    ]));
+    const meta = el("div", { class: "request-preview-meta" }, [
+      el("span", { class: "mono muted", text: p.issue_key }),
+      p.state ? el("span", { class: "status " + (p.state === "OPEN" ? "status-ok" : "status-muted"), text: p.state === "OPEN" ? "Aberta" : "Fechada" }) : null,
+    ]);
+    (p.labels || []).forEach(function (name) {
+      meta.appendChild(el("span", { class: "pill pill-outline", text: name }));
+    });
+    box.appendChild(meta);
+    box.appendChild(el("p", { class: "request-preview-body", text: p.body_excerpt || "(issue sem descrição)" }));
+    const comments = p.comments_total
+      ? (p.comments_used + " de " + p.comments_total + " comentário(s) entram no pedido.")
+      : "Sem comentários.";
+    box.appendChild(el("p", { class: "field-hint", text: comments + " Junto vai o pedido padrão: entender o problema, apontar causas e pontos do código, dizer o que falta saber e sugerir próximos passos." }));
+    return box;
+  }
+
+  function renderInvestForm(root) {
+    const auto = state.invest.form.mode === "issue";
+    const engineLabel = state.ai.data ? modelLabel(state.ai.data, state.ai.data.investigation) : "";
+    const card = el("section", { class: "card", id: "invest-form" }, [
+      cardHead("Nova investigação", [engineLabel ? el("div", { class: "card-actions" }, [el("button", {
+        type: "button",
+        class: "sm quiet",
+        title: "Configurar o agente de investigação (aba Agentes)",
+        text: "Motor: " + engineLabel,
+        onClick: function () { openAgentByName("Agente de investigação"); },
+      })]) : null]),
+      el("p", { class: "card-desc", text: "Descreva o problema ou use uma issue existente como pedido. A investigação roda em modo somente leitura." }),
+    ]);
+    card.appendChild(el("label", { text: "Pedido" }));
+    card.appendChild(modeSwitch());
+
+    if (auto) {
+      card.appendChild(el("label", { text: "Issue", for: "invest-issue-key" }));
+      card.appendChild(issueSelect("invest-issue-key", "Selecione a issue", function (ev) {
+        snapshotInvestForm();
+        loadIssuePreview(ev.target.value);
+      }));
+      card.appendChild(requestPreview());
+      card.appendChild(el("label", { text: "Complemento (opcional)", for: "invest-description" }));
+      const extra = el("textarea", {
+        id: "invest-description",
+        class: "compact",
+        rows: "3",
+        placeholder: "Ex.: foque no fluxo de pagamento; o erro só acontece em produção.",
+      });
+      extra.value = state.invest.form.description || "";
+      card.appendChild(extra);
+    } else {
+      card.appendChild(el("label", { text: "Descrição", for: "invest-description" }));
+      const desc = el("textarea", {
+        id: "invest-description",
+        rows: "6",
+        placeholder: "Ex.: a segunda via do boleto é gerada em dobro quando o cliente clica duas vezes em Reemitir.",
+      });
+      desc.value = state.invest.form.description || "";
+      card.appendChild(desc);
+    }
 
     card.appendChild(el("label", { text: "Repositórios" }));
     if (!state.invest.repos.length) {
@@ -2065,6 +2302,9 @@
         reposBox.appendChild(el("label", { class: "check", for: id }, [box, el("span", { text: repo })]));
       });
       card.appendChild(reposBox);
+      if (auto) {
+        card.appendChild(el("p", { class: "field-hint", text: "O repositório da issue entra automaticamente." }));
+      }
     }
 
     if (state.invest.connections.length) {
@@ -2086,18 +2326,10 @@
       card.appendChild(el("p", { class: "field-hint", text: "Só metadados das conexões entram no contexto; segredos nunca." }));
     }
 
-    card.appendChild(el("label", { text: "Issue existente (opcional)", for: "invest-issue-key" }));
-    const issueSel = el("select", { id: "invest-issue-key" });
-    issueSel.appendChild(el("option", { value: "", text: "Nenhuma" }));
-    state.issues.forEach(function (item) {
-      const label = item.issue_key + (item.title ? " — " + item.title : "");
-      const opt = el("option", { value: item.issue_key, text: label });
-      if (state.invest.form.issueKey === item.issue_key) {
-        opt.selected = true;
-      }
-      issueSel.appendChild(opt);
-    });
-    card.appendChild(issueSel);
+    if (!auto) {
+      card.appendChild(el("label", { text: "Issue relacionada (opcional)", for: "invest-issue-key" }));
+      card.appendChild(issueSelect("invest-issue-key", "Nenhuma"));
+    }
 
     if (state.invest.error) {
       card.appendChild(el("p", { class: "banner banner-error", text: errorMessage(state.invest.error) }));
@@ -2105,7 +2337,7 @@
     card.appendChild(actionsRow([el("button", {
       type: "button",
       class: "primary",
-      text: state.invest.busy ? "Investigando…" : "Rodar investigação",
+      text: state.invest.busy ? "Investigando…" : (auto ? "Investigar esta issue" : "Rodar investigação"),
       disabled: state.invest.busy ? "disabled" : null,
       onClick: function () { runInvestigation(); },
     })]));
@@ -2276,8 +2508,498 @@
     ]);
   }
 
+  // --- Motor e modelo (componentes compartilhados) ------------------------------------------
+
+  function engineChoice(form, meta, locked, repaint) {
+    const apiReady = !!(meta.api && meta.api.configured);
+    const serverEngine = meta.server_engine === "cursor" ? "Cursor CLI" : "Claude Code CLI";
+    const options = [
+      ["cli", serverEngine, "Pela assinatura. Cada chamada carrega o contexto da CLI (~25 mil tokens)."],
+      ["api", "API da Anthropic", apiReady ? "Só o pedido e a resposta; cobrado por token na conta da API." : "Desligada: falta configurar a chave da API no servidor."],
+    ];
+    return el("div", { class: "segmented", role: "radiogroup", "aria-label": "Motor" }, options.map(function (opt) {
+      const active = form.engine === opt[0];
+      const blocked = locked || (opt[0] === "api" && !apiReady);
+      return el("button", {
+        type: "button",
+        role: "radio",
+        "aria-checked": active ? "true" : "false",
+        class: "segmented-option" + (active ? " active" : ""),
+        disabled: blocked ? "disabled" : null,
+        onClick: function () {
+          form.engine = opt[0];
+          repaint();
+        },
+      }, [
+        el("span", { class: "segmented-title", text: opt[1] }),
+        el("span", { class: "segmented-sub", text: opt[2] }),
+      ]);
+    }));
+  }
+
+  function modelSelect(form, meta, id, locked) {
+    const sel = el("select", {
+      id: id,
+      disabled: locked ? "disabled" : null,
+      onChange: function (ev) { form.model = ev.target.value; },
+    });
+    sel.appendChild(el("option", { value: "", text: form.engine === "api" ? "Padrão (Claude Opus 5.5)" : "Padrão do motor" }));
+    (meta.models || []).forEach(function (m) {
+      const opt = el("option", { value: m.id, text: m.label + " — " + m.hint });
+      if (form.model === m.id) {
+        opt.selected = true;
+      }
+      sel.appendChild(opt);
+    });
+    return el("div", { class: "field" }, [el("label", { text: "Modelo", for: id }), sel]);
+  }
+
+  function apiStatusBlock(meta) {
+    const apiReady = !!(meta.api && meta.api.configured);
+    return el("p", { class: "field-hint" }, [
+      el("span", { class: "status " + (apiReady ? "status-ok" : "status-muted"), text: apiReady ? "API da Anthropic configurada" : "API da Anthropic não configurada" }),
+      el("span", { text: apiReady
+        ? " — a chave fica no servidor e nunca é exibida."
+        : " — para liberar, coloque FORGE_ANTHROPIC_API_KEY no .env do Forge e recrie o backend." }),
+    ]);
+  }
+
+  function modelLabel(meta, form) {
+    const found = (meta.models || []).filter(function (m) { return m.id === form.model; })[0];
+    const engine = form.engine === "api" ? "API da Anthropic" : (meta.server_engine === "cursor" ? "Cursor CLI" : "Claude Code CLI");
+    return engine + " · " + (found ? found.label : (form.engine === "api" ? "Claude Opus 5.5" : "modelo padrão"));
+  }
+
+  // --- Configuração do agente (detalhe na aba Agentes) ---------------------------------------
+
+  function agentConfigSection() {
+    const data = state.agentes.detail;
+    const cfg = data && data.config;
+    if (!cfg || (cfg.kind !== "radar" && cfg.kind !== "investigation")) {
+      return null;
+    }
+    const isRadar = cfg.kind === "radar";
+    if (!state.agentes.configForm) {
+      state.agentes.configForm = { auto: !!cfg.auto, time: cfg.time || "13:00", engine: cfg.engine, model: cfg.model || "" };
+    }
+    const form = state.agentes.configForm;
+    const locked = !cfg.can_edit;
+    const section = el("div", { class: "agent-section agent-config" }, [
+      el("div", { class: "radar-section-head" }, [
+        el("h3", { text: "Configuração do agente" }),
+        locked ? el("span", { class: "count", text: "só o owner altera" }) : null,
+      ]),
+    ]);
+    const autoBox = el("input", {
+      id: "agent-cfg-auto",
+      type: "checkbox",
+      disabled: locked ? "disabled" : null,
+      onChange: function (ev) { form.auto = ev.target.checked; paintAgentDetail(); },
+    });
+    autoBox.checked = !!form.auto;
+    if (isRadar) {
+    section.appendChild(el("label", { text: "Agenda" }));
+    section.appendChild(el("div", { class: "toggle-row" }, [
+      el("label", { class: "check toggle-check", for: "agent-cfg-auto" }, [
+        autoBox,
+        el("span", { text: "Rodar automaticamente uma vez por dia" }),
+      ]),
+      el("div", { class: "toggle-time" }, [
+        el("label", { text: "às", for: "agent-cfg-time" }),
+        el("input", {
+          id: "agent-cfg-time",
+          type: "time",
+          value: form.time || "13:00",
+          disabled: (locked || !form.auto) ? "disabled" : null,
+          onChange: function (ev) { form.time = ev.target.value; },
+        }),
+      ]),
+    ]));
+    section.appendChild(el("p", { class: "field-hint", text: form.auto
+      ? "Roda sozinho todo dia nesse horário (Brasília). \"Analisar agora\" continua no painel do radar."
+      : "Desligado: só roda quando alguém clicar em \"Analisar agora\" no painel do radar." }));
+    }
+    section.appendChild(el("label", { text: "Motor" }));
+    section.appendChild(engineChoice(form, cfg, locked, paintAgentDetail));
+    section.appendChild(modelSelect(form, cfg, "agent-cfg-model", locked));
+    section.appendChild(el("p", { class: "field-hint", text: isRadar
+      ? "O resumo do radar é curto: Haiku 5.5 costuma bastar. Se o board não mudou desde a última rodada, o resumo é reaproveitado sem chamar modelo."
+      : "A investigação lê o grafo de código e escreve hipóteses: Sonnet 5.5 ou Opus 5.5 são as escolhas mais seguras." }));
+    section.appendChild(apiStatusBlock(cfg));
+    if (state.agentes.configError) {
+      section.appendChild(el("p", { class: "banner banner-error", text: errorMessage(state.agentes.configError) }));
+    }
+    if (!locked) {
+      section.appendChild(actionsRow([el("button", {
+        type: "button",
+        class: "primary",
+        text: state.agentes.configSaving ? "Salvando…" : "Salvar configuração",
+        disabled: state.agentes.configSaving ? "disabled" : null,
+        onClick: function () { saveAgentConfig(); },
+      })]));
+    }
+    return section;
+  }
+
+  async function saveAgentConfig() {
+    const data = state.agentes.detail;
+    const form = state.agentes.configForm;
+    const time = document.getElementById("agent-cfg-time");
+    if (time && time.value) {
+      form.time = time.value;
+    }
+    state.agentes.configSaving = true;
+    state.agentes.configError = "";
+    paintAgentDetail();
+    const res = await api("/api/agents/" + encodeURIComponent(data.agent.id) + "/config", { method: "POST", body: form });
+    state.agentes.configSaving = false;
+    if (!res.ok) {
+      state.agentes.configError = (res.data && res.data.error) || "error";
+      paintAgentDetail();
+      return;
+    }
+    const fresh = await api("/api/agents/" + encodeURIComponent(data.agent.id));
+    if (fresh.ok) {
+      state.agentes.detail = fresh.data;
+      state.agentes.selected = fresh.data.agent;
+    }
+    state.agentes.configForm = null;
+    showToast("Configuração do agente salva.");
+    paintAgentDetail();
+    if (activeTab() === "agentes") {
+      await loadAgentes();
+      render();
+    }
+  }
+
+  async function openAgentByName(name) {
+    if (state.radar.modal) {
+      state.radar.modal.close();
+    }
+    const res = await api("/api/agents");
+    const agent = res.ok ? (res.data.agents || []).filter(function (a) { return a.name === name; })[0] : null;
+    if (!agent) {
+      showToast("Agente ainda não cadastrado. Recrie o backend para registrá-lo.");
+      return;
+    }
+    openAgentDetail(agent.id);
+  }
+
+  function openRadarAgent() {
+    openAgentByName("Radar de prioridades");
+  }
+
+  // --- Motor da investigação (fica na Investigação: não é um agente) -------------------------
+
+  async function loadAiSettings() {
+    const res = await api("/api/ai-settings");
+    if (res.ok) {
+      state.ai.data = res.data;
+    }
+    return res.ok;
+  }
+
+  // --- Radar de prioridades ------------------------------------------------------------------
+
+  function fmtDateTime(iso) {
+    if (!iso) {
+      return "—";
+    }
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) {
+      return "—";
+    }
+    const today = new Date();
+    const sameDay = d.toDateString() === today.toDateString();
+    const time = d.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
+    if (sameDay) {
+      return "hoje, " + time;
+    }
+    return d.toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" }) + ", " + time;
+  }
+
+  async function loadRadarOverview() {
+    const res = await api("/api/radar");
+    if (!res.ok) {
+      return;
+    }
+    state.radar.overview = res.data;
+    state.radar.busy = !!res.data.busy;
+    if (!state.radar.selectedId && res.data.latest) {
+      state.radar.report = res.data.latest;
+    }
+  }
+
+  async function loadRadarHistory() {
+    const res = await api("/api/radar/reports");
+    state.radar.history = res.ok ? (res.data.reports || []) : [];
+  }
+
+  function radarButton() {
+    const latest = state.radar.overview && state.radar.overview.latest;
+    const count = latest && latest.status === "ok" ? (latest.stats && latest.stats.now) || 0 : 0;
+    return el("button", {
+      type: "button",
+      class: "radar-trigger",
+      onClick: function () { openRadar(); },
+    }, [
+      el("span", { text: "Radar de prioridades" }),
+      count ? el("span", { class: "radar-trigger-count", "aria-label": count + " para concluir já", text: String(count) }) : null,
+    ]);
+  }
+
+  function stopRadarPoll() {
+    if (state.radar.pollTimer) {
+      window.clearInterval(state.radar.pollTimer);
+      state.radar.pollTimer = null;
+    }
+  }
+
+  function startRadarPoll() {
+    if (state.radar.pollTimer) {
+      return;
+    }
+    state.radar.pollTimer = window.setInterval(async function () {
+      await loadRadarOverview();
+      if (!state.radar.busy) {
+        stopRadarPoll();
+        state.radar.selectedId = "";
+        state.radar.report = state.radar.overview && state.radar.overview.latest;
+        await loadRadarHistory();
+        const report = state.radar.report;
+        if (report && report.status === "ok") {
+          showToast("Radar atualizado.");
+        }
+        render();
+      }
+      paintRadar();
+    }, 3000);
+  }
+
+  async function runRadarNow() {
+    state.radar.error = "";
+    const res = await api("/api/radar/run", { method: "POST", body: {} });
+    if (!res.ok && res.status !== 409) {
+      state.radar.error = (res.data && res.data.error) || "error";
+      paintRadar();
+      return;
+    }
+    state.radar.busy = true;
+    paintRadar();
+    startRadarPoll();
+  }
+
+  async function selectRadarReport(id) {
+    state.radar.selectedId = id;
+    const res = await api("/api/radar/reports/" + encodeURIComponent(id));
+    if (res.ok) {
+      state.radar.report = res.data;
+    } else {
+      state.radar.error = (res.data && res.data.error) || "error";
+    }
+    paintRadar();
+  }
+
+  async function openRadar() {
+    if (state.radar.modal) {
+      return;
+    }
+    state.radar.error = "";
+    state.radar.modal = openModal({
+      title: "Radar de prioridades",
+      subtitle: "Backlog de TI · o que concluir já, o que está parado e o que vale investigar",
+      variant: "sheet",
+      build: function () { paintRadar(); },
+      onClose: function () {
+        state.radar.modal = null;
+      },
+    });
+    await loadRadarOverview();
+    await loadRadarHistory();
+    if (state.radar.busy) {
+      startRadarPoll();
+    }
+    paintRadar();
+  }
+
+  function radarEntry(entry, kind) {
+    const meta = el("div", { class: "radar-item-meta" }, [
+      el("span", { class: "mono", text: entry.key.split("/").pop() }),
+      entry.status ? el("span", { text: entry.status }) : null,
+      entry.prioridade ? el("span", { class: "pill " + priorityPill(entry.prioridade), text: entry.prioridade }) : null,
+      entry.sprint ? el("span", { text: entry.sprint }) : null,
+      el("span", { text: (entry.assignees && entry.assignees.length) ? "@" + entry.assignees.join(", @") : "sem responsável" }),
+    ]);
+    const reasons = (kind === "investigate" ? (entry.investigate_reasons || []) : entry.reasons) || [];
+    const action = entry.investigable
+      ? el("button", {
+        type: "button",
+        class: "sm",
+        text: "Investigar",
+        onClick: function () {
+          if (state.radar.modal) {
+            state.radar.modal.close();
+          }
+          investigateIssue(entry.key, entry.title);
+        },
+      })
+      : el("span", { class: "radar-item-note", title: "O repositório desta issue não está na allowlist do Forge.", text: "Fora da allowlist" });
+    return el("li", { class: "radar-item" }, [
+      el("div", { class: "radar-item-main" }, [
+        el("div", { class: "radar-item-title" }, [
+          entry.url ? safeLink(entry.url, entry.title || entry.key) : el("span", { text: entry.title || entry.key }),
+        ]),
+        meta,
+        reasons.length ? el("p", { class: "radar-item-reasons", text: reasons.join(" · ") }) : null,
+      ]),
+      el("div", { class: "radar-item-side" }, [
+        el("span", { class: "radar-score", title: "Pontuação do radar", text: String(entry.score) }),
+        action,
+      ]),
+    ]);
+  }
+
+  function priorityPill(name) {
+    const key = String(name || "").toLowerCase();
+    if (key.indexOf("urgente") === 0) {
+      return "pill-danger";
+    }
+    if (key.indexOf("alta") === 0) {
+      return "pill-warn";
+    }
+    return "pill-outline";
+  }
+
+  function radarSection(title, hint, entries, kind, emptyText) {
+    const section = el("div", { class: "radar-section" }, [
+      el("div", { class: "radar-section-head" }, [
+        el("h3", { text: title }),
+        el("span", { class: "count", text: String(entries.length) }),
+      ]),
+      hint ? el("p", { class: "radar-section-hint", text: hint }) : null,
+    ]);
+    if (!entries.length) {
+      section.appendChild(el("p", { class: "radar-empty", text: emptyText }));
+      return section;
+    }
+    section.appendChild(el("ol", { class: "radar-list" }, entries.map(function (entry) {
+      return radarEntry(entry, kind);
+    })));
+    return section;
+  }
+
+  function paintRadar() {
+    const modal = state.radar.modal;
+    if (!modal) {
+      return;
+    }
+    const body = modal.body;
+    body.replaceChildren();
+    const ov = state.radar.overview || {};
+    const report = state.radar.report;
+
+    const scheduleText = ov.auto
+      ? "Automático todo dia às " + (ov.time || "13:00") + (ov.next_run ? " · próxima " + fmtDateTime(ov.next_run) : "")
+      : "Automático desligado: rode com \"Analisar agora\".";
+    const toolbar = el("div", { class: "radar-toolbar" }, [el("p", { class: "radar-schedule" }, [
+      el("span", { class: "status " + (ov.auto ? "status-ok" : "status-muted"), text: scheduleText }),
+      el("button", { type: "button", class: "sm quiet", text: "Configurar agente", onClick: function () { openRadarAgent(); } }),
+    ])]);
+    const controls = el("div", { class: "radar-controls" });
+    if (state.radar.history.length) {
+      const sel = el("select", {
+        id: "radar-history",
+        "aria-label": "Relatório",
+        onChange: function (ev) { selectRadarReport(ev.target.value); },
+      });
+      state.radar.history.forEach(function (item) {
+        const label = fmtDateTime(item.created_at) + " · " + (item.reason === "manual" ? "manual" : "agendado")
+          + (item.status === "ok" ? "" : " · falhou");
+        const opt = el("option", { value: item.id, text: label });
+        if (report && report.id === item.id) {
+          opt.selected = true;
+        }
+        sel.appendChild(opt);
+      });
+      controls.appendChild(sel);
+    }
+    controls.appendChild(el("button", {
+      type: "button",
+      class: "primary",
+      disabled: state.radar.busy ? "disabled" : null,
+      onClick: function () { runRadarNow(); },
+    }, state.radar.busy
+      ? [el("span", { class: "spinner spinner-on-accent", "aria-hidden": "true" }), el("span", { text: "Analisando…" })]
+      : [el("span", { text: "Analisar agora" })]));
+    toolbar.appendChild(controls);
+    body.appendChild(toolbar);
+
+    if (state.radar.error) {
+      body.appendChild(el("p", { class: "banner banner-error", text: errorMessage(state.radar.error) }));
+    }
+    if (state.radar.busy) {
+      body.appendChild(el("p", { class: "banner banner-info", text: "Lendo o board e calculando prioridades. Leva cerca de um minuto; pode fechar o painel." }));
+    }
+    if (!report) {
+      body.appendChild(el("div", { class: "empty" }, [
+        el("strong", { text: "Nenhum relatório ainda" }),
+        el("span", { text: "Use \"Analisar agora\" ou espere o próximo horário da agenda." }),
+      ]));
+      return;
+    }
+    if (report.status !== "ok") {
+      body.appendChild(el("p", {
+        class: "banner banner-error",
+        text: "A rodada de " + fmtDateTime(report.created_at) + " falhou: " + errorMessage(report.error || "error"),
+      }));
+      return;
+    }
+
+    const stats = report.stats || {};
+    const staleDays = report.stale_days || ov.stale_days || 14;
+    body.appendChild(el("div", { class: "metric-grid radar-stats" }, [
+      metricCard("core", stats.open || 0, null, "Abertas"),
+      metricCard("danger", stats.now || 0, null, "Concluir agora"),
+      metricCard("warn", stats.stale || 0, null, "Paradas há " + staleDays + "+ dias"),
+      metricCard("core", stats.unassigned || 0, null, "Sem responsável"),
+    ]));
+
+    if (report.summary) {
+      body.appendChild(el("div", { class: "radar-summary" }, [
+        el("p", { class: "teia-k", text: "Resumo" }),
+        el("div", { class: "markdown-body" }, renderMarkdownNodes(report.summary)),
+      ]));
+    } else if (report.summary_error) {
+      body.appendChild(el("p", { class: "field-hint", text: "Resumo indisponível nesta rodada (motor: " + report.summary_error + "). A ordem abaixo não depende dele." }));
+    }
+
+    body.appendChild(radarSection(
+      "Concluir agora",
+      "Prioridade alta, segurança, prazo ou sprint vencidos, ou reaberta.",
+      report.now || [], "now", "Nada urgente no momento.",
+    ));
+    body.appendChild(radarSection(
+      "Paradas há mais de " + staleDays + " dias",
+      "Sem atividade na issue nem no board.",
+      report.stale || [], "stale", "Nenhuma issue parada.",
+    ));
+    body.appendChild(radarSection(
+      "Vale investigar",
+      "Pouca definição para andar: triagem longa, sem prioridade ou sem estimativa.",
+      report.investigate || [], "investigate", "Nada pendente de definição.",
+    ));
+    body.appendChild(el("p", {
+      class: "radar-footnote",
+      text: "Relatório de " + fmtDateTime(report.created_at) + ". A ordem vem de uma regra fixa (prioridade, segurança, tempo parado, prazos e sprint); o resumo é escrito pelo motor. Nada é alterado no GitHub.",
+    }));
+  }
+
   function renderInvestigacao(root) {
-    root.appendChild(pageHeader("Investigação", "Descreva um problema, erro ou sintoma; o agente investiga os repositórios em modo somente leitura e sugere próximos passos."));
+    root.appendChild(pageHeader(
+      "Investigação",
+      "Descreva um problema, erro ou sintoma; o agente investiga os repositórios em modo somente leitura e sugere próximos passos.",
+      canEditNotes() ? [radarButton()] : null,
+    ));
     root.appendChild(readonlySeal());
     if (!canEditNotes()) {
       root.appendChild(el("p", { class: "banner banner-warn", text: "Só editor ou owner vê as notas da investigação." }));
@@ -2484,11 +3206,6 @@
     }
   }
 
-  async function selectAgent(id) {
-    await loadAgentDetail(id);
-    render();
-  }
-
   async function decideApproval(approvalId, decision) {
     state.agentes.busy = true;
     state.agentes.error = "";
@@ -2670,11 +3387,12 @@
         class: "agent-row" + (selected ? " selected" : ""),
         tabindex: "0",
         "aria-selected": selected ? "true" : "false",
-        onClick: function () { selectAgent(agent.id); },
+        title: "Ver detalhes do agente",
+        onClick: function () { openAgentDetail(agent.id); },
         onKeydown: function (ev) {
           if (ev.key === "Enter" || ev.key === " ") {
             ev.preventDefault();
-            selectAgent(agent.id);
+            openAgentDetail(agent.id);
           }
         },
       }, [
@@ -2694,6 +3412,261 @@
     root.appendChild(card);
   }
 
+  // --- Detalhe do agente (painel lateral) ---------------------------------------------------
+
+  function fmtInt(n) {
+    if (n === null || n === undefined) {
+      return "—";
+    }
+    return Number(n).toLocaleString("pt-BR");
+  }
+
+  function fmtTokensShort(n) {
+    if (n === null || n === undefined) {
+      return "—";
+    }
+    const v = Number(n);
+    if (v >= 1000000) {
+      return (v / 1000000).toLocaleString("pt-BR", { maximumFractionDigits: 1 }) + " mi";
+    }
+    if (v >= 1000) {
+      return (v / 1000).toLocaleString("pt-BR", { maximumFractionDigits: 1 }) + " mil";
+    }
+    return v.toLocaleString("pt-BR");
+  }
+
+  function fmtUsd(n) {
+    if (n === null || n === undefined) {
+      return "—";
+    }
+    const v = Number(n);
+    const digits = v > 0 && v < 1 ? 3 : 2;
+    return "US$ " + v.toLocaleString("pt-BR", { minimumFractionDigits: digits, maximumFractionDigits: digits });
+  }
+
+  function fmtDuration(ms) {
+    if (ms === null || ms === undefined) {
+      return "—";
+    }
+    const sec = Number(ms) / 1000;
+    if (sec < 60) {
+      return sec.toLocaleString("pt-BR", { maximumFractionDigits: 1 }) + " s";
+    }
+    const min = Math.floor(sec / 60);
+    return min + " min " + Math.round(sec - min * 60) + " s";
+  }
+
+  function scopeLabel(scope) {
+    return scope === "company_system" ? "Sistema da empresa" : "Desenvolvimento";
+  }
+
+  async function openAgentDetail(id) {
+    const res = await api("/api/agents/" + encodeURIComponent(id));
+    if (!res.ok) {
+      state.agentes.error = (res.data && res.data.error) || "error";
+      render();
+      return;
+    }
+    state.agentes.selectedId = id;
+    state.agentes.selected = res.data.agent;
+    state.agentes.executions = res.data.executions || [];
+    state.agentes.detail = res.data;
+    state.agentes.openExec = {};
+    state.agentes.configForm = null;
+    state.agentes.configError = "";
+    render();
+    if (state.agentes.detailModal) {
+      state.agentes.detailModal.close();
+    }
+    state.agentes.detailModal = openModal({
+      title: res.data.agent.name,
+      subtitle: res.data.agent.description || "",
+      variant: "sheet",
+      build: function () {},
+      onClose: function () { state.agentes.detailModal = null; },
+    });
+    paintAgentDetail();
+  }
+
+  function usageBar(stats) {
+    const parts = [
+      ["in", "Entrada", stats.input_tokens],
+      ["out", "Saída", stats.output_tokens],
+      ["cr", "Cache lido", stats.cache_read_tokens],
+      ["cw", "Cache gravado", stats.cache_write_tokens],
+    ];
+    const total = parts.reduce(function (acc, p) { return acc + Number(p[2] || 0); }, 0);
+    const bar = el("div", { class: "usage-bar", "aria-hidden": "true" });
+    const legend = el("dl", { class: "usage-legend" });
+    parts.forEach(function (p) {
+      const seg = el("span", { class: "usage-seg usage-" + p[0] });
+      seg.style.width = (total ? (100 * Number(p[2] || 0) / total) : 0) + "%";
+      bar.appendChild(seg);
+      legend.appendChild(el("div", null, [
+        el("dt", null, [el("span", { class: "usage-dot usage-" + p[0], "aria-hidden": "true" }), el("span", { text: p[1] })]),
+        el("dd", { text: fmtInt(p[2]) }),
+      ]));
+    });
+    return el("div", { class: "usage-block" }, [bar, legend]);
+  }
+
+  function executionRow(execu) {
+    const u = execu.usage || {};
+    const open = !!(state.agentes.openExec && state.agentes.openExec[execu.id]);
+    const statusMap = { ok: ["status-ok", "Sucesso"], error: ["status-danger", "Erro"], running: ["status-warn", "Rodando"] };
+    const st = statusMap[execu.status] || ["status-muted", execu.status || "—"];
+    const row = el("tr", {
+      class: "exec-row" + (open ? " open" : ""),
+      tabindex: "0",
+      "aria-expanded": open ? "true" : "false",
+      onClick: function () { toggleExec(execu.id); },
+      onKeydown: function (ev) {
+        if (ev.key === "Enter" || ev.key === " ") {
+          ev.preventDefault();
+          toggleExec(execu.id);
+        }
+      },
+    }, [
+      el("td", null, [
+        el("span", { class: "cell-strong exec-event", text: execu.event || "—" }),
+        el("span", { class: "exec-when", text: fmtDateTime(execu.started_at) }),
+      ]),
+      el("td", null, [el("span", { class: "status " + st[0], text: st[1] })]),
+      el("td", { class: "num", text: fmtDuration(execu.duration_ms) }),
+      el("td", { class: "num", title: u.total_tokens != null ? fmtInt(u.total_tokens) + " tokens" : "Motor não informou uso", text: fmtTokensShort(u.total_tokens) }),
+      el("td", { class: "num", text: fmtUsd(u.cost_usd) }),
+    ]);
+    const rows = [row];
+    if (open) {
+      const detail = el("div", { class: "exec-detail" }, [
+        el("dl", { class: "exec-usage" }, [
+          el("div", null, [el("dt", { text: "Entrada" }), el("dd", { text: fmtInt(u.input_tokens) })]),
+          el("div", null, [el("dt", { text: "Saída" }), el("dd", { text: fmtInt(u.output_tokens) })]),
+          el("div", null, [el("dt", { text: "Cache lido" }), el("dd", { text: fmtInt(u.cache_read_tokens) })]),
+          el("div", null, [el("dt", { text: "Cache gravado" }), el("dd", { text: fmtInt(u.cache_write_tokens) })]),
+          el("div", null, [el("dt", { text: "Turnos" }), el("dd", { text: fmtInt(u.turns) })]),
+          el("div", { class: "exec-only-mobile" }, [el("dt", { text: "Status · duração" }), el("dd", { text: st[1] + " · " + fmtDuration(execu.duration_ms) })]),
+          el("div", null, [el("dt", { text: "Modelo" }), el("dd", { class: "mono", text: u.model || "—" })]),
+        ]),
+        u.total_tokens == null ? el("p", { class: "field-hint", text: "O motor não informou uso nesta execução (execução antiga, sem chamada ao motor ou motor sem esse dado)." }) : null,
+        execu.log ? el("div", { class: "agent-log", text: execu.log }) : null,
+      ]);
+      rows.push(el("tr", { class: "exec-detail-row" }, [el("td", { colspan: "5" }, [detail])]));
+    }
+    return rows;
+  }
+
+  function toggleExec(id) {
+    state.agentes.openExec = state.agentes.openExec || {};
+    state.agentes.openExec[id] = !state.agentes.openExec[id];
+    paintAgentDetail();
+  }
+
+  function paintAgentDetail() {
+    const modal = state.agentes.detailModal;
+    const data = state.agentes.detail;
+    if (!modal || !data) {
+      return;
+    }
+    const body = modal.body;
+    body.replaceChildren();
+    const agent = data.agent;
+    const stats = data.stats || {};
+
+    body.appendChild(el("div", { class: "agent-facts" }, [
+      agentStatusPill(agent.status),
+      scopeChip(agent.scope),
+      agent.trigger ? el("span", { text: "Gatilho: " + agent.trigger }) : null,
+      agent.engine ? el("span", { text: "Motor: " + agent.engine }) : null,
+      el("span", { text: "Criado " + fmtDateTime(agent.created_at) }),
+    ]));
+
+    const config = agentConfigSection();
+    if (config) {
+      body.appendChild(config);
+    }
+
+    body.appendChild(el("div", { class: "metric-grid agent-stats" }, [
+      metricCard("core", stats.executions || 0, null, "Execuções"),
+      metricCard("ok", stats.success_rate == null ? "—" : stats.success_rate + "%", null, "Sucesso"),
+      metricCard("core", fmtDuration(stats.avg_duration_ms), null, "Duração média"),
+      metricCard("core", fmtUsd(stats.cost_usd), null, "Custo estimado total"),
+    ]));
+
+    const usageSection = el("div", { class: "agent-section" }, [
+      el("div", { class: "radar-section-head" }, [
+        el("h3", { text: "Consumo do motor" }),
+        el("span", { class: "count", text: stats.total_tokens == null ? "sem dado" : fmtInt(stats.total_tokens) + " tokens" }),
+      ]),
+    ]);
+    if (stats.total_tokens == null) {
+      usageSection.appendChild(el("p", { class: "radar-empty", text: "Nenhuma execução deste agente informou uso do motor ainda." }));
+    } else {
+      usageSection.appendChild(usageBar(stats));
+      usageSection.appendChild(el("dl", { class: "meta-list agent-cost" }, [
+        el("dt", { text: "Média por execução" }), el("dd", { text: fmtUsd(stats.avg_cost_usd) + " · " + fmtInt(stats.executions_with_usage) + (stats.executions_with_usage === 1 ? " execução" : " execuções") + " com uso informado" }),
+        el("dt", { text: "Últimos 30 dias" }), el("dd", { text: fmtUsd(stats.cost_usd_30d) + " em " + fmtInt(stats.executions_30d) + " execuções" }),
+      ]));
+    }
+    usageSection.appendChild(el("p", { class: "field-hint", text: "Custo estimado pelo Claude Code a preço de lista da API. Com assinatura, não é cobrança por chamada; serve para comparar consumo. Cache gravado costuma pesar mais: é o contexto da CLI guardado na primeira chamada." }));
+    body.appendChild(usageSection);
+
+    const execs = data.executions || [];
+    const execSection = el("div", { class: "agent-section" }, [
+      el("div", { class: "radar-section-head" }, [
+        el("h3", { text: "Execuções" }),
+        el("span", { class: "count", text: String(execs.length) + (stats.executions > execs.length ? " de " + stats.executions : "") }),
+      ]),
+      el("p", { class: "radar-section-hint", text: "Clique numa execução para ver tokens por tipo, modelo e log." }),
+    ]);
+    if (!execs.length) {
+      execSection.appendChild(el("p", { class: "radar-empty", text: "Sem execuções registradas." }));
+    } else {
+      const table = el("table", { class: "exec-table" });
+      table.appendChild(el("thead", null, [el("tr", null, [
+        el("th", { text: "Execução" }),
+        el("th", { text: "Status" }),
+        el("th", { class: "num", text: "Duração" }),
+        el("th", { class: "num", text: "Tokens" }),
+        el("th", { class: "num", text: "Custo" }),
+      ])]));
+      const tbody = el("tbody");
+      execs.forEach(function (execu) {
+        executionRow(execu).forEach(function (tr) { tbody.appendChild(tr); });
+      });
+      table.appendChild(tbody);
+      execSection.appendChild(el("div", { class: "exec-table-wrap" }, [table]));
+    }
+    body.appendChild(execSection);
+
+    const perms = el("div", { class: "agent-section" });
+    renderPermissions(perms);
+    if (perms.firstChild) {
+      perms.firstChild.className = "";
+      perms.replaceChild(el("div", { class: "radar-section-head" }, [el("h3", { text: "Permissões" })]), perms.firstChild);
+      body.appendChild(perms);
+    }
+
+    const approvals = data.approvals || [];
+    if (approvals.length) {
+      const list = el("div", { class: "agent-section" }, [
+        el("div", { class: "radar-section-head" }, [el("h3", { text: "Aprovações" }), el("span", { class: "count", text: String(approvals.length) })]),
+      ]);
+      approvals.forEach(function (ap) {
+        const map = { pending: ["status-warn", "Pendente"], approved: ["status-ok", "Aprovada"], rejected: ["status-danger", "Recusada"] };
+        const st = map[ap.status] || ["status-muted", ap.status];
+        list.appendChild(el("div", { class: "approval-item" }, [
+          el("div", { class: "approval-info" }, [
+            el("strong", { text: ap.action === "write_access" ? "Acesso de escrita" : ap.action }),
+            el("span", { text: "Pedida " + fmtDateTime(ap.requested_at) + (ap.decided_at ? " · decidida " + fmtDateTime(ap.decided_at) : "") }),
+          ]),
+          el("span", { class: "status " + st[0], text: st[1] }),
+        ]));
+      });
+      body.appendChild(list);
+    }
+  }
+
   function renderSelectedAgent(root) {
     const agent = state.agentes.selected;
     const card = el("section", { class: "card" });
@@ -2706,6 +3679,12 @@
     card.appendChild(el("div", { class: "selected-agent-head" }, [
       el("strong", { text: agent.name }),
       agentStatusPill(agent.status),
+      el("button", {
+        type: "button",
+        class: "sm quiet selected-agent-more",
+        text: "Ver detalhes",
+        onClick: function () { openAgentDetail(agent.id); },
+      }),
     ]));
     card.appendChild(el("p", { class: "agent-trigger-line" }, [
       el("span", { text: (agent.scope === "company_system" ? "Sistema da empresa" : "Desenvolvimento") + (agent.trigger ? " · gatilho: " + agent.trigger : "") }),
@@ -2817,8 +3796,10 @@
     root.appendChild(el("div", { class: "agents-layout" }, [left, right]));
   }
 
-  function render() {
-    snapshotForm();
+  function render(opts) {
+    if (!(opts && opts.keepState)) {
+      snapshotForm();
+    }
     const session = document.getElementById("session");
     const app = document.getElementById("app");
     renderSession(session);
@@ -2900,6 +3881,11 @@
 
   window.addEventListener("hashchange", async function () {
     const tab = activeTab();
+    [state.agentes.detailModal, state.radar.modal, state.ai.modal].forEach(function (modal) {
+      if (modal) {
+        modal.close();
+      }
+    });
     state.error = "";
     state.errorDetail = null;
     render();
