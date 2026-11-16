@@ -26,6 +26,7 @@ from ..issues.importer import CompletedIssueImporter
 from ..logging import redact
 from ..notes.service import NoteService
 from ..obsidian.vault import ObsidianVault
+from ..radar.service import RadarScheduler, RadarService
 from ..storage.sql import SqlRepository
 from .agents import register_agent_catalog_routes
 from .connections import register_connection_routes
@@ -37,6 +38,7 @@ from .issues import register_issue_import_routes
 from .notes import register_note_routes
 from .obsidian import register_obsidian_routes
 from .pending import PendingLogin, PendingStore
+from .radar import register_radar_routes
 from .security import (
     CSRF_COOKIE,
     CSRF_HEADER,
@@ -89,6 +91,7 @@ def create_app(
     graph_indexer: GraphIndexer | None = None,
     issue_importer: CompletedIssueImporter | None = None,
     investigation_provider=None,
+    radar_provider=None,
 ) -> FastAPI:
     if not settings.github_client_id:
         raise ValueError("FORGE_GITHUB_CLIENT_ID é obrigatória para o painel web")
@@ -111,11 +114,13 @@ def create_app(
     issue_delete = IssueDeleteService(repo, store, gh)
     agent_catalog = AgentCatalogService(repo, store)
     investigations = InvestigationService(
-        repo, store, provider=investigation_provider, graph_dir=settings.graph_dir,
+        repo, store, provider=investigation_provider, gh=gh, graph_dir=settings.graph_dir,
         graph_prompt_max_nodes=settings.graph_prompt_max_nodes,
         graph_prompt_max_chars=settings.graph_prompt_max_chars,
         claude_max_turns=settings.claude_max_turns,
     )
+    radar = RadarService(repo, store, settings, gh=gh, provider=radar_provider)
+    radar_scheduler = RadarScheduler(radar, settings)
     obsidian_vault = obsidian if obsidian is not None else ObsidianVault.from_settings(settings)
     issues = issue_importer if issue_importer is not None else CompletedIssueImporter(
         repo, settings, gh=gh,
@@ -139,6 +144,8 @@ def create_app(
     app.state.investigations = investigations
     app.state.issue_delete = issue_delete
     app.state.agent_catalog = agent_catalog
+    app.state.radar = radar
+    app.state.radar_scheduler = radar_scheduler
 
     def _audit(actor: str, action: str, target: str, result: str) -> None:
         repo.record_audit(actor, action, target, redact(result))
@@ -533,6 +540,12 @@ def create_app(
         issue_delete,
         json_error=_json_error,
         need_owner=_need_owner,
+    )
+    register_radar_routes(
+        app,
+        radar,
+        json_error=_json_error,
+        need_editor_or_owner=_need_editor_or_owner,
     )
     register_agent_catalog_routes(
         app,

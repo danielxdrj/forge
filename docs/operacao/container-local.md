@@ -34,6 +34,9 @@ CI e testes unitários **não** chamam GitHub nem Cursor reais.
 | `FORGE_GRAPH_POLL_SECONDS` | intervalo do poll de releases (padrão `3600`; `0` desliga o loop e mantém só o passo na subida) |
 | `FORGE_GRAPH_NODE_LIMIT` | teto de nós da Teia combinada (padrão `500`, entre 50 e 5000) |
 | `FORGE_GRAPH_EDGE_LIMIT` | teto de arestas da Teia combinada (padrão `1500`, entre 100 e 20000) |
+| `FORGE_RADAR_TIMES` | horários locais do radar de prioridades, `HH:MM` separados por vírgula (padrão `11:00,15:40,17:50`; vazio desliga a agenda e deixa só o botão) |
+| `FORGE_RADAR_STALE_DAYS` | dias sem atividade para uma issue contar como parada (padrão `14`, entre 1 e 365) |
+| `FORGE_RADAR_TIMEZONE` | fuso IANA da agenda do radar (padrão `America/Sao_Paulo`) |
 | `FORGE_GRAPH_EXTRACT_TIMEOUT` | teto em segundos do `graphify extract` (padrão `1800`, entre 60 e 7200). Monólitos grandes levam ~2 min |
 
 A senha **não** vai para arquivo no repositório. O Postgres lê `secrets.environment`. O `forge_backend` é `read_only: true`; Compose v2 recusa `secrets.environment` nesse caso (`file is the sole supported option`). **Plano B:** tmpfs em `/run/secrets` (mode 0700, uid/gid 1000); o entrypoint grava as senhas da env em arquivos 0600 nesse tmpfs e remove as variáveis do processo antes do uvicorn. O código continua lendo de arquivo. Residual: `docker inspect` ainda mostra a env configurada no serviço. Ainda precisa ser validado no Windows (Docker Desktop).
@@ -125,6 +128,20 @@ $env:FORGE_OBSIDIAN_ALLOW = 'Forge,Projetos'
 ```
 
 A API lista e lê `.md` só dentro da allowlist: `realpath`, sem seguir symlink para fora, com teto de tamanho e de quantidade. O log guarda caminho relativo e hash, nunca o texto. Escrita só em `Forge/` (notas de issues concluídas em `Forge/<repo>/<número>.md`): nome sanitizado, pastas intermediárias só sob `Forge/`, arquivo temporário + `replace`.
+
+### Investigação: pedido automático e radar de prioridades
+
+**Pedido automático.** Na Investigação, o pedido pode ser escrito ou vir de uma issue. Em "Usar uma issue", `POST /api/investigations/run` recebe `mode: "issue"` e `issue_key`. O backend lê título, corpo, labels e os 10 comentários mais recentes com `gh issue view` (somente leitura, só repositórios da allowlist), passa tudo pela redação de segredos, junta um pedido padrão de investigação e o complemento opcional de quem pediu. O repositório da issue entra na investigação automaticamente. `GET /api/investigations/issue-preview?issue=<repo>#<n>` devolve a prévia que a tela mostra antes de rodar. Erros: `issue_required`, `repo_not_allowed`, `issue_unavailable` (502), `gh_missing` (503).
+
+**Radar de prioridades.** O botão "Radar de prioridades" abre um painel lateral com o último relatório do board Backlog de TI (projeto 13). O backend roda sozinho em `FORGE_RADAR_TIMES` (padrão 11:00, 15:40 e 17:50, fuso `FORGE_RADAR_TIMEZONE`); se subir até 10 minutos depois de um horário, ainda roda aquele. Editor ou owner pode disparar `POST /api/radar/run` (202; 409 se já houver uma rodada). Cada rodada:
+
+1. lê os itens abertos do board com `gh api graphql` (somente leitura, sem mutação);
+2. pontua por regra fixa em `src/forge_core/radar/scoring.py`: prioridade, segurança, tempo parado (`FORGE_RADAR_STALE_DAYS`, padrão 14), sprint e data alvo vencidas, reaberta, sem responsável;
+3. separa em "Concluir agora" (até 5, exige sinal de urgência), "Paradas" (até 10) e "Vale investigar" (até 8: triagem longa, sem prioridade ou sem estimativa);
+4. pede ao motor um resumo curto do topo. Se o motor falhar, o relatório sai sem resumo: a ordem não depende da IA;
+5. grava em `radar_reports` (append-only, migração 0020) e registra uma execução do agente "Radar de prioridades" na aba Agentes.
+
+O prompt do resumo leva só chave, título, campos do board e motivos, com segredos mascarados. Nada é escrito no GitHub. Leitura: `GET /api/radar`, `GET /api/radar/reports` (últimos 30) e `GET /api/radar/reports/{id}`. "Investigar" num item abre a investigação em modo issue; itens de repositórios fora da allowlist aparecem, mas sem esse botão.
 
 ### Volume `forge_graphs` e poll de release
 

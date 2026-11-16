@@ -25,5 +25,7 @@ GRANT SELECT, INSERT, UPDATE ON completed_issues TO <PAPEL_APP>;
 GRANT SELECT, INSERT, UPDATE ON agents, agent_approvals TO <PAPEL_APP>;
 -- Execuções do catálogo: append-only (sem UPDATE/DELETE).
 GRANT SELECT, INSERT ON agent_executions TO <PAPEL_APP>;
+-- Radar de prioridades (0020): histórico append-only (sem UPDATE/DELETE).
+GRANT SELECT, INSERT ON radar_reports TO <PAPEL_APP>;
 -- Sem DELETE nas demais: projeto e repositório são desativados (active=0), nunca apagados.
 -- Sem UPDATE/DELETE/TRUNCATE em audit_log e sem ser dono de nenhuma tabela.

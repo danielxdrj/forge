@@ -25,6 +25,8 @@ def register_investigation_routes(
             "provider_missing": 503,
             "claude_cli_missing": 503,
             "cursor_cli_missing": 503,
+            "gh_missing": 503,
+            "issue_unavailable": 502,
         }.get(exc.code, 400)
         return json_error(status, exc.code, hint=exc.hint or None)
 
@@ -47,6 +49,19 @@ def register_investigation_routes(
             return principal
         rows = list_active_allowed_repos(request.app.state.repo)
         return {"repos": [f"{r.owner}/{r.repo_name}" for r in rows]}
+
+    @app.get("/api/investigations/issue-preview")
+    def api_issue_request_preview(request: Request, issue: str = ""):
+        """Prévia do pedido automático: o que da issue entra no prompt. Somente leitura."""
+        principal = need_editor_or_owner(request)
+        if isinstance(principal, JSONResponse):
+            return principal
+        try:
+            return investigations.issue_request_preview(principal, issue)
+        except InvestigationRuleError as exc:
+            return _rule(exc)
+        except AuthorizationError:
+            return json_error(403, "forbidden")
 
     @app.post("/api/investigations/run")
     async def api_run_investigation(request: Request):
