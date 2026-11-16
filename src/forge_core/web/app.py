@@ -551,6 +551,7 @@ def create_app(
         json_error=_json_error,
         need_editor_or_owner=_need_editor_or_owner,
         need_owner=_need_owner,
+        on_change=radar.sync_agent,
     )
     register_radar_routes(
         app,

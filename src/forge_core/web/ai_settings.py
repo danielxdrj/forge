@@ -10,7 +10,9 @@ from ..ai_settings import AiSettings, SettingsError
 from ..errors import AuthorizationError
 
 
-def register_ai_settings_routes(app: FastAPI, settings: AiSettings, *, json_error, need_editor_or_owner, need_owner):
+def register_ai_settings_routes(
+    app: FastAPI, settings: AiSettings, *, json_error, need_editor_or_owner, need_owner, on_change=None,
+):
     @app.get("/api/ai-settings")
     def api_ai_settings(request: Request):
         principal = need_editor_or_owner(request)
@@ -28,7 +30,10 @@ def register_ai_settings_routes(app: FastAPI, settings: AiSettings, *, json_erro
             return principal
         try:
             body = await request.json()
-            return settings.update(principal, body)
+            view = settings.update(principal, body)
+            if on_change is not None:
+                on_change()
+            return view
         except SettingsError as exc:
             return json_error(400, exc.code, hint=exc.hint or None)
         except AuthorizationError:

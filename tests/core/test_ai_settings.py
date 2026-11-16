@@ -36,7 +36,7 @@ def test_defaults_and_view(make_repo):
     ai = _ai(repo)
     ana = actor(repo, "ana")
     view = ai.view(ana)
-    assert view["radar"] == {"auto": True, "time": "11:00", "engine": "cli", "model": ""}
+    assert view["radar"] == {"auto": False, "time": "13:00", "engine": "cli", "model": ""}
     assert view["investigation"] == {"engine": "cli", "model": ""}
     assert view["api"] == {"configured": False}
     assert view["can_edit"] is False

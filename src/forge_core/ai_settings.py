@@ -34,8 +34,8 @@ MODEL_IDS = frozenset(m["id"] for m in MODELS)
 _HHMM = re.compile(r"^([01][0-9]|2[0-3]):[0-5][0-9]$")
 
 DEFAULTS = {
-    "radar.auto": "true",
-    "radar.time": "11:00",
+    "radar.auto": "false",
+    "radar.time": "13:00",
     "radar.engine": "cli",
     "radar.model": "",
     "investigation.engine": "cli",

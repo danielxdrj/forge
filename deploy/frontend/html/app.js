@@ -2614,7 +2614,7 @@
     const timeInput = el("input", {
       id: "ai-radar-time",
       type: "time",
-      value: form.radar.time || "11:00",
+      value: form.radar.time || "13:00",
       disabled: (locked || !form.radar.auto) ? "disabled" : null,
       onChange: function (ev) { form.radar.time = ev.target.value; },
     });
@@ -2899,7 +2899,7 @@
     const report = state.radar.report;
 
     const scheduleText = ov.auto
-      ? "Automático todo dia às " + (ov.time || "11:00") + (ov.next_run ? " · próxima " + fmtDateTime(ov.next_run) : "")
+      ? "Automático todo dia às " + (ov.time || "13:00") + (ov.next_run ? " · próxima " + fmtDateTime(ov.next_run) : "")
       : "Automático desligado: rode com \"Analisar agora\".";
     const toolbar = el("div", { class: "radar-toolbar" }, [el("p", { class: "radar-schedule" }, [
       el("span", { class: "status " + (ov.auto ? "status-ok" : "status-muted"), text: scheduleText }),

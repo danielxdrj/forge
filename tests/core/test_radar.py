@@ -234,6 +234,20 @@ def test_run_saves_report_summary_and_agent_execution(make_repo, tmp_path):
     assert len(repo.fetch("SELECT id FROM agents WHERE name = ?", (AGENT_NAME,))) == 1
 
 
+def test_agent_trigger_follows_settings(make_repo, tmp_path):
+    repo = make_repo()
+    svc = _svc(repo, tmp_path)
+    svc.run_now("manual", "tester")
+    trigger = repo.fetch("SELECT trigger, engine FROM agents WHERE name = ?", (AGENT_NAME,))[0]
+    assert trigger == ("manual (agenda automática desligada)", "Claude Code CLI · modelo padrão")
+    AiSettings(repo, AuthStore(repo), env={}).update(
+        actor(repo, "dona"), {"radar": {"auto": True, "time": "13:00", "model": "claude-haiku-5-5"}},
+    )
+    svc.sync_agent()
+    trigger = repo.fetch("SELECT trigger, engine FROM agents WHERE name = ?", (AGENT_NAME,))[0]
+    assert trigger == ("automático, todo dia às 13:00 (e manual)", "Claude Code CLI · Claude Haiku 5.5")
+
+
 def test_unchanged_backlog_reuses_summary_without_calling_engine(make_repo, tmp_path):
     repo = make_repo()
     provider = FakeSummary()
@@ -280,10 +294,14 @@ def test_overview_history_and_roles(make_repo, tmp_path):
     ana = actor(repo, "ana")
     empty = svc.overview(ana)
     assert empty["latest"] is None
-    assert empty["auto"] is True
-    assert empty["time"] == "11:00"
-    assert empty["schedule"] == ["11:00"]
-    assert empty["next_run"].startswith("2026-11-17T11:00")
+    assert empty["auto"] is False
+    assert empty["time"] == "13:00"
+    assert empty["schedule"] == []
+    assert empty["next_run"] is None
+    AiSettings(repo, AuthStore(repo), env={}).update(actor(repo, "dona"), {"radar": {"auto": True}})
+    on = svc.overview(ana)
+    assert on["schedule"] == ["13:00"]
+    assert on["next_run"].startswith("2026-11-16T13:00")
     first = svc.run_now("manual", ana.identity_id)
     assert svc.overview(ana)["latest"]["id"] == first["id"]
     history = svc.history(ana)
@@ -323,8 +341,11 @@ def test_scheduler_fires_once_a_day_and_respects_toggle(make_repo, tmp_path):
     svc = _svc(repo, tmp_path, gh=gh)
     dona = actor(repo, "dona")
     ai = AiSettings(repo, AuthStore(repo), env={})
-    clock = {"now": datetime(2026, 11, 16, 13, 59, tzinfo=UTC)}
+    clock = {"now": datetime(2026, 11, 16, 16, 0, 30, tzinfo=UTC)}
     sched = RadarScheduler(svc, _settings(tmp_path), clock=lambda: clock["now"])
+    assert sched.tick() is False  # desligado por padrão: não roda nem no horário
+    ai.update(dona, {"radar": {"auto": True, "time": "11:00"}})
+    clock["now"] = datetime(2026, 11, 16, 13, 59, tzinfo=UTC)
     assert sched.tick() is False
     clock["now"] = datetime(2026, 11, 16, 14, 0, 30, tzinfo=UTC)
     assert sched.tick() is True
@@ -373,7 +394,7 @@ def test_radar_routes(tmp_path):
     csrf = _login(client)
     overview = client.get("/api/radar", headers=HOST)
     assert overview.status_code == 200
-    assert overview.json()["schedule"] == ["11:00"]
+    assert overview.json()["schedule"] == []
     report = app.state.radar.run_now("manual", "tester")
     listed = client.get("/api/radar/reports", headers=HOST).json()["reports"]
     assert listed[0]["id"] == report["id"]

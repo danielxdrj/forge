@@ -121,7 +121,7 @@ class RadarService:
     def schedule(self) -> tuple[bool, str]:
         """(agenda ligada, horário HH:MM) lidos das configurações do painel."""
         if self._ai is None:
-            return False, "11:00"
+            return False, "13:00"
         return self._ai.radar_schedule()
 
     def history(self, principal: Principal) -> list[dict]:
@@ -321,14 +321,49 @@ class RadarService:
         )
         return [_report_from_row(r) for r in rows]
 
+    def trigger_text(self) -> str:
+        """Gatilho exibido na aba Agentes, sempre a partir da agenda configurada."""
+        auto, time = self.schedule()
+        if auto:
+            return f"automático, todo dia às {time} (e manual)"
+        return "manual (agenda automática desligada)"
+
+    def engine_text(self) -> str:
+        """Motor e modelo do resumo, como configurados na tela."""
+        if self._ai is None:
+            return getattr(self._provider, "name", "") or os.environ.get("FORGE_ENGINE", "") or ""
+        values = self._ai.values()
+        engine = "API da Anthropic" if values.get("radar.engine") == "api" else "Claude Code CLI"
+        model = values.get("radar.model") or ("Claude Opus 5.5" if values.get("radar.engine") == "api" else "modelo padrão")
+        labels = {"claude-opus-5-5": "Claude Opus 5.5", "claude-sonnet-5-5": "Claude Sonnet 5.5",
+                  "claude-haiku-5-5": "Claude Haiku 5.5"}
+        return f"{engine} · {labels.get(model, model)}"
+
+    def sync_agent(self) -> None:
+        """Atualiza gatilho e motor do agente na aba Agentes quando a configuração muda."""
+        rows = self._repo.fetch("SELECT id, trigger, engine FROM agents WHERE name = ?", (AGENT_NAME,))
+        if not rows:
+            return
+        agent_id, trigger, engine = rows[0]
+        new_trigger, new_engine = self.trigger_text(), self.engine_text()
+        if (trigger, engine) == (new_trigger, new_engine):
+            return
+        with self._repo.transaction() as tx:
+            tx.execute(
+                "UPDATE agents SET trigger = ?, engine = ?, updated_at = ? WHERE id = ?",
+                (new_trigger, new_engine, self._clock().isoformat(), agent_id),
+            )
+            tx.audit("sistema:radar", "agent.sync", f"agent:{agent_id}", "ok: gatilho e motor atualizados")
+
     def _ensure_agent(self) -> str:
         rows = self._repo.fetch("SELECT id FROM agents WHERE name = ?", (AGENT_NAME,))
         if rows:
+            self.sync_agent()
             return rows[0][0]
         agent_id = str(uuid.uuid4())
         ts = self._clock().isoformat()
-        trigger = "agenda diária (configurável) e manual"
-        engine = getattr(self._provider, "name", "") or os.environ.get("FORGE_ENGINE", "") or ""
+        trigger = self.trigger_text()
+        engine = self.engine_text()
         with self._repo.transaction() as tx:
             tx.execute(
                 "INSERT INTO agents (id, name, description, scope, status, trigger, engine, "

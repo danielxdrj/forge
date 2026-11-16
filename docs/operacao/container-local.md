@@ -133,7 +133,7 @@ A API lista e lê `.md` só dentro da allowlist: `realpath`, sem seguir symlink 
 
 **Pedido automático.** Na Investigação, o pedido pode ser escrito ou vir de uma issue. Em "Usar uma issue", `POST /api/investigations/run` recebe `mode: "issue"` e `issue_key`. O backend lê título, corpo, labels e os 10 comentários mais recentes com `gh issue view` (somente leitura, só repositórios da allowlist), passa tudo pela redação de segredos, junta um pedido padrão de investigação e o complemento opcional de quem pediu. O repositório da issue entra na investigação automaticamente. `GET /api/investigations/issue-preview?issue=<repo>#<n>` devolve a prévia que a tela mostra antes de rodar. Erros: `issue_required`, `repo_not_allowed`, `issue_unavailable` (502), `gh_missing` (503).
 
-**Radar de prioridades.** O botão "Radar de prioridades" abre um painel lateral com o último relatório do board Backlog de TI (projeto 13). O backend roda sozinho **uma vez por dia**, no horário escolhido na tela **Investigação → Motor e agenda** (padrão 11:00, fuso `FORGE_RADAR_TIMEZONE`). A agenda pode ser desligada ali; "Analisar agora" continua disponível. Se o servidor subir até 10 minutos depois do horário, ainda roda naquele dia. Editor ou owner pode disparar `POST /api/radar/run` (202; 409 se já houver uma rodada). Cada rodada:
+**Radar de prioridades.** O botão "Radar de prioridades" abre um painel lateral com o último relatório do board Backlog de TI (projeto 13). O backend roda sozinho **uma vez por dia**, no horário escolhido na tela **Investigação → Motor e agenda** (padrão 13:00, fuso `FORGE_RADAR_TIMEZONE`). **A agenda vem desligada: o radar só roda sozinho depois que o owner ativa ali.** "Analisar agora" continua disponível. Se o servidor subir até 10 minutos depois do horário, ainda roda naquele dia. Editor ou owner pode disparar `POST /api/radar/run` (202; 409 se já houver uma rodada). Cada rodada:
 
 1. lê os itens abertos do board com `gh api graphql` (somente leitura, sem mutação);
 2. pontua por regra fixa em `src/forge_core/radar/scoring.py`: prioridade, segurança, tempo parado (`FORGE_RADAR_STALE_DAYS`, padrão 14), sprint e data alvo vencidas, reaberta, sem responsável;
@@ -147,7 +147,7 @@ O prompt do resumo leva só chave, título, campos do board e motivos, com segre
 
 Na Investigação, **Motor e agenda** abre as configurações guardadas em `app_settings` (migração 0022). Só o owner altera; editor consulta. `GET/POST /api/ai-settings`.
 
-- **Radar:** agenda diária liga/desliga e horário; motor e modelo do resumo.
+- **Radar:** agenda diária liga/desliga (desligada por padrão) e horário (padrão 13:00); motor e modelo do resumo.
 - **Investigação:** motor e modelo.
 - **Motores:** `Claude Code CLI` (assinatura; padrão) ou `API da Anthropic` (SDK oficial `anthropic`, cobrança por token na conta da API). Modelos: Claude Opus 5.5, Sonnet 5.5 e Haiku 5.5.
 
