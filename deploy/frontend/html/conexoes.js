@@ -482,45 +482,72 @@ state.notice = form.id ? "Conexão atualizada. O segredo não é exibido." : "Co
     }
   }
 
-  function pageHeader(eyebrow, title, subtitle) {
+  function pageHeader(title, subtitle) {
     return el("header", { class: "page-header" }, [
-      el("p", { class: "page-eyebrow", text: eyebrow }),
-      el("h2", { class: "page-title", text: title }),
-      subtitle ? el("p", { class: "page-subtitle", text: subtitle }) : null,
+      el("div", { class: "page-header-text" }, [
+        el("h2", { class: "page-title", text: title }),
+        subtitle ? el("p", { class: "page-subtitle", text: subtitle }) : null,
+      ]),
     ]);
+  }
+
+  function cardHead(title, extra) {
+    return el("div", { class: "card-head" }, [el("h2", { text: title })].concat(extra || []));
+  }
+
+  function actionsRow(children) {
+    return el("div", { class: "actions" }, children);
+  }
+
+  function lockIcon() {
+    const ns = "http://www.w3.org/2000/svg";
+    const svg = document.createElementNS(ns, "svg");
+    svg.setAttribute("viewBox", "0 0 16 16");
+    svg.setAttribute("width", "14");
+    svg.setAttribute("height", "14");
+    svg.setAttribute("aria-hidden", "true");
+    const path = document.createElementNS(ns, "path");
+    path.setAttribute("fill", "none");
+    path.setAttribute("stroke", "currentColor");
+    path.setAttribute("stroke-width", "1.5");
+    path.setAttribute("stroke-linecap", "round");
+    path.setAttribute("stroke-linejoin", "round");
+    path.setAttribute("d", "M4 7.2h8v6H4zM5.6 7.2V5.4a2.4 2.4 0 014.8 0v1.8");
+    svg.appendChild(path);
+    return svg;
+  }
+
+  function showToast(text) {
+    let region = document.getElementById("toast-region");
+    if (!region) {
+      region = el("div", { id: "toast-region", class: "toast-region", role: "status", "aria-live": "polite" });
+      document.body.appendChild(region);
+    }
+    const toast = el("div", { class: "toast", text: text });
+    region.appendChild(toast);
+    window.setTimeout(function () {
+      toast.classList.add("toast-out");
+      window.setTimeout(function () { toast.remove(); }, 200);
+    }, 4500);
   }
 
   function readonlySeal() {
-    return el("p", { class: "banner banner-info seal-readonly" }, [
-      el("span", { class: "pill pill-ok", text: "SOMENTE LEITURA" }),
+    return el("p", { class: "seal-readonly" }, [
+      lockIcon(),
+      el("strong", { text: "Somente leitura." }),
       el("span", { text: "Agentes não alteram dados nem recebem suas credenciais de escrita." }),
     ]);
-  }
-
-  function rolePill(role) {
-    return el("span", { class: "pill pill-role pill-role-" + role, text: role });
-  }
-
-  function typePill(type) {
-    const map = {
-      postgres: "core",
-      mysql: "core",
-      ftp: "ops",
-      sftp: "ops",
-      portainer: "ops",
-    };
-    return el("span", { class: "pill pill-" + (map[type] || "muted"), text: TYPE_LABEL[type] || type });
   }
 
   function renderSession(target) {
     target.replaceChildren();
     if (state.who) {
-      target.appendChild(el("span", { class: "session-login", text: state.who.login }));
-      const roles = (state.who.roles || []).map(rolePill);
-      if (!roles.length) {
-        roles.push(el("span", { class: "pill pill-muted", text: "nenhum" }));
-      }
-      target.appendChild(el("span", { class: "session-roles" }, roles));
+      const roles = (state.who.roles || []).join(" · ") || "sem papel";
+      target.appendChild(el("div", { class: "session-who" }, [
+        el("span", { class: "session-login", text: state.who.login }),
+        el("span", { class: "session-roles", text: roles }),
+      ]));
+      target.appendChild(el("span", { class: "avatar", "aria-hidden": "true", text: String(state.who.login || "?").slice(0, 2) }));
       target.appendChild(el("button", { type: "button", class: "btn-sair", text: "Sair", onClick: function () { logout(); } }));
       return;
     }
@@ -528,18 +555,18 @@ state.notice = form.id ? "Conexão atualizada. O segredo não é exibido." : "Co
   }
 
   function renderLogin(root) {
-    const box = el("section", { class: "card card-core" }, [
-      el("div", { class: "card-head" }, [
-        el("span", { class: "icon-box icon-core", text: "F" }),
-        el("h2", { text: "Entrar" }),
-        el("span", { class: "pill pill-existing", text: "INTEGRAÇÃO EXISTENTE" }),
-      ]),
+    const box = el("section", { class: "card login-panel" }, [
+      el("h2", { text: "Entrar no Forge" }),
     ]);
     if (state.pending && state.pending.user_code) {
-      box.appendChild(el("p", { text: "Abra o GitHub e informe o código:" }));
+      box.appendChild(el("p", { text: "Abra o GitHub e informe o código para autorizar este painel." }));
       box.appendChild(el("p", { class: "code login-code", text: state.pending.user_code }));
-      box.appendChild(el("p", { class: "muted", text: "Aguardando autorização no GitHub…" }));
+      box.appendChild(el("p", { class: "login-wait muted" }, [
+        el("span", { class: "spinner", "aria-hidden": "true" }),
+        el("span", { text: "Aguardando autorização no GitHub…" }),
+      ]));
     } else {
+      box.appendChild(el("p", { text: "Use sua conta do GitHub. O acesso depende dos papéis concedidos a você neste painel." }));
       box.appendChild(el("button", {
         type: "button",
         class: "primary",
@@ -664,12 +691,9 @@ state.notice = form.id ? "Conexão atualizada. O segredo não é exibido." : "Co
   }
 
   function renderForm(root) {
-    const form = el("section", { class: "card card-ops" }, [
-      el("div", { class: "card-head" }, [
-        el("span", { class: "icon-box icon-ops", text: "D" }),
-        el("h2", { text: state.form.id ? "Editar conexão" : "Nova conexão" }),
-        el("span", { class: "pill pill-ops", text: "OPERAÇÕES" }),
-      ]),
+    const editing = !!state.form.id;
+    const form = el("section", { class: "card", id: "conn-form" }, [
+      cardHead(editing ? "Editar conexão" : "Nova conexão"),
     ]);
     if (!isOwner()) {
       form.appendChild(el("p", { class: "muted", text: "Só o papel owner cria, edita ou apaga conexões." }));
@@ -682,16 +706,21 @@ state.notice = form.id ? "Conexão atualizada. O segredo não é exibido." : "Co
       if (fieldErrors[id]) {
         next.class = ((next.class || "") + " field-invalid").trim();
         next["aria-invalid"] = "true";
+        next["aria-describedby"] = id + "-error";
       }
       return next;
     }
     function hintFor(id) {
       return fieldErrors[id] ? el("p", { class: "field-hint field-error", id: id + "-error", text: fieldErrors[id] }) : null;
     }
-    form.appendChild(el("label", { text: "Nome", for: "conn-name" }));
-    form.appendChild(el("input", mark("conn-name", { id: "conn-name", type: "text", value: state.form.name })));
-    form.appendChild(hintFor("conn-name"));
-    form.appendChild(el("label", { text: "Tipo", for: "conn-type" }));
+    function field(labelText, id, control, extra) {
+      return el("div", { class: "field" }, [
+        el("label", { text: labelText, for: id }),
+        control,
+        hintFor(id),
+      ].concat(extra || []));
+    }
+
     const typeSel = el("select", { id: "conn-type", onChange: function () {
       state.form = readForm();
       if (!state.form.id) {
@@ -707,20 +736,55 @@ state.notice = form.id ? "Conexão atualizada. O segredo não é exibido." : "Co
       }
       typeSel.appendChild(opt);
     });
-    form.appendChild(typeSel);
-    form.appendChild(el("label", { text: "Usuário", for: "conn-user" }));
-    form.appendChild(el("input", mark("conn-user", { id: "conn-user", type: "text", value: state.form.user, autocomplete: "off" })));
-    form.appendChild(hintFor("conn-user"));
-    form.appendChild(el("p", { class: "muted", text: "Hosts (rótulo + endereço). O teste tenta o preferido e depois a ordem." }));
-    form.appendChild(el("p", { class: "field-hint", text: hostHint(state.form.type) }));
-    if (fieldErrors["conn-hosts"]) {
-      form.appendChild(el("p", { class: "field-hint field-error", text: fieldErrors["conn-hosts"] }));
+
+    form.appendChild(el("div", { class: "field-grid" }, [
+      field("Nome", "conn-name", el("input", mark("conn-name", { id: "conn-name", type: "text", value: state.form.name }))),
+      field("Tipo", "conn-type", typeSel),
+      field("Usuário", "conn-user", el("input", mark("conn-user", { id: "conn-user", type: "text", value: state.form.user, autocomplete: "off" }))),
+      field("Porta", "conn-port", el("input", mark("conn-port", { id: "conn-port", type: "text", inputmode: "numeric", value: state.form.port }))),
+    ]));
+
+    if (state.form.type === "mysql" || state.form.type === "postgres") {
+      const dbWarn = el("p", {
+        class: "field-hint field-warn",
+        id: "conn-database-warn",
+        text: "Este valor parece um IP ou uma URL. Mova o endereço para o campo Host e, em Banco, use só o nome do schema (pode ficar em branco).",
+      });
+      const shouldWarn = !!(state.formWarning || looksLikeHostAddress(state.form.database));
+      if (!shouldWarn) {
+        dbWarn.hidden = true;
+      }
+      form.appendChild(field("Banco (opcional)", "conn-database", el("input", mark("conn-database", {
+        id: "conn-database",
+        type: "text",
+        value: state.form.database,
+        placeholder: "nome do schema",
+        onInput: function (ev) {
+          const hint = document.getElementById("conn-database-warn");
+          if (hint) {
+            hint.hidden = !looksLikeHostAddress(ev.target.value);
+          }
+        },
+      })), [
+        el("p", { class: "field-hint", text: "Nome do schema ou do banco. Não coloque IP ou URL aqui." }),
+        dbWarn,
+      ]));
     }
+    if (state.form.type === "ftp" || state.form.type === "sftp") {
+      form.appendChild(field("Caminho (opcional)", "conn-path", el("input", { id: "conn-path", type: "text", value: state.form.path, placeholder: "caminho remoto" })));
+    }
+
+    const hostsSection = el("div", { class: "form-section" }, [
+      el("h3", { text: "Hosts" }),
+      el("p", { class: "field-hint", text: hostHint(state.form.type) + " O teste tenta o host preferido e depois segue a ordem." }),
+      fieldErrors["conn-hosts"] ? el("p", { class: "field-hint field-error", text: fieldErrors["conn-hosts"] }) : null,
+    ]);
     const hostBox = el("div", { class: "hosts", id: "conn-hosts" });
     state.form.hosts.forEach(function (h, idx) {
       const labelId = "conn-host-label-" + idx;
       const hostId = "conn-host-" + idx;
-      const row = el("div", { class: "host-row" }, [
+      const orderId = "conn-host-order-" + idx;
+      hostBox.appendChild(el("div", { class: "host-row" }, [
         el("div", null, [
           el("label", { text: "Rótulo", for: labelId }),
           el("input", mark(labelId, { id: labelId, type: "text", "data-host": "label", value: h.label })),
@@ -738,51 +802,20 @@ state.notice = form.id ? "Conexão atualizada. O segredo não é exibido." : "Co
           hintFor(hostId),
         ]),
         el("div", null, [
-          el("label", { text: "Ordem" }),
-          el("input", { type: "text", "data-host": "order", value: String(h.order) }),
+          el("label", { text: "Ordem", for: orderId }),
+          el("input", { id: orderId, type: "text", inputmode: "numeric", "data-host": "order", value: String(h.order) }),
         ]),
-        el("button", { type: "button", text: "Remover", onClick: function () { removeHostRow(idx); } }),
-      ]);
-      hostBox.appendChild(row);
+        el("button", {
+          type: "button",
+          class: "quiet",
+          text: "Remover",
+          disabled: state.form.hosts.length <= 1 ? "disabled" : null,
+          onClick: function () { removeHostRow(idx); },
+        }),
+      ]));
     });
-    form.appendChild(hostBox);
-    form.appendChild(el("button", { type: "button", text: "Adicionar host", onClick: addHostRow }));
-    const portWrap = el("div", { class: "conn-port-row" });
-    portWrap.appendChild(el("label", { text: "Porta", for: "conn-port" }));
-    portWrap.appendChild(el("input", mark("conn-port", { id: "conn-port", type: "text", value: state.form.port })));
-    portWrap.appendChild(hintFor("conn-port"));
-    form.appendChild(portWrap);
-    if (state.form.type === "mysql" || state.form.type === "postgres") {
-      form.appendChild(el("label", { text: "Banco (opcional)", for: "conn-database" }));
-      form.appendChild(el("input", mark("conn-database", {
-        id: "conn-database",
-        type: "text",
-        value: state.form.database,
-        placeholder: "nome do schema (opcional)",
-        onInput: function (ev) {
-          const hint = document.getElementById("conn-database-warn");
-          if (hint) {
-            hint.hidden = !looksLikeHostAddress(ev.target.value);
-          }
-        },
-      })));
-      form.appendChild(el("p", { class: "field-hint", text: "Nome do schema ou do banco. Não coloque IP ou URL aqui." }));
-      const dbWarn = el("p", {
-        class: "field-hint field-warn",
-        id: "conn-database-warn",
-        text: "Este valor parece um IP ou uma URL. Mova o endereço para o campo Host e, em Banco, use só o nome do schema (pode ficar em branco).",
-      });
-      const shouldWarn = !!(state.formWarning || looksLikeHostAddress(state.form.database));
-      if (!shouldWarn) {
-        dbWarn.hidden = true;
-      }
-      form.appendChild(dbWarn);
-    }
-    if (state.form.type === "ftp" || state.form.type === "sftp") {
-      form.appendChild(el("label", { text: "Caminho", for: "conn-path" }));
-      form.appendChild(el("input", { id: "conn-path", type: "text", value: state.form.path, placeholder: "caminho remoto (opcional)" }));
-    }
-    form.appendChild(el("label", { text: "Host preferido", for: "conn-preferred" }));
+    hostsSection.appendChild(hostBox);
+    hostsSection.appendChild(actionsRow([el("button", { type: "button", class: "sm", text: "Adicionar host", onClick: addHostRow })]));
     const pref = el("select", { id: "conn-preferred" });
     state.form.hosts.forEach(function (h, idx) {
       const opt = el("option", { value: String(idx), text: (h.label || "host") + " — " + (h.host || "(vazio)") });
@@ -791,26 +824,32 @@ state.notice = form.id ? "Conexão atualizada. O segredo não é exibido." : "Co
       }
       pref.appendChild(opt);
     });
-    form.appendChild(pref);
-    form.appendChild(el("label", { text: state.form.id ? "Substituir segredo (deixe em branco para manter)" : "Segredo (senha ou token Portainer)", for: "conn-secret" }));
-    form.appendChild(el("input", {
-      id: "conn-secret",
-      type: "password",
-      value: "",
-      autocomplete: "new-password",
-      placeholder: state.form.id ? "não é exibido; preencha só para trocar" : "",
-    }));
-    form.appendChild(el("button", {
-      type: "button",
-      class: "primary",
-      text: state.busy ? "Aguarde…" : "Salvar",
-      disabled: state.busy ? "disabled" : null,
-      onClick: saveConnection,
-    }));
-    if (state.form.id) {
-      form.appendChild(el("button", {
+    hostsSection.appendChild(field("Host preferido", "conn-preferred", pref));
+    form.appendChild(hostsSection);
+
+    form.appendChild(el("div", { class: "form-section" }, [
+      el("h3", { text: "Credencial" }),
+      el("p", { class: "field-hint", text: "Guardado cifrado no servidor e nunca exibido de volta." }),
+      field(editing ? "Substituir segredo (deixe em branco para manter)" : "Segredo (senha ou token Portainer)", "conn-secret", el("input", {
+        id: "conn-secret",
+        type: "password",
+        value: "",
+        autocomplete: "new-password",
+        placeholder: editing ? "preencha só para trocar" : "",
+      })),
+    ]));
+
+    form.appendChild(actionsRow([
+      el("button", {
         type: "button",
-        text: "Nova conexão",
+        class: "primary",
+        text: state.busy ? "Aguarde…" : (editing ? "Salvar alterações" : "Salvar conexão"),
+        disabled: state.busy ? "disabled" : null,
+        onClick: saveConnection,
+      }),
+      editing ? el("button", {
+        type: "button",
+        text: "Cancelar edição",
         onClick: function () {
           state.form = emptyForm();
           state.editing = null;
@@ -819,21 +858,20 @@ state.notice = form.id ? "Conexão atualizada. O segredo não é exibido." : "Co
           state.formWarning = "";
           render();
         },
-      }));
-    }
-        root.appendChild(form);
+      }) : null,
+    ]));
+    root.appendChild(form);
   }
 
   function renderList(root) {
-    const box = el("section", { class: "card card-ops" }, [
-      el("div", { class: "card-head" }, [
-        el("span", { class: "icon-box icon-ops", text: "D" }),
-        el("h2", { text: "Conexões" }),
-        el("span", { class: "pill pill-existing", text: "INTEGRAÇÃO EXISTENTE" }),
-      ]),
+    const box = el("section", { class: "card" }, [
+      cardHead("Conexões", [el("span", { class: "count", text: String(state.connections.length) })]),
     ]);
     if (!state.connections.length) {
-      box.appendChild(el("p", { class: "muted", text: "Nenhuma conexão cadastrada." }));
+      box.appendChild(el("div", { class: "empty" }, [
+        el("strong", { text: "Nenhuma conexão cadastrada" }),
+        el("span", { text: isOwner() ? "Cadastre a primeira no formulário abaixo." : "Peça a um owner para cadastrar." }),
+      ]));
       root.appendChild(box);
       return;
     }
@@ -844,7 +882,7 @@ state.notice = form.id ? "Conexão atualizada. O segredo não é exibido." : "Co
       el("th", { text: "Usuário" }),
       el("th", { text: "Hosts" }),
       el("th", { text: "Segredo" }),
-      el("th", { text: "" }),
+      el("th", { text: "", "aria-label": "Ações" }),
     ])]));
     const tbody = el("tbody");
     state.connections.forEach(function (conn) {
@@ -852,35 +890,48 @@ state.notice = form.id ? "Conexão atualizada. O segredo não é exibido." : "Co
       const actions = [
         el("button", {
           type: "button",
+          class: "sm",
           text: "Testar conexão",
           disabled: state.busy ? "disabled" : null,
           onClick: function () { testConnection(conn.id); },
         }),
       ];
       if (isOwner()) {
-        actions.push(el("button", { type: "button", text: "Editar", onClick: function () { fillForm(conn); render(); } }));
         actions.push(el("button", {
           type: "button",
-          class: "danger",
+          class: "sm quiet",
+          text: "Editar",
+          onClick: function () {
+            fillForm(conn);
+            render();
+            const target = document.getElementById("conn-form");
+            if (target) {
+              target.scrollIntoView({ behavior: "smooth", block: "start" });
+            }
+          },
+        }));
+        actions.push(el("button", {
+          type: "button",
+          class: "sm quiet danger",
           text: "Apagar",
           disabled: state.busy ? "disabled" : null,
           onClick: function () { deleteConnection(conn.id); },
         }));
       }
       tbody.appendChild(el("tr", null, [
-        el("td", { text: conn.name || "" }),
-        el("td", null, [typePill(conn.type)]),
+        el("td", { class: "cell-strong", text: conn.name || "" }),
+        el("td", { text: TYPE_LABEL[conn.type] || conn.type || "" }),
         el("td", { text: conn.user || "" }),
-        el("td", { text: hosts }),
+        el("td", { class: "muted", text: hosts }),
         el("td", null, [el("span", {
-          class: "pill " + (conn.secret_set ? "pill-ok" : "pill-muted"),
-          text: conn.secret_set ? "•••• definido" : "ausente",
+          class: "status " + (conn.secret_set ? "status-ok" : "status-muted"),
+          text: conn.secret_set ? "Definido" : "Ausente",
         })]),
-        el("td", null, actions),
+        el("td", { class: "cell-actions" }, actions),
       ]));
     });
     table.appendChild(tbody);
-    box.appendChild(table);
+    box.appendChild(el("div", { class: "table-wrap" }, [table]));
     root.appendChild(box);
   }
 
@@ -888,16 +939,24 @@ state.notice = form.id ? "Conexão atualizada. O segredo não é exibido." : "Co
     if (!state.testResult) {
       return;
     }
+    const ok = !!state.testResult.ok;
     const box = el("section", { class: "card" }, [
-      el("div", { class: "card-head" }, [
-        el("h2", { text: "Resultado do teste" }),
-      ]),
+      cardHead("Resultado do teste", [el("span", { class: "status " + (ok ? "status-ok" : "status-danger"), text: ok ? "Sucesso" : "Falhou" })]),
     ]);
-    box.appendChild(el("p", { class: state.testResult.ok ? "ok" : "error", text: state.testResult.message || "" }));
-    (state.testResult.attempts || []).forEach(function (a) {
-      const line = a.label + " (" + a.host + "): " + (a.ok ? "ok" : (a.message || a.error || "falhou"));
-      box.appendChild(el("p", { class: a.ok ? "ok" : "error", text: line }));
-    });
+    if (state.testResult.message) {
+      box.appendChild(el("p", { text: state.testResult.message }));
+    }
+    const attempts = state.testResult.attempts || [];
+    if (attempts.length) {
+      const list = el("ul", { class: "test-attempts" });
+      attempts.forEach(function (a) {
+        list.appendChild(el("li", null, [
+          el("span", { class: "status " + (a.ok ? "status-ok" : "status-danger"), text: a.label + " (" + a.host + ")" }),
+          el("span", { class: "muted", text: " — " + (a.ok ? "ok" : (a.message || a.error || "falhou")) }),
+        ]));
+      });
+      box.appendChild(list);
+    }
     root.appendChild(box);
   }
 
@@ -918,23 +977,22 @@ state.notice = form.id ? "Conexão atualizada. O segredo não é exibido." : "Co
       app.appendChild(el("p", { class: "banner banner-error error", text: errorMessage(state.error, state.errorDetail) }));
     }
     if (state.notice) {
-      app.appendChild(el("p", { class: "banner banner-ok ok", text: state.notice }));
+      showToast(state.notice);
+      state.notice = "";
     }
     if (!state.who) {
       renderLogin(app);
       return;
     }
-    app.appendChild(pageHeader("04 — CONEXÕES", "Conexões", "Conectores somente leitura para banco de dados, FTP/SFTP e Portainer."));
+    app.appendChild(pageHeader("Conexões", "Conectores somente leitura para banco de dados, FTP/SFTP e Portainer, usados como contexto nas investigações."));
     app.appendChild(readonlySeal());
     if (!isReader()) {
-      app.appendChild(el("section", { class: "card" }, [
-        el("p", { class: "error", text: "Só owner ou editor acessam Conexões. Owner cria/edita/apaga; editor lista e testa." }),
-      ]));
+      app.appendChild(el("p", { class: "banner banner-warn", text: "Só owner ou editor acessam Conexões. Owner cria/edita/apaga; editor lista e testa." }));
       return;
     }
     if (!state.enabled) {
       app.appendChild(el("section", { class: "card" }, [
-        el("h2", { text: "Conexões desligada" }),
+        cardHead("Conexões desligada"),
         el("p", { class: "error", text: state.disabledMessage || errorMessage("vault_disabled") }),
       ]));
       return;
