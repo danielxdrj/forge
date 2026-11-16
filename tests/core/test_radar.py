@@ -179,7 +179,12 @@ class FakeSummary:
         self.prompts.append(prompt)
         if self.error:
             raise DraftError(self.error)
-        return ProviderResponse(text=self.text)
+        return ProviderResponse(
+            text=self.text,
+            usage={"input_tokens": 5, "output_tokens": 300, "cache_read_tokens": 9000, "cache_write_tokens": 2000,
+                   "turns": 1, "model": "claude-opus-5-5"},
+            cost=0.12,
+        )
 
 
 def _settings(tmp_path, **env):
@@ -216,8 +221,12 @@ def test_run_saves_report_summary_and_agent_execution(make_repo, tmp_path):
     assert "ghp_" not in provider.prompts[0]
     agents = repo.fetch("SELECT id, name, scope FROM agents WHERE name = ?", (AGENT_NAME,))
     assert len(agents) == 1
-    execs = repo.fetch("SELECT status, event FROM agent_executions WHERE agent_id = ?", (agents[0][0],))
-    assert execs == [("ok", "1 para concluir já, 1 paradas, 2 abertas")]
+    execs = repo.fetch(
+        "SELECT status, event, output_tokens, cache_read_tokens, model, cost_usd FROM agent_executions WHERE agent_id = ?",
+        (agents[0][0],),
+    )
+    assert execs == [("ok", "1 para concluir já, 1 paradas, 2 abertas", 300, 9000, "claude-opus-5-5", 0.12)]
+    assert report["usage"]["cost_usd"] == 0.12
     svc.run_now("schedule", "sistema:radar")
     assert len(repo.fetch("SELECT id FROM agents WHERE name = ?", (AGENT_NAME,))) == 1
 
@@ -238,8 +247,8 @@ def test_board_failure_records_error_report(make_repo, tmp_path):
     report = svc.run_now("schedule", "sistema:radar")
     assert report["status"] == "error"
     assert report["error"] == "project_scope"
-    execs = repo.fetch("SELECT status, event FROM agent_executions")
-    assert execs == [("error", "falha: project_scope")]
+    execs = repo.fetch("SELECT status, event, cost_usd FROM agent_executions")
+    assert execs == [("error", "falha: project_scope", None)]
 
 
 def test_overview_history_and_roles(make_repo, tmp_path):

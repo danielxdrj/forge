@@ -208,3 +208,57 @@ def test_seed_demo_agents_enabled_only_when_table_empty(make_repo):
     again = seed_demo_agents(repo, enabled=True)
     assert again == 0
     assert repo.fetch("SELECT COUNT(*) FROM agents")[0][0] == len(DEMO_AGENTS)
+
+
+def test_0021_usage_columns_exist(make_repo):
+    assert any(p.stem.startswith("0021_agent_execution_usage") for p in pending_migrations("sqlite"))
+    assert any(p.stem.startswith("0021_agent_execution_usage") for p in pending_migrations("postgres"))
+    repo = make_repo()
+    repo.fetch(
+        "SELECT input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, turns, model, cost_usd "
+        "FROM agent_executions LIMIT 0"
+    )
+
+
+def test_execution_usage_and_detail_totals(make_repo):
+    repo = make_repo()
+    svc = _svc(repo)
+    dona = actor(repo, "dona")
+    agent = svc.create(dona, {"name": "radar", "scope": "development"})
+    usage = {"input_tokens": 10, "output_tokens": 200, "cache_read_tokens": 1000, "cache_write_tokens": 500,
+             "turns": 1, "model": "claude-opus-5-5"}
+    first = svc.record_execution(agent.id, status="ok", event="a", duration_ms=1000, usage=usage, cost=0.25)
+    svc.record_execution(agent.id, status="ok", event="b", duration_ms=3000, usage=usage, cost=0.75)
+    svc.record_execution(agent.id, status="error", event="sem motor", duration_ms=500)
+    assert first.as_json()["usage"] == {
+        "input_tokens": 10, "output_tokens": 200, "cache_read_tokens": 1000, "cache_write_tokens": 500,
+        "total_tokens": 1710, "turns": 1, "model": "claude-opus-5-5", "cost_usd": 0.25,
+    }
+    detail = svc.get_agent(dona, agent.id)
+    stats = detail["stats"]
+    assert stats["executions"] == 3
+    assert stats["ok"] == 2 and stats["errors"] == 1
+    assert stats["success_rate"] == 67
+    assert stats["avg_duration_ms"] == 1500
+    assert stats["total_tokens"] == 3420
+    assert stats["output_tokens"] == 400
+    assert stats["cost_usd"] == pytest.approx(1.0)
+    assert stats["avg_cost_usd"] == pytest.approx(0.5)
+    assert stats["executions_with_usage"] == 2
+    assert stats["cost_usd_30d"] == pytest.approx(1.0)
+    no_usage = next(e for e in detail["executions"] if e["event"] == "sem motor")
+    assert no_usage["usage"]["total_tokens"] is None
+    assert no_usage["usage"]["cost_usd"] is None
+    assert detail["approvals"] == []
+
+
+def test_detail_without_executions_has_empty_stats(make_repo):
+    repo = make_repo()
+    svc = _svc(repo)
+    dona = actor(repo, "dona")
+    agent = svc.create(dona, {"name": "novo", "scope": "development"})
+    stats = svc.get_agent(dona, agent.id)["stats"]
+    assert stats["executions"] == 0
+    assert stats["success_rate"] is None
+    assert stats["cost_usd"] is None
+    assert stats["total_tokens"] is None

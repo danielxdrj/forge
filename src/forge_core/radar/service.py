@@ -22,6 +22,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 
+from ..agent_catalog.service import EXECUTION_COLUMNS, usage_columns
 from ..auth.store import AuthStore, Principal
 from ..config import Settings
 from ..draft.claude_cli import READONLY_DISALLOWED_TOOLS, ClaudeCliAdapter
@@ -196,15 +197,19 @@ class RadarService:
             return self._load(report_id)
         allowed = {f"{r.owner}/{r.repo_name}".lower() for r in list_active_allowed_repos(self._repo)}
         result = analyze(items, now=now, stale_days=self._settings.radar_stale_days, allowed_repos=allowed)
-        summary, summary_error = self._summary(result)
-        payload = {**result, "stale_days": self._settings.radar_stale_days, "summary_error": summary_error}
+        summary, summary_error, usage, cost = self._summary(result)
+        payload = {
+            **result, "stale_days": self._settings.radar_stale_days, "summary_error": summary_error,
+            "usage": {**usage, "cost_usd": cost} if (usage or cost is not None) else {},
+        }
         self._save(report_id, now, reason, "ok", "", summary, payload, actor)
         log.info("radar.run reason=%s result=ok open=%s now=%s", reason, result["stats"]["open"], result["stats"]["now"])
         return self._load(report_id)
 
-    def _summary(self, result: dict) -> tuple[str, str]:
+    def _summary(self, result: dict) -> tuple[str, str, dict, float | None]:
+        """Resumo do motor + uso da chamada (tokens e custo estimado), quando o motor informa."""
         if not result["now"] and not result["stale"]:
-            return "", ""
+            return "", "", {}, None
         lines = [SUMMARY_INSTRUCTION, "", "## Números", json.dumps(result["stats"], ensure_ascii=False)]
         for title, key in (("Concluir agora", "now"), ("Paradas", "stale"), ("Vale investigar", "investigate")):
             if not result[key]:
@@ -218,18 +223,19 @@ class RadarService:
                 )
         prompt = redact_secrets("\n".join(lines))
         if "FORGE_" in prompt or "GH_TOKEN" in prompt or "GITHUB_TOKEN" in prompt:
-            return "", "secret_in_prompt"
+            return "", "secret_in_prompt", {}, None
         try:
             response = self._adapter().complete(prompt)
         except DraftError as exc:
-            return "", exc.code
+            return "", exc.code, {}, None
         except Exception:  # noqa: BLE001 - o relatório sai sem resumo; a ordem não depende da IA
-            return "", "provider_error"
+            return "", "provider_error", {}, None
         text = redact_secrets(response.text or "").strip()
         encoded = text.encode("utf-8")
         if len(encoded) > MAX_SUMMARY_BYTES:
             text = encoded[:MAX_SUMMARY_BYTES].decode("utf-8", "ignore")
-        return text, ""
+        usage = dict(getattr(response, "usage", None) or {})
+        return text, "", usage, getattr(response, "cost", None)
 
     def _adapter(self):
         if self._provider is not None:
@@ -313,12 +319,14 @@ class RadarService:
             status = "error"
             event = f"falha: {report.get('error') or 'erro'}"
             log_text = ""
+        usage = dict(report.get("usage") or {})
+        cost = usage.pop("cost_usd", None)
         with self._repo.transaction() as tx:
             tx.execute(
-                "INSERT INTO agent_executions (id, agent_id, started_at, finished_at, status, event, duration_ms, log) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                f"INSERT INTO agent_executions ({EXECUTION_COLUMNS}) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (str(uuid.uuid4()), agent_id, started_at, self._clock().isoformat(), status, event,
-                 duration_ms, redact(log_text)),
+                 duration_ms, redact(log_text), *usage_columns(usage, cost)),
             )
 
 
@@ -343,6 +351,7 @@ def _report_from_row(row) -> dict:
         "now": payload.get("now") or [],
         "stale": payload.get("stale") or [],
         "investigate": payload.get("investigate") or [],
+        "usage": payload.get("usage") or {},
         "manual": reason == "manual",
         "created_by": created_by if reason == "manual" else "",
     }

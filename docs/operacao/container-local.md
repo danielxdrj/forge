@@ -143,6 +143,12 @@ A API lista e lê `.md` só dentro da allowlist: `realpath`, sem seguir symlink 
 
 O prompt do resumo leva só chave, título, campos do board e motivos, com segredos mascarados. Nada é escrito no GitHub. Leitura: `GET /api/radar`, `GET /api/radar/reports` (últimos 30) e `GET /api/radar/reports/{id}`. "Investigar" num item abre a investigação em modo issue; itens de repositórios fora da allowlist aparecem, mas sem esse botão.
 
+### Agentes: detalhe e consumo do motor
+
+Clicar num agente na aba Agentes abre o detalhe (`GET /api/agents/{id}`): situação, escopo, gatilho, motor, totais (execuções, taxa de sucesso, duração média, custo estimado total e dos últimos 30 dias), consumo de tokens por tipo e as 50 execuções mais recentes. Cada execução abre tokens de entrada, saída, cache lido e cache gravado, turnos, modelo e log.
+
+O uso vem do JSON do `claude -p --output-format json` (`usage`, `modelUsage`, `total_cost_usd`) e fica em `agent_executions` (migração 0021). O custo é a **estimativa a preço de lista da API** que o próprio Claude Code calcula (`costBasis: "list"`); com assinatura não é cobrança por chamada, serve para comparar consumo. Execuções antigas, sem chamada ao motor ou com motor que não informa uso ficam como "—". Hoje só o radar de prioridades registra execuções com uso.
+
 ### Volume `forge_graphs` e poll de release
 
 O backend instala `graphifyy==0.9.106` (comando `graphify`) e roda só `graphify extract <clone> --code-only` com `GRAPHIFY_BACKEND=none` (offline, sem chave, sem LLM). A saída (`graph.json` + metadados: tag, commit, data, nós/arestas) vai ao volume `forge_graphs` montado em `/graphs`.

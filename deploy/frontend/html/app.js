@@ -90,6 +90,9 @@
       selectedId: "",
       selected: null,
       executions: [],
+      detail: null,
+      detailModal: null,
+      openExec: {},
       form: null,
       busy: false,
       error: "",
@@ -2993,11 +2996,6 @@
     }
   }
 
-  async function selectAgent(id) {
-    await loadAgentDetail(id);
-    render();
-  }
-
   async function decideApproval(approvalId, decision) {
     state.agentes.busy = true;
     state.agentes.error = "";
@@ -3179,11 +3177,12 @@
         class: "agent-row" + (selected ? " selected" : ""),
         tabindex: "0",
         "aria-selected": selected ? "true" : "false",
-        onClick: function () { selectAgent(agent.id); },
+        title: "Ver detalhes do agente",
+        onClick: function () { openAgentDetail(agent.id); },
         onKeydown: function (ev) {
           if (ev.key === "Enter" || ev.key === " ") {
             ev.preventDefault();
-            selectAgent(agent.id);
+            openAgentDetail(agent.id);
           }
         },
       }, [
@@ -3203,6 +3202,254 @@
     root.appendChild(card);
   }
 
+  // --- Detalhe do agente (painel lateral) ---------------------------------------------------
+
+  function fmtInt(n) {
+    if (n === null || n === undefined) {
+      return "—";
+    }
+    return Number(n).toLocaleString("pt-BR");
+  }
+
+  function fmtTokensShort(n) {
+    if (n === null || n === undefined) {
+      return "—";
+    }
+    const v = Number(n);
+    if (v >= 1000000) {
+      return (v / 1000000).toLocaleString("pt-BR", { maximumFractionDigits: 1 }) + " mi";
+    }
+    if (v >= 1000) {
+      return (v / 1000).toLocaleString("pt-BR", { maximumFractionDigits: 1 }) + " mil";
+    }
+    return v.toLocaleString("pt-BR");
+  }
+
+  function fmtUsd(n) {
+    if (n === null || n === undefined) {
+      return "—";
+    }
+    const v = Number(n);
+    const digits = v > 0 && v < 1 ? 3 : 2;
+    return "US$ " + v.toLocaleString("pt-BR", { minimumFractionDigits: digits, maximumFractionDigits: digits });
+  }
+
+  function fmtDuration(ms) {
+    if (ms === null || ms === undefined) {
+      return "—";
+    }
+    const sec = Number(ms) / 1000;
+    if (sec < 60) {
+      return sec.toLocaleString("pt-BR", { maximumFractionDigits: 1 }) + " s";
+    }
+    const min = Math.floor(sec / 60);
+    return min + " min " + Math.round(sec - min * 60) + " s";
+  }
+
+  function scopeLabel(scope) {
+    return scope === "company_system" ? "Sistema da empresa" : "Desenvolvimento";
+  }
+
+  async function openAgentDetail(id) {
+    const res = await api("/api/agents/" + encodeURIComponent(id));
+    if (!res.ok) {
+      state.agentes.error = (res.data && res.data.error) || "error";
+      render();
+      return;
+    }
+    state.agentes.selectedId = id;
+    state.agentes.selected = res.data.agent;
+    state.agentes.executions = res.data.executions || [];
+    state.agentes.detail = res.data;
+    state.agentes.openExec = {};
+    render();
+    if (state.agentes.detailModal) {
+      state.agentes.detailModal.close();
+    }
+    state.agentes.detailModal = openModal({
+      title: res.data.agent.name,
+      subtitle: res.data.agent.description || "",
+      variant: "sheet",
+      build: function () {},
+      onClose: function () { state.agentes.detailModal = null; },
+    });
+    paintAgentDetail();
+  }
+
+  function usageBar(stats) {
+    const parts = [
+      ["in", "Entrada", stats.input_tokens],
+      ["out", "Saída", stats.output_tokens],
+      ["cr", "Cache lido", stats.cache_read_tokens],
+      ["cw", "Cache gravado", stats.cache_write_tokens],
+    ];
+    const total = parts.reduce(function (acc, p) { return acc + Number(p[2] || 0); }, 0);
+    const bar = el("div", { class: "usage-bar", "aria-hidden": "true" });
+    const legend = el("dl", { class: "usage-legend" });
+    parts.forEach(function (p) {
+      const seg = el("span", { class: "usage-seg usage-" + p[0] });
+      seg.style.width = (total ? (100 * Number(p[2] || 0) / total) : 0) + "%";
+      bar.appendChild(seg);
+      legend.appendChild(el("div", null, [
+        el("dt", null, [el("span", { class: "usage-dot usage-" + p[0], "aria-hidden": "true" }), el("span", { text: p[1] })]),
+        el("dd", { text: fmtInt(p[2]) }),
+      ]));
+    });
+    return el("div", { class: "usage-block" }, [bar, legend]);
+  }
+
+  function executionRow(execu) {
+    const u = execu.usage || {};
+    const open = !!(state.agentes.openExec && state.agentes.openExec[execu.id]);
+    const statusMap = { ok: ["status-ok", "Sucesso"], error: ["status-danger", "Erro"], running: ["status-warn", "Rodando"] };
+    const st = statusMap[execu.status] || ["status-muted", execu.status || "—"];
+    const row = el("tr", {
+      class: "exec-row" + (open ? " open" : ""),
+      tabindex: "0",
+      "aria-expanded": open ? "true" : "false",
+      onClick: function () { toggleExec(execu.id); },
+      onKeydown: function (ev) {
+        if (ev.key === "Enter" || ev.key === " ") {
+          ev.preventDefault();
+          toggleExec(execu.id);
+        }
+      },
+    }, [
+      el("td", null, [
+        el("span", { class: "cell-strong exec-event", text: execu.event || "—" }),
+        el("span", { class: "exec-when", text: fmtDateTime(execu.started_at) }),
+      ]),
+      el("td", null, [el("span", { class: "status " + st[0], text: st[1] })]),
+      el("td", { class: "num", text: fmtDuration(execu.duration_ms) }),
+      el("td", { class: "num", title: u.total_tokens != null ? fmtInt(u.total_tokens) + " tokens" : "Motor não informou uso", text: fmtTokensShort(u.total_tokens) }),
+      el("td", { class: "num", text: fmtUsd(u.cost_usd) }),
+    ]);
+    const rows = [row];
+    if (open) {
+      const detail = el("div", { class: "exec-detail" }, [
+        el("dl", { class: "exec-usage" }, [
+          el("div", null, [el("dt", { text: "Entrada" }), el("dd", { text: fmtInt(u.input_tokens) })]),
+          el("div", null, [el("dt", { text: "Saída" }), el("dd", { text: fmtInt(u.output_tokens) })]),
+          el("div", null, [el("dt", { text: "Cache lido" }), el("dd", { text: fmtInt(u.cache_read_tokens) })]),
+          el("div", null, [el("dt", { text: "Cache gravado" }), el("dd", { text: fmtInt(u.cache_write_tokens) })]),
+          el("div", null, [el("dt", { text: "Turnos" }), el("dd", { text: fmtInt(u.turns) })]),
+          el("div", { class: "exec-only-mobile" }, [el("dt", { text: "Status · duração" }), el("dd", { text: st[1] + " · " + fmtDuration(execu.duration_ms) })]),
+          el("div", null, [el("dt", { text: "Modelo" }), el("dd", { class: "mono", text: u.model || "—" })]),
+        ]),
+        u.total_tokens == null ? el("p", { class: "field-hint", text: "O motor não informou uso nesta execução (execução antiga, sem chamada ao motor ou motor sem esse dado)." }) : null,
+        execu.log ? el("div", { class: "agent-log", text: execu.log }) : null,
+      ]);
+      rows.push(el("tr", { class: "exec-detail-row" }, [el("td", { colspan: "5" }, [detail])]));
+    }
+    return rows;
+  }
+
+  function toggleExec(id) {
+    state.agentes.openExec = state.agentes.openExec || {};
+    state.agentes.openExec[id] = !state.agentes.openExec[id];
+    paintAgentDetail();
+  }
+
+  function paintAgentDetail() {
+    const modal = state.agentes.detailModal;
+    const data = state.agentes.detail;
+    if (!modal || !data) {
+      return;
+    }
+    const body = modal.body;
+    body.replaceChildren();
+    const agent = data.agent;
+    const stats = data.stats || {};
+
+    body.appendChild(el("div", { class: "agent-facts" }, [
+      agentStatusPill(agent.status),
+      scopeChip(agent.scope),
+      agent.trigger ? el("span", { text: "Gatilho: " + agent.trigger }) : null,
+      agent.engine ? el("span", { text: "Motor: " + agent.engine }) : null,
+      el("span", { text: "Criado " + fmtDateTime(agent.created_at) }),
+    ]));
+
+    body.appendChild(el("div", { class: "metric-grid agent-stats" }, [
+      metricCard("core", stats.executions || 0, null, "Execuções"),
+      metricCard("ok", stats.success_rate == null ? "—" : stats.success_rate + "%", null, "Sucesso"),
+      metricCard("core", fmtDuration(stats.avg_duration_ms), null, "Duração média"),
+      metricCard("core", fmtUsd(stats.cost_usd), null, "Custo estimado total"),
+    ]));
+
+    const usageSection = el("div", { class: "agent-section" }, [
+      el("div", { class: "radar-section-head" }, [
+        el("h3", { text: "Consumo do motor" }),
+        el("span", { class: "count", text: stats.total_tokens == null ? "sem dado" : fmtInt(stats.total_tokens) + " tokens" }),
+      ]),
+    ]);
+    if (stats.total_tokens == null) {
+      usageSection.appendChild(el("p", { class: "radar-empty", text: "Nenhuma execução deste agente informou uso do motor ainda." }));
+    } else {
+      usageSection.appendChild(usageBar(stats));
+      usageSection.appendChild(el("dl", { class: "meta-list agent-cost" }, [
+        el("dt", { text: "Média por execução" }), el("dd", { text: fmtUsd(stats.avg_cost_usd) + " · " + fmtInt(stats.executions_with_usage) + " execuções com uso informado" }),
+        el("dt", { text: "Últimos 30 dias" }), el("dd", { text: fmtUsd(stats.cost_usd_30d) + " em " + fmtInt(stats.executions_30d) + " execuções" }),
+      ]));
+    }
+    usageSection.appendChild(el("p", { class: "field-hint", text: "Custo estimado pelo Claude Code a preço de lista da API. Com assinatura, não é cobrança por chamada; serve para comparar consumo. Cache gravado costuma pesar mais: é o contexto da CLI guardado na primeira chamada." }));
+    body.appendChild(usageSection);
+
+    const execs = data.executions || [];
+    const execSection = el("div", { class: "agent-section" }, [
+      el("div", { class: "radar-section-head" }, [
+        el("h3", { text: "Execuções" }),
+        el("span", { class: "count", text: String(execs.length) + (stats.executions > execs.length ? " de " + stats.executions : "") }),
+      ]),
+      el("p", { class: "radar-section-hint", text: "Clique numa execução para ver tokens por tipo, modelo e log." }),
+    ]);
+    if (!execs.length) {
+      execSection.appendChild(el("p", { class: "radar-empty", text: "Sem execuções registradas." }));
+    } else {
+      const table = el("table", { class: "exec-table" });
+      table.appendChild(el("thead", null, [el("tr", null, [
+        el("th", { text: "Execução" }),
+        el("th", { text: "Status" }),
+        el("th", { class: "num", text: "Duração" }),
+        el("th", { class: "num", text: "Tokens" }),
+        el("th", { class: "num", text: "Custo" }),
+      ])]));
+      const tbody = el("tbody");
+      execs.forEach(function (execu) {
+        executionRow(execu).forEach(function (tr) { tbody.appendChild(tr); });
+      });
+      table.appendChild(tbody);
+      execSection.appendChild(el("div", { class: "exec-table-wrap" }, [table]));
+    }
+    body.appendChild(execSection);
+
+    const perms = el("div", { class: "agent-section" });
+    renderPermissions(perms);
+    if (perms.firstChild) {
+      perms.firstChild.className = "";
+      perms.replaceChild(el("div", { class: "radar-section-head" }, [el("h3", { text: "Permissões" })]), perms.firstChild);
+      body.appendChild(perms);
+    }
+
+    const approvals = data.approvals || [];
+    if (approvals.length) {
+      const list = el("div", { class: "agent-section" }, [
+        el("div", { class: "radar-section-head" }, [el("h3", { text: "Aprovações" }), el("span", { class: "count", text: String(approvals.length) })]),
+      ]);
+      approvals.forEach(function (ap) {
+        const map = { pending: ["status-warn", "Pendente"], approved: ["status-ok", "Aprovada"], rejected: ["status-danger", "Recusada"] };
+        const st = map[ap.status] || ["status-muted", ap.status];
+        list.appendChild(el("div", { class: "approval-item" }, [
+          el("div", { class: "approval-info" }, [
+            el("strong", { text: ap.action === "write_access" ? "Acesso de escrita" : ap.action }),
+            el("span", { text: "Pedida " + fmtDateTime(ap.requested_at) + (ap.decided_at ? " · decidida " + fmtDateTime(ap.decided_at) : "") }),
+          ]),
+          el("span", { class: "status " + st[0], text: st[1] }),
+        ]));
+      });
+      body.appendChild(list);
+    }
+  }
+
   function renderSelectedAgent(root) {
     const agent = state.agentes.selected;
     const card = el("section", { class: "card" });
@@ -3215,6 +3462,12 @@
     card.appendChild(el("div", { class: "selected-agent-head" }, [
       el("strong", { text: agent.name }),
       agentStatusPill(agent.status),
+      el("button", {
+        type: "button",
+        class: "sm quiet selected-agent-more",
+        text: "Ver detalhes",
+        onClick: function () { openAgentDetail(agent.id); },
+      }),
     ]));
     card.appendChild(el("p", { class: "agent-trigger-line" }, [
       el("span", { text: (agent.scope === "company_system" ? "Sistema da empresa" : "Desenvolvimento") + (agent.trigger ? " · gatilho: " + agent.trigger : "") }),

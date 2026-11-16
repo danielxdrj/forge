@@ -92,6 +92,43 @@ def parse_claude_result(raw: bytes) -> str:
     return text
 
 
+def _int_or_none(value) -> int | None:
+    try:
+        return int(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def parse_claude_usage(raw: bytes) -> tuple[dict, float | None]:
+    """Uso da chamada a partir do JSON do `claude -p`. Nunca levanta: sem dado, devolve vazio.
+
+    O custo vem de `total_cost_usd`, que o CLI calcula a preço de lista da API
+    (`costBasis: "list"`). Com assinatura, é uma estimativa, não uma cobrança.
+    """
+    try:
+        data = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return {}, None
+    if not isinstance(data, dict):
+        return {}, None
+    usage = data.get("usage") if isinstance(data.get("usage"), dict) else {}
+    models = data.get("modelUsage") if isinstance(data.get("modelUsage"), dict) else {}
+    out = {
+        "input_tokens": _int_or_none(usage.get("input_tokens")),
+        "output_tokens": _int_or_none(usage.get("output_tokens")),
+        "cache_read_tokens": _int_or_none(usage.get("cache_read_input_tokens")),
+        "cache_write_tokens": _int_or_none(usage.get("cache_creation_input_tokens")),
+        "turns": _int_or_none(data.get("num_turns")),
+        "model": ", ".join(sorted(str(k) for k in models))[:120],
+    }
+    cost = data.get("total_cost_usd")
+    try:
+        cost_value = float(cost) if cost is not None else None
+    except (TypeError, ValueError):
+        cost_value = None
+    return {k: v for k, v in out.items() if v not in (None, "")}, cost_value
+
+
 class ClaudeCliAdapter:
     name = "claude-cli"
 
@@ -175,7 +212,9 @@ class ClaudeCliAdapter:
                     proc.returncode, proc.stderr or b"", child_env, stdout=raw,
                 )
                 raise DraftError("claude_cli_error", hint[:STDERR_SNIPPET])
-            return ProviderResponse(text=parse_claude_result(raw))
+            text = parse_claude_result(raw)
+            usage, cost = parse_claude_usage(raw)
+            return ProviderResponse(text=text, usage=usage, cost=cost)
         finally:
             if self.cleanup_workspace and owned is None:
                 shutil.rmtree(workspace, ignore_errors=True)
