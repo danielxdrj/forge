@@ -173,12 +173,51 @@
     return node;
   }
 
-  function pageHeader(eyebrow, title, subtitle) {
+  function pageHeader(title, subtitle, actions) {
     return el("header", { class: "page-header" }, [
-      el("p", { class: "page-eyebrow", text: eyebrow }),
-      el("h2", { class: "page-title", text: title }),
-      subtitle ? el("p", { class: "page-subtitle", text: subtitle }) : null,
+      el("div", { class: "page-header-text" }, [
+        el("h2", { class: "page-title", text: title }),
+        subtitle ? el("p", { class: "page-subtitle", text: subtitle }) : null,
+      ]),
+      actions && actions.length ? el("div", { class: "page-actions" }, actions) : null,
     ]);
+  }
+
+  function cardHead(title, extra) {
+    return el("div", { class: "card-head" }, [el("h2", { text: title })].concat(extra || []));
+  }
+
+  function countLabel(n) {
+    return el("span", { class: "count", text: String(n) });
+  }
+
+  function actionsRow(children, cls) {
+    return el("div", { class: "actions" + (cls ? " " + cls : "") }, children);
+  }
+
+  function emptyState(title, detail) {
+    return el("div", { class: "empty" }, [
+      el("strong", { text: title }),
+      detail ? el("span", { text: detail }) : null,
+    ]);
+  }
+
+  function lockIcon() {
+    const ns = "http://www.w3.org/2000/svg";
+    const svg = document.createElementNS(ns, "svg");
+    svg.setAttribute("viewBox", "0 0 16 16");
+    svg.setAttribute("width", "14");
+    svg.setAttribute("height", "14");
+    svg.setAttribute("aria-hidden", "true");
+    const path = document.createElementNS(ns, "path");
+    path.setAttribute("fill", "none");
+    path.setAttribute("stroke", "currentColor");
+    path.setAttribute("stroke-width", "1.5");
+    path.setAttribute("stroke-linecap", "round");
+    path.setAttribute("stroke-linejoin", "round");
+    path.setAttribute("d", "M4 7.2h8v6H4zM5.6 7.2V5.4a2.4 2.4 0 014.8 0v1.8");
+    svg.appendChild(path);
+    return svg;
   }
 
   function relativeTime(iso) {
@@ -257,6 +296,20 @@
     return { close: close, body: body };
   }
 
+  function showToast(text) {
+    let region = document.getElementById("toast-region");
+    if (!region) {
+      region = el("div", { id: "toast-region", class: "toast-region", role: "status", "aria-live": "polite" });
+      document.body.appendChild(region);
+    }
+    const toast = el("div", { class: "toast", text: text });
+    region.appendChild(toast);
+    window.setTimeout(function () {
+      toast.classList.add("toast-out");
+      window.setTimeout(function () { toast.remove(); }, 200);
+    }, 4500);
+  }
+
   function safeLink(url, label) {
     const href = githubHref(url || "");
     if (!href) {
@@ -266,7 +319,7 @@
   }
 
   function publishedIssueLink(url) {
-    const node = safeLink(url, "issue");
+    const node = safeLink(url, "Issue");
     if (node.tagName === "A") {
       node.setAttribute("target", "_blank");
     }
@@ -736,15 +789,10 @@
     }
   }
 
-  function rolePill(role) {
-    const cls = "pill pill-role pill-role-" + role;
-    return el("span", { class: cls, text: role });
-  }
-
   function statusPill(draftStatus, status) {
     const left = draftStatus || "";
     const right = status || "";
-    const label = left && right ? left + " / " + right : (left || right || "—");
+    const label = left && right ? left + " · " + right : (left || right || "—");
     const key = (left || right).toLowerCase();
     let kind = "muted";
     if (key.indexOf("publicado") !== -1) {
@@ -756,7 +804,8 @@
     } else if (key.indexOf("cancelado") !== -1) {
       kind = "danger";
     }
-    return el("span", { class: "pill pill-" + kind, text: label });
+    const text = label.charAt(0).toUpperCase() + label.slice(1);
+    return el("span", { class: "status status-" + kind, text: text });
   }
 
   function stateCard(kind, title, detail) {
@@ -771,12 +820,12 @@
   function renderSession(target) {
     target.replaceChildren();
     if (state.who) {
-      target.appendChild(el("span", { class: "session-login", text: state.who.login }));
-      const roles = (state.who.roles || []).map(rolePill);
-      if (!roles.length) {
-        roles.push(el("span", { class: "pill pill-muted", text: "nenhum" }));
-      }
-      target.appendChild(el("span", { class: "session-roles" }, roles));
+      const roles = (state.who.roles || []).join(" · ") || "sem papel";
+      target.appendChild(el("div", { class: "session-who" }, [
+        el("span", { class: "session-login", text: state.who.login }),
+        el("span", { class: "session-roles", text: roles }),
+      ]));
+      target.appendChild(el("span", { class: "avatar", "aria-hidden": "true", text: String(state.who.login || "?").slice(0, 2) }));
       target.appendChild(el("button", { type: "button", class: "btn-sair", text: "Sair", onClick: function () { logout(); } }));
       return;
     }
@@ -784,19 +833,19 @@
   }
 
   function renderLogin(root) {
-    const box = el("section", { class: "card card-core" }, [
-      el("div", { class: "card-head" }, [
-        el("span", { class: "icon-box icon-core", text: "F" }),
-        el("h2", { text: "Entrar" }),
-        el("span", { class: "pill pill-existing", text: "INTEGRAÇÃO EXISTENTE" }),
-      ]),
+    const box = el("section", { class: "card login-panel" }, [
+      el("h2", { text: "Entrar no Forge" }),
     ]);
     if (state.pending && state.pending.user_code) {
-      box.appendChild(el("p", { text: "Abra o GitHub e informe o código:" }));
+      box.appendChild(el("p", { text: "Abra o endereço abaixo no GitHub e informe o código para autorizar este painel." }));
       box.appendChild(el("p", null, [safeLink(state.pending.verification_uri)]));
       box.appendChild(el("p", { class: "code login-code", text: state.pending.user_code }));
-      box.appendChild(el("p", { class: "muted", text: "Aguardando autorização no GitHub…" }));
+      box.appendChild(el("p", { class: "login-wait muted" }, [
+        el("span", { class: "spinner", "aria-hidden": "true" }),
+        el("span", { text: "Aguardando autorização no GitHub…" }),
+      ]));
     } else {
+      box.appendChild(el("p", { text: "Use sua conta do GitHub. O acesso depende dos papéis concedidos a você neste painel." }));
       box.appendChild(el("button", {
         type: "button",
         class: "primary",
@@ -830,7 +879,7 @@
     if (!items.length) {
       return null;
     }
-    return el("div", null, [
+    return el("div", { class: "pending-box" }, [
       el("p", { class: "warn", text: "Seções com [PENDENTE]:" }),
       el("ul", { class: "pending" }, items),
       el("p", { class: "muted", text: "Edite o corpo abaixo ou complemente o contexto e gere de novo." }),
@@ -838,21 +887,13 @@
   }
 
   function renderEditor(root) {
-    root.appendChild(pageHeader("01 — TAREFAS", "Tarefas", "Gere, revise e publique tarefas a partir de um contexto escrito, para os repositórios da allowlist."));
+    root.appendChild(pageHeader("Tarefas", "Gere, revise e publique tarefas a partir de um contexto escrito, para os repositórios da allowlist."));
     if (!isEditor()) {
-      root.appendChild(el("section", { class: "card" }, [
-        el("p", { class: "error", text: "Só quem tem o papel editor pode criar tarefas. O owner não implica editor; peça grant --role editor." }),
-      ]));
+      root.appendChild(el("p", { class: "banner banner-warn", text: "Só quem tem o papel editor pode criar tarefas. O owner não implica editor; peça grant --role editor." }));
       return;
     }
 
-    const form = el("section", { class: "card card-tasks" }, [
-      el("div", { class: "card-head" }, [
-        el("span", { class: "icon-box icon-tasks", text: "A" }),
-        el("h2", { text: "Nova tarefa" }),
-        el("span", { class: "pill pill-tasks", text: "GESTÃO DE TAREFAS" }),
-      ]),
-    ]);
+    const form = el("section", { class: "card" }, [cardHead("Nova tarefa")]);
     const repo = el("select", { id: "repo" });
     state.repos.forEach(function (item) {
       const opt = el("option", { value: item.full_name, text: item.full_name });
@@ -863,68 +904,74 @@
     });
     form.appendChild(el("label", { text: "Repositório", for: "repo" }));
     form.appendChild(repo);
-    form.appendChild(el("label", { text: "Contexto escrito (máx. 64 KiB). Sem imagem.", for: "context" }));
-    const context = el("textarea", { id: "context", maxlength: String(MAX_CONTEXT) });
+    form.appendChild(el("label", { text: "Contexto", for: "context" }));
+    const context = el("textarea", {
+      id: "context",
+      maxlength: String(MAX_CONTEXT),
+      placeholder: "Descreva o problema, o comportamento esperado e o que já se sabe.",
+    });
     context.value = state.form.context || "";
     form.appendChild(context);
-    form.appendChild(el("button", {
+    form.appendChild(el("p", { class: "field-hint", text: "Texto livre, até 64 KiB. Imagens não são aceitas." }));
+    form.appendChild(actionsRow([el("button", {
       type: "button",
       class: "primary",
       text: state.busy ? "Aguarde…" : (state.draft ? "Gerar de novo" : "Gerar rascunho"),
       disabled: state.busy ? "disabled" : null,
       onClick: function () { generateDraft(); },
-    }));
+    })]));
     root.appendChild(form);
 
     if (state.draft) {
-      const preview = el("section", { class: "card card-tasks" }, [
-        el("div", { class: "card-head" }, [
-          el("span", { class: "icon-box icon-tasks", text: "A" }),
-          el("h2", { text: "Pré-visualização" }),
-        ]),
-      ]);
+      const preview = el("section", { class: "card" }, [cardHead("Rascunho")]);
       const pending = pendingList(state.draft.pending);
       if (pending) {
         preview.appendChild(pending);
       }
-      preview.appendChild(el("label", { text: "Corpo do rascunho", for: "draft-body" }));
+      preview.appendChild(el("label", { text: "Corpo da issue", for: "draft-body" }));
       const body = el("textarea", { id: "draft-body", class: "preview" });
       body.value = state.draft.body || "";
       preview.appendChild(body);
       if (state.fieldsError) {
-        preview.appendChild(el("p", { class: "error", text: state.fieldsError }));
+        preview.appendChild(el("p", { class: "field-hint field-error", text: state.fieldsError }));
       }
-      const row = el("div", { class: "row" });
+      const row = el("div", { class: "field-grid" });
       const tipo = el("select", { id: "tipo", onChange: function () { saveDraft(); } });
       const prioridade = el("select", { id: "prioridade", onChange: function () { saveDraft(); } });
       const size = el("select", { id: "size", onChange: function () { saveDraft(); } });
-      fillSelect(tipo, state.fields.tipo, "Tipo", state.form.tipo);
-      fillSelect(prioridade, state.fields.prioridade, "Prioridade", state.form.prioridade);
-      fillSelect(size, state.fields.size, "Size", state.form.size);
-      row.appendChild(el("div", null, [el("label", { text: "Tipo", for: "tipo" }), tipo]));
-      row.appendChild(el("div", null, [el("label", { text: "Prioridade", for: "prioridade" }), prioridade]));
-      row.appendChild(el("div", null, [el("label", { text: "Size", for: "size" }), size]));
+      fillSelect(tipo, state.fields.tipo, "Selecione", state.form.tipo);
+      fillSelect(prioridade, state.fields.prioridade, "Selecione", state.form.prioridade);
+      fillSelect(size, state.fields.size, "Selecione", state.form.size);
+      row.appendChild(el("div", { class: "field" }, [el("label", { text: "Tipo", for: "tipo" }), tipo]));
+      row.appendChild(el("div", { class: "field" }, [el("label", { text: "Prioridade", for: "prioridade" }), prioridade]));
+      row.appendChild(el("div", { class: "field" }, [el("label", { text: "Size", for: "size" }), size]));
       preview.appendChild(row);
-      preview.appendChild(el("button", {
-        type: "button",
-        text: "Salvar rascunho",
-        disabled: state.busy ? "disabled" : null,
-        onClick: function () { saveDraft(); },
-      }));
-      preview.appendChild(el("button", {
-        type: "button",
-        class: "primary",
-        text: "Confirmar e publicar",
-        disabled: state.busy ? "disabled" : null,
-        onClick: function () { confirmDraft(); },
-      }));
+      preview.appendChild(actionsRow([
+        el("button", {
+          type: "button",
+          class: "primary",
+          text: "Confirmar e publicar",
+          disabled: state.busy ? "disabled" : null,
+          onClick: function () { confirmDraft(); },
+        }),
+        el("button", {
+          type: "button",
+          text: "Salvar rascunho",
+          disabled: state.busy ? "disabled" : null,
+          onClick: function () { saveDraft(); },
+        }),
+      ]));
       if (state.draft.links) {
         const links = state.draft.links;
-        preview.appendChild(el("p", { class: "ok", text: "Publicado." }));
-        preview.appendChild(el("p", null, [el("span", { text: "Issue: " }), safeLink(links.issue_url)]));
-        preview.appendChild(el("p", null, [el("span", { text: "Branch: " }), el("span", { text: links.branch || "—" })]));
-        preview.appendChild(el("p", null, [el("span", { text: "PR: " }), safeLink(links.pr_url)]));
-        preview.appendChild(el("p", null, [el("span", { text: "Board: " }), el("span", { text: links.board_item_id || "—" })]));
+        preview.appendChild(el("div", { class: "publish-result" }, [
+          el("p", { class: "status status-ok", text: "Publicado." }),
+          el("dl", { class: "meta-list" }, [
+            el("dt", { text: "Issue" }), el("dd", null, [safeLink(links.issue_url)]),
+            el("dt", { text: "Branch" }), el("dd", { class: "mono", text: links.branch || "—" }),
+            el("dt", { text: "PR" }), el("dd", null, [safeLink(links.pr_url)]),
+            el("dt", { text: "Board" }), el("dd", { class: "mono", text: links.board_item_id || "—" }),
+          ]),
+        ]));
       }
       root.appendChild(preview);
     }
@@ -934,41 +981,38 @@
   }
 
   function renderTaskView(title, tasks, kind) {
-    const list = el("section", { class: "card task-view card-tasks" }, [
-      el("div", { class: "card-head" }, [
-        el("span", { class: "icon-box icon-delivery", text: "C" }),
-        el("h2", { text: title }),
-      ]),
-    ]);
+    const list = el("section", { class: "card task-view" }, [cardHead(title, [countLabel(tasks.length)])]);
     if (!tasks.length) {
       list.appendChild(el("p", {
         class: "muted",
-        text: kind === "published" ? "Nenhuma tarefa publicada." : "Nenhum rascunho.",
+        text: kind === "published"
+          ? "Nenhuma tarefa publicada. Ao confirmar um rascunho, ele aparece aqui com os links da issue e do PR."
+          : "Nenhum rascunho salvo.",
       }));
       return list;
     }
     const cols = [
-      el("th", { text: "Repositório" }),
       el("th", { text: "Título" }),
+      el("th", { text: "Repositório" }),
       el("th", { text: "Status" }),
     ];
     if (kind === "published") {
-      cols.push(el("th", { text: "Issue" }), el("th", { text: "PR" }), el("th", { text: "" }));
+      cols.push(el("th", { text: "Links" }), el("th", { text: "", "aria-label": "Ações" }));
     } else {
-      cols.push(el("th", { text: "" }));
+      cols.push(el("th", { text: "", "aria-label": "Ações" }));
     }
     const table = el("table");
     table.appendChild(el("thead", null, [el("tr", null, cols)]));
     const tbody = el("tbody");
     tasks.forEach(function (task) {
       const cells = [
-        el("td", { text: task.repo || "" }),
-        el("td", { text: task.title || "" }),
+        el("td", { class: "cell-strong", text: task.title || "" }),
+        el("td", { class: "cell-repo", text: task.repo || "" }),
         el("td", null, [statusPill(task.draft_status, task.status)]),
       ];
       if (kind === "published") {
-        cells.push(el("td", null, [publishedIssueLink(task.issue_url)]));
-        cells.push(el("td", null, [safeLink(task.pr_url, "PR")]));
+        const pr = safeLink(task.pr_url, "PR");
+        cells.push(el("td", { class: "cell-links" }, [publishedIssueLink(task.issue_url), pr.tagName === "A" ? pr : null]));
         const parts = splitOwnerRepo(task.repo);
         const number = issueNumberFromUrl(task.issue_url);
         const del = deleteIssueButton(parts.owner, parts.repo, number, async function () {
@@ -976,11 +1020,11 @@
           await loadEditorData();
           render();
         });
-        cells.push(el("td", null, [del]));
+        cells.push(el("td", { class: "cell-actions" }, [del]));
       } else {
-        cells.push(el("td", null, [el("button", {
+        cells.push(el("td", { class: "cell-actions" }, [el("button", {
           type: "button",
-          class: "danger",
+          class: "quiet danger sm",
           text: "Descartar",
           disabled: state.busy ? "disabled" : null,
           onClick: function () { discardDraft(task.id); },
@@ -989,20 +1033,17 @@
       tbody.appendChild(el("tr", null, cells));
     });
     table.appendChild(tbody);
-    list.appendChild(table);
+    list.appendChild(el("div", { class: "table-wrap" }, [table]));
     return list;
   }
 
-  function sourceCard(letter, iconClass, name, detail) {
-    return el("button", {
-      type: "button",
-      class: "source-card",
-      disabled: "disabled",
-    }, [
-      el("span", { class: "icon-box " + iconClass, text: letter }),
-      el("span", { class: "source-name", text: name }),
-      el("span", { class: "muted", text: detail }),
-      el("span", { class: "pill pill-planned", text: "INTEGRAÇÃO PLANEJADA" }),
+  function sourceRow(name, detail) {
+    return el("li", { class: "source-row" }, [
+      el("span", null, [
+        el("span", { class: "source-name", text: name }),
+        el("span", { class: "muted", text: " · " + detail }),
+      ]),
+      el("span", { class: "status status-muted", text: "Planejada" }),
     ]);
   }
 
@@ -1074,8 +1115,9 @@
   }
 
   function readonlySeal() {
-    return el("p", { class: "banner banner-info seal-readonly" }, [
-      el("span", { class: "pill pill-ok", text: "SOMENTE LEITURA" }),
+    return el("p", { class: "seal-readonly" }, [
+      lockIcon(),
+      el("strong", { text: "Somente leitura." }),
       el("span", { text: "Agentes não alteram dados nem recebem suas credenciais de escrita." }),
     ]);
   }
@@ -1305,14 +1347,7 @@
         body.appendChild(el("p", { class: "error", text: errorMessage(form.error) }));
       }
       const matches = form.confirm.trim() === expected;
-      const row = el("div", { class: "row" });
-      row.appendChild(el("button", {
-        type: "button",
-        class: "danger",
-        text: form.busy ? "Aguarde…" : "Apagar issue",
-        disabled: (!matches || form.busy) ? "disabled" : null,
-        onClick: function () { submit(body, "delete"); },
-      }));
+      const row = actionsRow([el("button", { type: "button", text: "Cancelar", onClick: function () { modal.close(); } })]);
       if (form.error === "issue_delete_forbidden") {
         row.appendChild(el("button", {
           type: "button",
@@ -1321,7 +1356,13 @@
           onClick: function () { submit(body, "close"); },
         }));
       }
-      row.appendChild(el("button", { type: "button", text: "Cancelar", onClick: function () { modal.close(); } }));
+      row.appendChild(el("button", {
+        type: "button",
+        class: "danger-solid",
+        text: form.busy ? "Aguarde…" : "Apagar issue",
+        disabled: (!matches || form.busy) ? "disabled" : null,
+        onClick: function () { submit(body, "delete"); },
+      }));
       body.appendChild(row);
       input.focus();
       input.setSelectionRange(input.value.length, input.value.length);
@@ -1359,8 +1400,8 @@
     const ns = "http://www.w3.org/2000/svg";
     const svg = document.createElementNS(ns, "svg");
     svg.setAttribute("viewBox", "0 0 16 16");
-    svg.setAttribute("width", "13");
-    svg.setAttribute("height", "13");
+    svg.setAttribute("width", "15");
+    svg.setAttribute("height", "15");
     svg.setAttribute("aria-hidden", "true");
     const path = document.createElementNS(ns, "path");
     path.setAttribute("fill", "none");
@@ -1380,20 +1421,15 @@
     const key = owner + "/" + repoName + "#" + number;
     const btn = el("button", {
       type: "button",
-      class: compact ? "danger issue-delete-btn" : "danger",
-      title: "Apagar issue",
+      class: "quiet danger sm icon-only" + (compact ? " issue-delete-btn" : ""),
+      title: "Apagar issue " + key,
       "aria-label": "Apagar issue " + key,
       onClick: function (ev) {
         ev.stopPropagation();
         openDeleteIssueModal(owner, repoName, number, onDeleted);
       },
     });
-    if (compact) {
-      btn.appendChild(trashIcon());
-      btn.appendChild(el("span", { text: "Apagar" }));
-    } else {
-      btn.textContent = "Apagar issue";
-    }
+    btn.appendChild(trashIcon());
     return btn;
   }
 
@@ -1478,37 +1514,22 @@
 
   function renderIssuePicker() {
     const issueBox = el("section", { class: "card" }, [
-      el("h2", { text: "Issue" }),
-      el("label", { text: "Issue do GitHub", for: "issue-select" }),
+      cardHead("Issues", [countLabel(state.issues.length)]),
     ]);
-    const select = el("select", {
-      id: "issue-select",
-      onChange: function (ev) { selectIssue(ev.target.value); },
-    });
-    select.appendChild(el("option", { value: "", text: "Selecione uma issue" }));
-    state.issues.forEach(function (item) {
-      const label = item.issue_key + (item.title ? " — " + item.title : "");
-      const opt = el("option", { value: item.issue_key, text: label });
-      if (state.selectedIssue === item.issue_key) {
-        opt.selected = true;
-      }
-      select.appendChild(opt);
-    });
-    issueBox.appendChild(select);
     if (state.issuesError) {
-      issueBox.appendChild(el("p", { class: "muted", text: state.issuesError }));
+      issueBox.appendChild(el("p", { class: "banner banner-warn", text: state.issuesError }));
     }
     const repoWrap = el("div", null, [
       el("label", { text: "Repositório", for: "issue-filter-repo" }),
     ]);
     const toolbar = el("div", { class: "issue-toolbar" }, [
       el("div", null, [
-        el("label", { text: "Filtrar", for: "issue-filter-text" }),
+        el("label", { text: "Buscar", for: "issue-filter-text" }),
         el("input", {
           id: "issue-filter-text",
-          type: "text",
+          type: "search",
           value: state.issueQuery || "",
-          placeholder: "Buscar por título, repo ou número",
+          placeholder: "Título, repositório ou número",
           onInput: function (ev) {
             state.issueQuery = ev.target.value;
             const list = document.getElementById("issue-list-scroll");
@@ -1547,7 +1568,6 @@
       issueBox.appendChild(el("div", { class: "issue-list-actions" }, [
         el("button", {
           type: "button",
-          class: "primary",
           text: state.busy ? "Aguarde…" : "Importar issues concluídas",
           disabled: state.busy ? "disabled" : null,
           onClick: function () { importCompletedIssues(); },
@@ -1751,13 +1771,13 @@
 
   function teiaStatus() {
     if (state.graphBusy) {
-      return { cls: "pill-warn", text: "INDEXANDO" };
+      return { cls: "status-warn", text: "Indexando" };
     }
     const hasData = (state.teia.nodes || []).length > 0 || (state.graphs || []).length > 0;
     if (hasData) {
-      return { cls: "pill-ok", text: "ATIVO" };
+      return { cls: "status-ok", text: "Ativo" };
     }
-    return { cls: "pill-muted", text: "DESLIGADO" };
+    return { cls: "status-muted", text: "Desligado" };
   }
 
   function teiaLegendRepos() {
@@ -1892,22 +1912,19 @@
       return;
     }
     host.replaceChildren();
-    host.appendChild(el("h2", { text: "Detalhe" }));
     const selected = teiaNodeById(state.teiaSelected);
     if (!selected) {
-      host.appendChild(el("p", { class: "muted", text: "Clique num nó para ver o detalhe." }));
+      host.appendChild(el("h2", { text: "Detalhe" }));
+      host.appendChild(el("p", { class: "muted", text: "Selecione um nó na teia para ver a origem, os links e os vizinhos." }));
       return;
     }
-    host.appendChild(el("p", { class: "pill pill-core", text: teiaTypeLabel(selected.type) }));
+    host.appendChild(el("p", { class: "teia-k", text: teiaTypeLabel(selected.type) + (selected.repo ? " · " + selected.repo : "") }));
     host.appendChild(el("h3", { text: selected.label || selected.id }));
-    if (selected.repo) {
-      host.appendChild(el("p", { text: selected.repo }));
-    }
     if (selected.path) {
-      host.appendChild(el("p", { class: "muted", text: selected.path }));
+      host.appendChild(el("p", { class: "teia-path", text: selected.path }));
     }
     if (selected.url) {
-      host.appendChild(safeLink(selected.url, teiaLinkLabel(selected)));
+      host.appendChild(el("p", null, [safeLink(selected.url, teiaLinkLabel(selected) + " ↗")]));
     }
     if (selected.type === "file" && selected.expandable) {
       const n = selected.children || 0;
@@ -1923,7 +1940,7 @@
       host.appendChild(el("p", { class: "teia-k", text: "Labels" }));
       const row = el("div", { class: "teia-chips" });
       labels.forEach(function (name) {
-        row.appendChild(el("span", { class: "pill pill-tasks", text: String(name) }));
+        row.appendChild(el("span", { class: "pill pill-outline", text: String(name) }));
       });
       host.appendChild(row);
     }
@@ -1950,7 +1967,7 @@
       host.appendChild(list);
     }
     const neighbors = teiaNeighbors(selected.id);
-    host.appendChild(el("p", { class: "teia-k", text: "Vizinhos" }));
+    host.appendChild(el("p", { class: "teia-k", text: "Vizinhos (" + neighbors.length + ")" }));
     if (!neighbors.length) {
       host.appendChild(el("p", { class: "muted", text: "Sem vizinhos neste recorte." }));
       return;
@@ -1960,9 +1977,11 @@
       nlist.appendChild(el("button", {
         type: "button",
         class: "teia-neighbor",
-        text: teiaTypeLabel(node.type) + " · " + (node.label || node.id),
         onClick: function () { selectTeiaNode(node.id); },
-      }));
+      }, [
+        el("span", { class: "muted", text: teiaTypeLabel(node.type) }),
+        el("span", { text: node.label || node.id }),
+      ]));
     });
     host.appendChild(nlist);
   }
@@ -1989,7 +2008,7 @@
         teiaCtl.setData([], [], {});
         teiaKey = "";
       }
-      host.appendChild(el("p", { class: "muted teia-empty", text: "Nenhum nó neste recorte. Importe issues ou aguarde o índice Graphify." }));
+      host.appendChild(el("div", { class: "teia-empty" }, [emptyState("Nenhum nó neste recorte", "Ajuste os filtros, importe issues ou aguarde o índice Graphify.")]));
       return;
     }
     if (!teiaCanvas) {
@@ -2019,47 +2038,52 @@
   }
 
   function renderInvestForm(root) {
-    const card = el("section", { class: "card card-eng" }, [
-      el("div", { class: "card-head" }, [
-        el("span", { class: "icon-box icon-eng", text: "B" }),
-        el("h2", { text: "Nova investigação" }),
-        el("span", { class: "pill pill-eng", text: "LIVRE" }),
-      ]),
-      el("p", { class: "muted", text: "Descreva o problema, erro ou sintoma. Escolha repositórios e, se quiser, conexões e uma issue existente." }),
+    const card = el("section", { class: "card" }, [
+      cardHead("Nova investigação"),
+      el("p", { class: "card-desc", text: "Descreva o problema, o erro ou o sintoma. Escolha os repositórios e, se quiser, conexões e uma issue existente." }),
     ]);
     card.appendChild(el("label", { text: "Descrição", for: "invest-description" }));
-    const desc = el("textarea", { id: "invest-description", class: "preview" });
+    const desc = el("textarea", {
+      id: "invest-description",
+      rows: "6",
+      placeholder: "Ex.: a segunda via do boleto é gerada em dobro quando o cliente clica duas vezes em Reemitir.",
+    });
     desc.value = state.invest.form.description || "";
     card.appendChild(desc);
 
-    card.appendChild(el("p", { class: "teia-k", text: "Repositórios" }));
+    card.appendChild(el("label", { text: "Repositórios" }));
     if (!state.invest.repos.length) {
-      card.appendChild(el("p", { class: "muted", text: "Nenhum repositório elegível." }));
+      card.appendChild(el("p", { class: "field-hint", text: "Nenhum repositório elegível." }));
     } else {
-      const reposBox = el("div", { class: "teia-types" });
+      const reposBox = el("div", { class: "check-group" });
       state.invest.repos.forEach(function (repo) {
         const id = "invest-repo-" + repo.replace(/[^a-z0-9]/gi, "-");
         const box = el("input", { id: id, type: "checkbox", onChange: function (ev) { toggleInvestRepo(repo, ev.target.checked); } });
         if (state.invest.form.repos.indexOf(repo) !== -1) {
           box.checked = true;
         }
-        reposBox.appendChild(el("label", { class: "teia-type", for: id }, [box, el("span", { text: repo })]));
+        reposBox.appendChild(el("label", { class: "check", for: id }, [box, el("span", { text: repo })]));
       });
       card.appendChild(reposBox);
     }
 
     if (state.invest.connections.length) {
-      card.appendChild(el("p", { class: "teia-k", text: "Conexões (metadados; sem segredo)" }));
-      const connBox = el("div", { class: "teia-types" });
+      card.appendChild(el("label", { text: "Conexões" }));
+      const connBox = el("div", { class: "check-group" });
       state.invest.connections.forEach(function (conn) {
         const id = "invest-conn-" + conn.id;
         const box = el("input", { id: id, type: "checkbox", onChange: function (ev) { toggleInvestConnection(conn.id, ev.target.checked); } });
         if (state.invest.form.connectionIds.indexOf(conn.id) !== -1) {
           box.checked = true;
         }
-        connBox.appendChild(el("label", { class: "teia-type", for: id }, [box, el("span", { text: conn.name + " (" + conn.type + ")" })]));
+        connBox.appendChild(el("label", { class: "check", for: id }, [
+          box,
+          el("span", { text: conn.name }),
+          el("span", { class: "muted", text: conn.type }),
+        ]));
       });
       card.appendChild(connBox);
+      card.appendChild(el("p", { class: "field-hint", text: "Só metadados das conexões entram no contexto; segredos nunca." }));
     }
 
     card.appendChild(el("label", { text: "Issue existente (opcional)", for: "invest-issue-key" }));
@@ -2076,15 +2100,15 @@
     card.appendChild(issueSel);
 
     if (state.invest.error) {
-      card.appendChild(el("p", { class: "error", text: errorMessage(state.invest.error) }));
+      card.appendChild(el("p", { class: "banner banner-error", text: errorMessage(state.invest.error) }));
     }
-    card.appendChild(el("button", {
+    card.appendChild(actionsRow([el("button", {
       type: "button",
       class: "primary",
       text: state.invest.busy ? "Investigando…" : "Rodar investigação",
       disabled: state.invest.busy ? "disabled" : null,
       onClick: function () { runInvestigation(); },
-    }));
+    })]));
     root.appendChild(card);
   }
 
@@ -2093,105 +2117,88 @@
     if (!view) {
       return;
     }
-    const card = el("section", { class: "card card-eng" }, [
-      el("div", { class: "card-head" }, [
-        el("h2", { text: view.title || "Resultado" }),
-        el("span", { class: "pill pill-eng", text: view.engine || "motor" }),
+    const card = el("section", { class: "card invest-result" }, [
+      cardHead(view.title || "Resultado"),
+      el("div", { class: "result-meta" }, [
+        el("span", { text: (view.repos || []).join(", ") || "Sem repositório associado" }),
+        view.engine ? el("span", { text: "Motor: " + view.engine }) : null,
       ]),
-      el("p", { class: "muted", text: (view.repos || []).join(", ") || "Sem repositório associado." }),
     ]);
-    const result = el("div", { class: "markdown-body" }, renderMarkdownNodes(view.result));
-    card.appendChild(result);
     if (state.invest.notice) {
-      card.appendChild(el("p", { class: "ok", text: state.invest.notice }));
+      card.appendChild(el("p", { class: "banner banner-ok", text: state.invest.notice }));
     }
-    card.appendChild(el("button", {
+    card.appendChild(el("div", { class: "markdown-body" }, renderMarkdownNodes(view.result)));
+    card.appendChild(actionsRow([el("button", {
       type: "button",
       class: "primary",
       text: state.invest.busy ? "Aguarde…" : "Gerar tarefa a partir desta investigação",
       disabled: state.invest.busy ? "disabled" : null,
       onClick: function () { investigationToTask(view.id, (view.repos || [])[0] || ""); },
-    }));
+    })]));
     root.appendChild(card);
   }
 
   function renderInvestHistory(root) {
-    const card = el("section", { class: "card card-eng" }, [
-      el("div", { class: "card-head" }, [
-        el("h2", { text: "Histórico de investigações" }),
-        el("span", { class: "pill pill-eng", text: String(state.invest.list.length) }),
-      ]),
+    const card = el("section", { class: "card" }, [
+      cardHead("Histórico", [countLabel(state.invest.list.length)]),
     ]);
     if (!state.invest.list.length) {
-      card.appendChild(el("p", { class: "muted", text: "Nenhuma investigação ainda." }));
+      card.appendChild(el("p", { class: "muted", text: "Nenhuma investigação ainda. As que você rodar ficam guardadas aqui." }));
       root.appendChild(card);
       return;
     }
-    const list = el("div", { class: "note-list" });
+    const list = el("div", { class: "list" });
     state.invest.list.forEach(function (item) {
+      const active = state.invest.current && state.invest.current.id === item.id;
       list.appendChild(el("button", {
         type: "button",
-        class: "note-item" + (state.invest.current && state.invest.current.id === item.id ? " active" : ""),
-        text: (item.title || "(sem título)") + " · " + (item.repos || []).join(", "),
+        class: "list-item note-item" + (active ? " active" : ""),
+        "aria-current": active ? "true" : null,
         onClick: function () { openInvestigation(item.id); },
-      }));
+      }, [
+        el("span", { class: "list-item-title", text: item.title || "(sem título)" }),
+        el("span", { class: "list-item-meta", text: (item.repos || []).join(", ") || "sem repositório" }),
+      ]));
     });
     card.appendChild(list);
     root.appendChild(card);
   }
 
-  function renderInvestigacao(root) {
-    root.appendChild(pageHeader("02 — INVESTIGAÇÃO", "Investigação", "Descreva um problema, erro ou sintoma; o agente investiga em modo somente leitura e sugere próximos passos."));
-    root.appendChild(el("section", { class: "card card-eng" }, [
-      el("div", { class: "card-head" }, [
-        el("span", { class: "icon-box icon-eng", text: "B" }),
-        el("h2", { text: "Investigação" }),
-        el("span", { class: "pill pill-eng", text: "NOTAS" }),
-      ]),
-      el("p", { text: "Notas manuais por issue, no banco do Forge. Independente do vault Obsidian." }),
-      el("p", { class: "muted", text: "Markdown aparece como texto. O corpo da nota não vai para o log." }),
-    ]));
-    root.appendChild(readonlySeal());
-    if (!canEditNotes()) {
-      root.appendChild(el("section", { class: "card" }, [
-        el("p", { class: "error", text: "Só editor ou owner vê as notas da investigação." }),
-      ]));
-      return;
-    }
-    const mainCol = el("div", { class: "investigacao-col-main" });
-    renderInvestForm(mainCol);
-    renderInvestResult(mainCol);
-    renderInvestHistory(mainCol);
-    mainCol.appendChild(el("h2", { class: "section-divider", text: "Notas por issue" }));
-    mainCol.appendChild(renderIssuePicker());
-
-    const notesCard = el("section", { class: "card card-eng" }, [
-      el("div", { class: "card-head" }, [
-        el("h2", { text: "Notas" }),
-        el("span", { class: "pill pill-eng", text: "FORGE" }),
-      ]),
+  function renderNotesCard() {
+    const selected = state.issues.filter(function (item) { return item.issue_key === state.selectedIssue; })[0];
+    const notesCard = el("section", { class: "card" }, [
+      cardHead("Notas", [selected ? el("span", { class: "count mono", text: issueRowKey(selected) }) : null]),
+      el("p", { class: "card-desc", text: "Notas manuais por issue, guardadas no banco do Forge e independentes do vault Obsidian. O corpo não vai para o log." }),
     ]);
-    const list = el("div", { class: "note-list" });
+    if (!state.selectedIssue) {
+      notesCard.appendChild(el("p", { class: "muted", text: "Selecione uma issue na lista para ver e escrever notas." }));
+      return notesCard;
+    }
+    const list = el("div", { class: "list" });
     if (!state.notes.length) {
-      list.appendChild(el("p", { class: "muted", text: "Nenhuma nota nesta issue." }));
+      list.appendChild(el("p", { class: "list-empty", text: "Nenhuma nota nesta issue." }));
     }
     state.notes.forEach(function (note) {
+      const active = state.selectedNoteId === note.id;
       list.appendChild(el("button", {
         type: "button",
-        class: "note-item" + (state.selectedNoteId === note.id ? " active" : ""),
-        text: (note.title || "(sem título)") + " · " + note.size + " B",
+        class: "list-item note-item" + (active ? " active" : ""),
         onClick: function () { openNote(note.id); },
-      }));
+      }, [
+        el("span", { class: "list-item-title", text: note.title || "(sem título)" }),
+        el("span", { class: "list-item-meta", text: note.size + " B" }),
+      ]));
     });
     const editor = el("div", null, [
       el("label", { text: "Título", for: "note-title" }),
       el("input", { id: "note-title", type: "text", maxlength: "200", value: state.noteForm.title || "" }),
-      el("label", { text: "Corpo (markdown, exibido como texto)", for: "note-body" }),
+      el("label", { text: "Corpo", for: "note-body" }),
     ]);
     const noteBody = el("textarea", { id: "note-body", class: "preview" });
     noteBody.value = state.noteForm.body || "";
     editor.appendChild(noteBody);
-    editor.appendChild(el("div", { class: "row" }, [
+    editor.appendChild(el("p", { class: "field-hint", text: "Markdown é exibido como texto." }));
+    editor.appendChild(actionsRow([
       el("button", {
         type: "button",
         class: "primary",
@@ -2205,27 +2212,30 @@
         disabled: state.busy ? "disabled" : null,
         onClick: function () { newNote(); },
       }),
+      el("span", { class: "spacer" }),
       state.selectedNoteId ? el("button", {
         type: "button",
-        class: "danger",
+        class: "quiet danger",
         text: "Apagar",
         disabled: state.busy ? "disabled" : null,
         onClick: function () { deleteNote(); },
       }) : null,
     ]));
     notesCard.appendChild(el("div", { class: "notes-grid" }, [list, editor]));
-    const relatedCard = el("section", { class: "card card-eng" }, [
-      el("div", { class: "card-head" }, [
-        el("h2", { text: "Issues relacionadas" }),
-        el("span", { class: "pill pill-eng", text: "CONCLUÍDAS" }),
-      ]),
+    return notesCard;
+  }
+
+  function renderRelatedCard() {
+    const relatedCard = el("section", { class: "card" }, [
+      cardHead("Issues relacionadas"),
+      el("p", { class: "card-desc", text: "Issues concluídas parecidas com a selecionada, com os PRs e arquivos que as resolveram." }),
     ]);
     if (!state.selectedIssue) {
       relatedCard.appendChild(el("p", { class: "muted", text: "Selecione uma issue para ver concluídas semelhantes." }));
     } else if (!state.relatedIssues.length) {
       relatedCard.appendChild(el("p", { class: "muted", text: "Nenhuma issue concluída semelhante. Owner pode importar o board." }));
     } else {
-      const relatedList = el("div", { class: "note-list" });
+      const relatedList = el("div", null);
       state.relatedIssues.forEach(function (item) {
         const key = item.issue_key || ((item.repo || "") + "#" + item.number);
         const title = item.title || key;
@@ -2249,23 +2259,43 @@
       });
       relatedCard.appendChild(relatedList);
     }
-    const sources = el("section", { class: "card" }, [
-      el("div", { class: "card-head" }, [
-        el("h2", { text: "Fontes" }),
-        el("span", { class: "pill pill-planned", text: "SOMENTE LEITURA" }),
-      ]),
-      el("p", { class: "muted", text: "Em construção: as outras fontes ainda não consultam a API." }),
-      el("div", { class: "source-grid" }, [
-        sourceCard("B", "icon-eng", "Código", "Repositório Git"),
-        sourceCard("D", "icon-ops", "Portainer", "Containers"),
-        sourceCard("F", "icon-core", "Banco", "MySQL / PostgreSQL"),
-        sourceCard("F", "icon-core", "FTP", "FTP / SFTP"),
-        sourceCard("F", "icon-core", "Obsidian", "Vault (aba Teia)"),
+    return relatedCard;
+  }
+
+  function renderSourcesCard() {
+    return el("section", { class: "card" }, [
+      cardHead("Fontes"),
+      el("p", { class: "card-desc", text: "Em construção: as outras fontes ainda não consultam a API. Todas serão somente leitura." }),
+      el("ul", { class: "source-list" }, [
+        sourceRow("Código", "Repositório Git"),
+        sourceRow("Portainer", "Containers"),
+        sourceRow("Banco", "MySQL / PostgreSQL"),
+        sourceRow("FTP", "FTP / SFTP"),
+        sourceRow("Obsidian", "Vault (aba Teia)"),
       ]),
     ]);
-    root.appendChild(el("div", { class: "investigacao-cols" }, [
-      mainCol,
-      el("aside", { class: "investigacao-col-side" }, [notesCard, relatedCard, sources]),
+  }
+
+  function renderInvestigacao(root) {
+    root.appendChild(pageHeader("Investigação", "Descreva um problema, erro ou sintoma; o agente investiga os repositórios em modo somente leitura e sugere próximos passos."));
+    root.appendChild(readonlySeal());
+    if (!canEditNotes()) {
+      root.appendChild(el("p", { class: "banner banner-warn", text: "Só editor ou owner vê as notas da investigação." }));
+      return;
+    }
+    const mainCol = el("div", { class: "investigacao-col-main" });
+    renderInvestForm(mainCol);
+    renderInvestResult(mainCol);
+    const sideCol = el("aside", { class: "investigacao-col-side" });
+    renderInvestHistory(sideCol);
+    sideCol.appendChild(renderSourcesCard());
+    root.appendChild(el("div", { class: "investigacao-cols" }, [mainCol, sideCol]));
+
+    root.appendChild(el("h2", { class: "section-title", text: "Notas por issue" }));
+    root.appendChild(el("p", { class: "section-desc", text: "Contexto manual que você anexa às issues do GitHub, mais as concluídas que se parecem com elas." }));
+    root.appendChild(el("div", { class: "notes-section" }, [
+      renderIssuePicker(),
+      el("div", null, [renderNotesCard(), renderRelatedCard()]),
     ]));
   }
 
@@ -2274,13 +2304,10 @@
     const indexing = !!state.graphBusy;
     const status = teiaStatus();
     if (!canEditNotes()) {
-      root.appendChild(el("section", { class: "card" }, [
-        el("p", { class: "error", text: "Só editor ou owner lê o vault e o grafo." }),
-      ]));
+      root.appendChild(el("p", { class: "banner banner-warn", text: "Só editor ou owner lê o vault e o grafo." }));
       return;
     }
     if (state.graphNotice || indexing) {
-      root.appendChild(el("p", { class: "banner banner-info", text: state.graphNotice || "Indexando…" }));
       const prog = el("ul", { class: "teia-progress" });
       (state.graphIndex.repos || []).forEach(function (row) {
         const reason = row.error || row.hint || "";
@@ -2288,9 +2315,15 @@
           text: (row.repo || "") + " · " + (row.status || "queued") + (reason ? " (" + reason + ")" : ""),
         }));
       });
-      if ((state.graphIndex.repos || []).length) {
-        root.appendChild(prog);
-      }
+      root.appendChild(el("div", { class: "banner banner-info" }, [
+        el("div", null, [
+          el("p", { class: "login-wait" }, [
+            el("span", { class: "spinner", "aria-hidden": "true" }),
+            el("span", { text: state.graphNotice || "Indexando…" }),
+          ]),
+          (state.graphIndex.repos || []).length ? prog : null,
+        ]),
+      ]));
     }
 
     const repoSelect = el("select", { id: "teia-repo" });
@@ -2304,7 +2337,12 @@
     });
     const q = el("input", {
       id: "teia-query", type: "search", value: state.teiaQuery || "",
-      placeholder: "Buscar",
+      placeholder: "Nome, arquivo ou issue",
+      onKeydown: function (ev) {
+        if (ev.key === "Enter") {
+          applyTeiaFilters();
+        }
+      },
     });
     const types = el("div", { class: "teia-types" });
     TEIA_TYPES.forEach(function (item) {
@@ -2322,18 +2360,17 @@
     });
     const filters = el("div", { class: "teia-filters card" }, [
       el("div", { class: "teia-filter-head" }, [
-        el("span", { class: "icon-box icon-core", text: "F" }),
         el("strong", { text: "Teia de contexto" }),
-        el("span", { class: "pill " + status.cls, text: status.text }),
-        vaultEnabled ? el("span", { class: "pill pill-muted", text: "VAULT" }) : null,
+        el("span", { class: "status " + status.cls, text: status.text }),
+        vaultEnabled ? el("span", { class: "status status-ok", text: "Vault conectado" }) : null,
         el("span", { class: "muted teia-count", text: teiaCountText() }),
       ]),
-      el("div", { class: "graph-query teia-filter-row" }, [
+      el("div", { class: "teia-filter-row" }, [
         el("div", null, [el("label", { text: "Repositório", for: "teia-repo" }), repoSelect]),
         el("div", null, [el("label", { text: "Busca", for: "teia-query" }), q]),
         el("button", {
           type: "button",
-          text: "Aplicar",
+          text: "Aplicar filtros",
           onClick: function () { applyTeiaFilters(); },
         }),
       ]),
@@ -2351,12 +2388,17 @@
     const panel = el("aside", { class: "teia-panel card", id: "teia-detail" });
     fillTeiaDetail(panel);
 
-    const graphCard = el("section", { class: "card card-eng teia-graphs" }, [
-      el("div", { class: "card-head" }, [
-        el("h2", { text: "Grafos Graphify" }),
-        el("span", { class: "pill pill-eng", text: "OFFLINE" }),
+    const graphCard = el("section", { class: "card teia-graphs" }, [
+      cardHead("Índice de código", [
+        isOwner() ? el("div", { class: "card-actions" }, [el("button", {
+          type: "button",
+          class: "sm",
+          text: indexing ? "Indexando…" : "Atualizar grafo",
+          disabled: indexing ? "disabled" : null,
+          onClick: function () { refreshGraph(state.teiaRepo || state.graphRepo); },
+        })]) : null,
       ]),
-      el("p", { class: "muted", text: "Índice de código dos 5 repositórios da allowlist. Sem LLM." }),
+      el("p", { class: "card-desc", text: "Grafos Graphify dos repositórios da allowlist, gerados offline, sem LLM." }),
     ]);
     if (!state.graphs.length) {
       graphCard.appendChild(el("p", { class: "muted", text: "Nenhum grafo ainda." }));
@@ -2365,30 +2407,21 @@
       table.appendChild(el("thead", null, [el("tr", null, [
         el("th", { text: "Repositório" }),
         el("th", { text: "Ref" }),
-        el("th", { text: "Nós" }),
-        el("th", { text: "Arestas" }),
+        el("th", { class: "num", text: "Nós" }),
+        el("th", { class: "num", text: "Arestas" }),
       ])]));
       const tbody = el("tbody");
       state.graphs.forEach(function (g) {
         const ref = g.tag || (g.source === "head" ? ("HEAD " + (g.ref || "")) : (g.ref || g.error || "—"));
         tbody.appendChild(el("tr", null, [
           el("td", { text: g.repo || "" }),
-          el("td", { text: ref }),
-          el("td", { text: String(g.nodes || 0) }),
-          el("td", { text: String(g.edges || 0) }),
+          el("td", { class: "mono", text: ref }),
+          el("td", { class: "num", text: String(g.nodes || 0) }),
+          el("td", { class: "num", text: String(g.edges || 0) }),
         ]));
       });
       table.appendChild(tbody);
-      graphCard.appendChild(table);
-    }
-    if (isOwner()) {
-      graphCard.appendChild(el("button", {
-        type: "button",
-        class: "primary",
-        text: indexing ? "Indexando…" : "Atualizar grafo",
-        disabled: indexing ? "disabled" : null,
-        onClick: function () { refreshGraph(state.teiaRepo || state.graphRepo); },
-      }));
+      graphCard.appendChild(el("div", { class: "table-wrap" }, [table]));
     }
 
     const legend = el("ul", { class: "teia-legend" });
@@ -2486,10 +2519,9 @@
       const nameInput = el("input", { id: "agent-name", type: "text", value: form.name });
       body.appendChild(nameInput);
       body.appendChild(el("label", { text: "Descrição", for: "agent-description" }));
-      const descInput = el("textarea", { id: "agent-description" });
+      const descInput = el("textarea", { id: "agent-description", rows: "3" });
       descInput.value = form.description;
       body.appendChild(descInput);
-      body.appendChild(el("label", { text: "Escopo", for: "agent-scope" }));
       const scopeSel = el("select", { id: "agent-scope" });
       [["development", "Desenvolvimento"], ["company_system", "Sistema da empresa"]].forEach(function (pair) {
         const opt = el("option", { value: pair[0], text: pair[1] });
@@ -2498,31 +2530,32 @@
         }
         scopeSel.appendChild(opt);
       });
-      body.appendChild(scopeSel);
+      const engineInput = el("input", { id: "agent-engine", type: "text", value: form.engine, placeholder: "ex.: claude-code" });
+      body.appendChild(el("div", { class: "field-grid" }, [
+        el("div", { class: "field" }, [el("label", { text: "Escopo", for: "agent-scope" }), scopeSel]),
+        el("div", { class: "field" }, [el("label", { text: "Motor", for: "agent-engine" }), engineInput]),
+      ]));
       body.appendChild(el("label", { text: "Gatilho", for: "agent-trigger" }));
       const triggerInput = el("input", { id: "agent-trigger", type: "text", value: form.trigger, placeholder: "ex.: issue nova no GitHub" });
       body.appendChild(triggerInput);
-      body.appendChild(el("label", { text: "Motor", for: "agent-engine" }));
-      const engineInput = el("input", { id: "agent-engine", type: "text", value: form.engine, placeholder: "ex.: claude-code" });
-      body.appendChild(engineInput);
-      body.appendChild(el("label", { text: "Pode ler (separado por vírgula)", for: "agent-read" }));
+      body.appendChild(el("label", { text: "Pode ler", for: "agent-read" }));
       const readInput = el("input", { id: "agent-read", type: "text", value: form.permissions_read, placeholder: "issues, prs, notas do obsidian" });
       body.appendChild(readInput);
-      body.appendChild(el("label", { text: "Pode alterar (separado por vírgula)", for: "agent-write" }));
+      body.appendChild(el("label", { text: "Pode alterar", for: "agent-write" }));
       const writeInput = el("input", { id: "agent-write", type: "text", value: form.permissions_write, placeholder: "etiquetas, rascunhos de issue" });
       body.appendChild(writeInput);
-      body.appendChild(el("p", { class: "muted", text: "Banco de dados, FTP/SFTP e Portainer nunca recebem escrita, mesmo com aprovação." }));
+      body.appendChild(el("p", { class: "field-hint", text: "Separe os itens por vírgula. Banco de dados, FTP/SFTP e Portainer nunca recebem escrita, mesmo com aprovação." }));
       if (form.error) {
-        body.appendChild(el("p", { class: "error", text: errorMessage(form.error) }));
+        body.appendChild(el("p", { class: "banner banner-error", text: errorMessage(form.error) }));
       }
-      body.appendChild(el("div", { class: "row" }, [
+      body.appendChild(actionsRow([
+        el("button", { type: "button", text: "Cancelar", onClick: function () { modal.close(); } }),
         el("button", {
           type: "button", class: "primary",
           text: form.busy ? "Criando…" : "Criar agente",
           disabled: form.busy ? "disabled" : null,
           onClick: function () { submit(body); },
         }),
-        el("button", { type: "button", text: "Cancelar", onClick: function () { modal.close(); } }),
       ]));
     }
     async function submit(body) {
@@ -2562,42 +2595,44 @@
 
   function scopeChip(scope) {
     if (scope === "company_system") {
-      return el("span", { class: "chip chip-danger-outline", text: "Sistema da empresa" });
+      return el("span", { class: "pill pill-danger-outline", text: "Sistema da empresa" });
     }
-    return el("span", { class: "chip", text: "Desenvolvimento" });
+    return el("span", { class: "pill pill-outline", text: "Desenvolvimento" });
   }
 
   function agentStatusPill(status) {
     const map = {
-      active: { cls: "pill-ok", text: "Ativo" },
-      paused: { cls: "pill-muted", text: "Pausado" },
-      error: { cls: "pill-danger", text: "Com erro" },
+      active: { cls: "status-ok", text: "Ativo" },
+      paused: { cls: "status-muted", text: "Pausado" },
+      error: { cls: "status-danger", text: "Com erro" },
     };
-    const info = map[status] || { cls: "pill-muted", text: status || "—" };
-    return el("span", { class: "pill " + info.cls, text: info.text });
+    const info = map[status] || { cls: "status-muted", text: status || "—" };
+    return el("span", { class: "status " + info.cls, text: info.text });
   }
 
   function successMeter(rate) {
     if (rate === null || rate === undefined) {
       return el("span", { class: "muted", text: "—" });
     }
-    return el("div", { class: "success-cell" }, [
-      el("span", { class: "success-value", text: rate + "%" }),
-      el("meter", {
-        class: "success-meter", min: "0", max: "100", low: "70", high: "90", optimum: "100",
-        value: String(rate),
-      }),
+    const pct = Math.max(0, Math.min(100, Number(rate) || 0));
+    const level = pct >= 90 ? "" : (pct >= 70 ? " is-mid" : " is-low");
+    const fill = el("span");
+    fill.style.width = pct + "%";
+    return el("div", { class: "success-cell", title: "Taxa de sucesso: " + pct + "%" }, [
+      el("span", { class: "success-value", text: pct + "%" }),
+      el("span", { class: "success-bar" + level, "aria-hidden": "true" }, [fill]),
     ]);
   }
 
   function metricCard(kind, value, total, label) {
     const valueChildren = [el("span", { text: String(value) })];
     if (total !== null && total !== undefined) {
-      valueChildren.push(el("span", { class: "metric-total", text: "/ " + total }));
+      valueChildren.push(el("span", { class: "metric-total", text: "de " + total }));
     }
-    return el("div", { class: "metric-card metric-" + kind }, [
-      el("div", { class: "metric-value" }, valueChildren),
+    const nonzero = Number(value) > 0 ? " is-nonzero" : "";
+    return el("div", { class: "metric-card metric-" + kind + nonzero }, [
       el("p", { class: "metric-label", text: label }),
+      el("div", { class: "metric-value" }, valueChildren),
     ]);
   }
 
@@ -2612,18 +2647,11 @@
   }
 
   function renderAgentsTable(root) {
-    const card = el("section", { class: "card card-auto" }, [
-      el("div", { class: "card-head" }, [
-        el("h2", { text: "Agentes" }),
-        el("span", { class: "pill pill-auto", text: String(state.agentes.items.length) }),
-        el("button", {
-          type: "button", class: "primary", text: "+ Novo agente",
-          onClick: function () { openNewAgentModal(); },
-        }),
-      ]),
+    const card = el("section", { class: "card" }, [
+      cardHead("Agentes", [countLabel(state.agentes.items.length)]),
     ]);
     if (!state.agentes.items.length) {
-      card.appendChild(el("p", { class: "muted", text: "Nenhum agente cadastrado ainda. Use \"+ Novo agente\" para criar o primeiro." }));
+      card.appendChild(emptyState("Nenhum agente cadastrado", "Use \"Novo agente\" para criar o primeiro."));
       root.appendChild(card);
       return;
     }
@@ -2640,7 +2668,15 @@
       const selected = agent.id === state.agentes.selectedId;
       tbody.appendChild(el("tr", {
         class: "agent-row" + (selected ? " selected" : ""),
+        tabindex: "0",
+        "aria-selected": selected ? "true" : "false",
         onClick: function () { selectAgent(agent.id); },
+        onKeydown: function (ev) {
+          if (ev.key === "Enter" || ev.key === " ") {
+            ev.preventDefault();
+            selectAgent(agent.id);
+          }
+        },
       }, [
         el("td", null, [el("div", { class: "agent-name-cell" }, [
           el("strong", { text: agent.name }),
@@ -2648,24 +2684,21 @@
         ])]),
         el("td", null, [scopeChip(agent.scope)]),
         el("td", null, [agentStatusPill(agent.status)]),
-        el("td", { text: relativeTime(agent.last_execution_at) }),
+        el("td", { class: "muted", text: relativeTime(agent.last_execution_at) }),
         el("td", null, [successMeter(agent.success_rate)]),
       ]));
     });
     table.appendChild(tbody);
-    card.appendChild(table);
-    card.appendChild(el("p", { class: "muted", text: "Agentes do sistema da empresa rodam isolados e só alteram dados com aprovação humana." }));
+    card.appendChild(el("div", { class: "table-wrap" }, [table]));
+    card.appendChild(el("p", { class: "table-foot", text: "Agentes do sistema da empresa rodam isolados e só alteram dados com aprovação humana." }));
     root.appendChild(card);
   }
 
   function renderSelectedAgent(root) {
-    const card = el("section", { class: "card card-auto" }, [
-      el("div", { class: "card-head" }, [
-        el("h2", { text: "Agente selecionado" }),
-      ]),
-    ]);
     const agent = state.agentes.selected;
+    const card = el("section", { class: "card" });
     if (!agent) {
+      card.appendChild(cardHead("Detalhe"));
       card.appendChild(el("p", { class: "muted", text: "Selecione um agente na lista." }));
       root.appendChild(card);
       return;
@@ -2684,7 +2717,7 @@
     }
     state.agentes.executions.slice(0, 6).forEach(function (execu) {
       execList.appendChild(el("div", { class: "exec-item" }, [
-        el("span", { class: "exec-dot exec-dot-" + (execu.status || "running") }),
+        el("span", { class: "exec-dot exec-dot-" + (execu.status || "running"), "aria-hidden": "true" }),
         el("span", { text: execu.event || execu.status }),
         el("span", { class: "exec-time", text: relativeTime(execu.started_at) }),
       ]));
@@ -2694,41 +2727,39 @@
     if (lastLog) {
       card.appendChild(el("div", { class: "agent-log", text: lastLog }));
     }
+    renderPermissions(card);
     root.appendChild(card);
   }
 
   function renderApprovals(root) {
     const pending = state.agentes.approvals.filter(function (a) { return a.status === "pending"; });
-    const card = el("section", { class: "card card-auto" }, [
-      el("div", { class: "card-head" }, [
-        el("h2", { text: "Aprovações pendentes" }),
-        el("span", { class: "pill pill-auto", text: String(pending.length) }),
-      ]),
+    const card = el("section", { class: "card" }, [
+      cardHead("Aprovações pendentes", [countLabel(pending.length)]),
     ]);
     if (state.agentes.error) {
-      card.appendChild(el("p", { class: "error", text: errorMessage(state.agentes.error) }));
+      card.appendChild(el("p", { class: "banner banner-error", text: errorMessage(state.agentes.error) }));
     }
     if (!pending.length) {
-      card.appendChild(el("p", { class: "muted", text: "Nenhuma aprovação pendente." }));
+      card.appendChild(el("p", { class: "muted", text: "Nada aguardando decisão." }));
       root.appendChild(card);
       return;
     }
     pending.forEach(function (item) {
       card.appendChild(el("div", { class: "approval-item" }, [
         el("div", { class: "approval-info" }, [
-          el("strong", { text: item.action === "write_access" ? "Acesso de escrita · " + item.agent_name : item.agent_name }),
+          el("strong", { text: item.action === "write_access" ? "Acesso de escrita" : item.agent_name }),
           el("span", { text: item.agent_name + " · " + relativeTime(item.requested_at) }),
         ]),
         el("div", { class: "approval-actions" }, [
           el("button", {
-            type: "button", class: "primary", text: "Aprovar",
-            disabled: state.agentes.busy ? "disabled" : null,
-            onClick: function () { decideApproval(item.id, "approve"); },
-          }),
-          el("button", {
-            type: "button", text: "Recusar",
+            type: "button", class: "sm", text: "Recusar",
             disabled: state.agentes.busy ? "disabled" : null,
             onClick: function () { decideApproval(item.id, "reject"); },
+          }),
+          el("button", {
+            type: "button", class: "primary sm", text: "Aprovar",
+            disabled: state.agentes.busy ? "disabled" : null,
+            onClick: function () { decideApproval(item.id, "approve"); },
           }),
         ]),
       ]));
@@ -2738,17 +2769,10 @@
 
   function renderPermissions(root) {
     const agent = state.agentes.selected;
-    const card = el("section", { class: "card card-auto" }, [
-      el("div", { class: "card-head" }, [
-        el("h2", { text: "Permissões" }),
-        agent ? el("span", { class: "muted", text: agent.name }) : null,
-      ]),
-    ]);
     if (!agent) {
-      card.appendChild(el("p", { class: "muted", text: "Selecione um agente para ver as permissões." }));
-      root.appendChild(card);
       return;
     }
+    root.appendChild(el("p", { class: "teia-k", text: "Permissões" }));
     const perms = agent.permissions || { read: [], write: [], denied: [] };
     const rows = [
       ["read", "Pode ler", perms.read],
@@ -2756,32 +2780,40 @@
       ["denied", "Sem acesso", perms.denied],
     ];
     rows.forEach(function (row) {
-      card.appendChild(el("div", { class: "permission-row" }, [
-        el("span", { class: "permission-dot permission-dot-" + row[0] }),
-        el("div", null, [
-          el("strong", { text: row[1] }),
-          el("span", { text: (row[2] && row[2].length) ? row[2].join(", ") : "—" }),
+      root.appendChild(el("div", { class: "permission-row" }, [
+        el("strong", null, [
+          el("span", { class: "permission-dot permission-dot-" + row[0], "aria-hidden": "true" }),
+          el("span", { text: row[1] }),
         ]),
+        el("span", { text: (row[2] && row[2].length) ? row[2].join(", ") : "—" }),
       ]));
     });
-    root.appendChild(card);
   }
 
   function renderAgentes(root) {
-    root.appendChild(pageHeader("05 — AGENTES", "Agentes", "Agentes que trabalham no desenvolvimento e no sistema da empresa."));
-    if (!canEditNotes()) {
-      root.appendChild(el("section", { class: "card" }, [
-        el("p", { class: "error", text: "Só editor ou owner vê a aba Agentes." }),
-      ]));
+    const canCreate = canEditNotes();
+    root.appendChild(pageHeader(
+      "Agentes",
+      "Agentes que trabalham no desenvolvimento e no sistema da empresa, com permissões explícitas e aprovação humana para escrita.",
+      canCreate ? [el("button", {
+        type: "button", class: "primary", text: "Novo agente",
+        onClick: function () { openNewAgentModal(); },
+      })] : null,
+    ));
+    if (!canCreate) {
+      root.appendChild(el("p", { class: "banner banner-warn", text: "Só editor ou owner vê a aba Agentes." }));
       return;
+    }
+    if (state.agentes.notice) {
+      showToast(state.agentes.notice);
+      state.agentes.notice = "";
     }
     renderAgentMetrics(root);
     const left = el("div", null, []);
     renderAgentsTable(left);
     const right = el("div", { class: "agents-right" }, []);
-    renderSelectedAgent(right);
     renderApprovals(right);
-    renderPermissions(right);
+    renderSelectedAgent(right);
     root.appendChild(el("div", { class: "agents-layout" }, [left, right]));
   }
 
@@ -2806,7 +2838,8 @@
       app.appendChild(el("p", { class: "banner banner-error error", text: errorMessage(state.error, state.errorDetail) }));
     }
     if (state.notice) {
-      app.appendChild(el("p", { class: "banner banner-ok ok", text: state.notice }));
+      showToast(state.notice);
+      state.notice = "";
     }
     if (!state.who) {
       setPageTitle("Entrar");
@@ -2867,6 +2900,8 @@
 
   window.addEventListener("hashchange", async function () {
     const tab = activeTab();
+    state.error = "";
+    state.errorDetail = null;
     render();
     if (tab === "investigacao" && canEditNotes()) {
       await loadInvestigacao();
