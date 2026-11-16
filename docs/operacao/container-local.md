@@ -36,7 +36,7 @@ CI e testes unitários **não** chamam GitHub nem Cursor reais.
 | `FORGE_GRAPH_EDGE_LIMIT` | teto de arestas da Teia combinada (padrão `1500`, entre 100 e 20000) |
 | `FORGE_ANTHROPIC_API_KEY` | chave da API da Anthropic (opcional). Vazia = opção "API da Anthropic" desligada na tela. O entrypoint grava em `/run/secrets/forge_anthropic_api_key` (0600) e remove a variável antes do uvicorn |
 | `FORGE_RADAR_STALE_DAYS` | dias sem atividade para uma issue contar como parada (padrão `14`, entre 1 e 365) |
-| `FORGE_RADAR_TIMEZONE` | fuso IANA da agenda do radar (padrão `America/Sao_Paulo`). Liga/desliga e horário ficam na tela (Investigação → Motor e agenda) |
+| `FORGE_RADAR_TIMEZONE` | fuso IANA da agenda do radar (padrão `America/Sao_Paulo`). Liga/desliga e horário ficam no agente (Agentes → Radar de prioridades) |
 | `FORGE_GRAPH_EXTRACT_TIMEOUT` | teto em segundos do `graphify extract` (padrão `1800`, entre 60 e 7200). Monólitos grandes levam ~2 min |
 
 A senha **não** vai para arquivo no repositório. O Postgres lê `secrets.environment`. O `forge_backend` é `read_only: true`; Compose v2 recusa `secrets.environment` nesse caso (`file is the sole supported option`). **Plano B:** tmpfs em `/run/secrets` (mode 0700, uid/gid 1000); o entrypoint grava as senhas da env em arquivos 0600 nesse tmpfs e remove as variáveis do processo antes do uvicorn. O código continua lendo de arquivo. Residual: `docker inspect` ainda mostra a env configurada no serviço. Ainda precisa ser validado no Windows (Docker Desktop).
@@ -133,7 +133,7 @@ A API lista e lê `.md` só dentro da allowlist: `realpath`, sem seguir symlink 
 
 **Pedido automático.** Na Investigação, o pedido pode ser escrito ou vir de uma issue. Em "Usar uma issue", `POST /api/investigations/run` recebe `mode: "issue"` e `issue_key`. O backend lê título, corpo, labels e os 10 comentários mais recentes com `gh issue view` (somente leitura, só repositórios da allowlist), passa tudo pela redação de segredos, junta um pedido padrão de investigação e o complemento opcional de quem pediu. O repositório da issue entra na investigação automaticamente. `GET /api/investigations/issue-preview?issue=<repo>#<n>` devolve a prévia que a tela mostra antes de rodar. Erros: `issue_required`, `repo_not_allowed`, `issue_unavailable` (502), `gh_missing` (503).
 
-**Radar de prioridades.** O botão "Radar de prioridades" abre um painel lateral com o último relatório do board Backlog de TI (projeto 13). O backend roda sozinho **uma vez por dia**, no horário escolhido na tela **Investigação → Motor e agenda** (padrão 13:00, fuso `FORGE_RADAR_TIMEZONE`). **A agenda vem desligada: o radar só roda sozinho depois que o owner ativa ali.** "Analisar agora" continua disponível. Se o servidor subir até 10 minutos depois do horário, ainda roda naquele dia. Editor ou owner pode disparar `POST /api/radar/run` (202; 409 se já houver uma rodada). Cada rodada:
+**Radar de prioridades.** O botão "Radar de prioridades" abre um painel lateral com o último relatório do board Backlog de TI (projeto 13). O backend roda sozinho **uma vez por dia**, no horário configurado no próprio agente (**Agentes → Radar de prioridades → Configuração do agente**; padrão 13:00, fuso `FORGE_RADAR_TIMEZONE`). **A agenda vem desligada: o radar só roda sozinho depois que o owner ativa ali.** "Analisar agora" continua disponível. Se o servidor subir até 10 minutos depois do horário, ainda roda naquele dia. Editor ou owner pode disparar `POST /api/radar/run` (202; 409 se já houver uma rodada). Cada rodada:
 
 1. lê os itens abertos do board com `gh api graphql` (somente leitura, sem mutação);
 2. pontua por regra fixa em `src/forge_core/radar/scoring.py`: prioridade, segurança, tempo parado (`FORGE_RADAR_STALE_DAYS`, padrão 14), sprint e data alvo vencidas, reaberta, sem responsável;
@@ -143,12 +143,12 @@ A API lista e lê `.md` só dentro da allowlist: `realpath`, sem seguir symlink 
 
 O prompt do resumo leva só chave, título, campos do board e motivos, com segredos mascarados. Nada é escrito no GitHub. Leitura: `GET /api/radar`, `GET /api/radar/reports` (últimos 30) e `GET /api/radar/reports/{id}`. "Investigar" num item abre a investigação em modo issue; itens de repositórios fora da allowlist aparecem, mas sem esse botão.
 
-### Motor e agenda (configurações de IA)
+### Motor, modelo e agenda (configurações de IA)
 
-Na Investigação, **Motor e agenda** abre as configurações guardadas em `app_settings` (migração 0022). Só o owner altera; editor consulta. `GET/POST /api/ai-settings`.
+As configurações ficam em `app_settings` (migração 0022). Só o owner altera; editor consulta.
 
-- **Radar:** agenda diária liga/desliga (desligada por padrão) e horário (padrão 13:00); motor e modelo do resumo.
-- **Investigação:** motor e modelo.
+- **Agente "Radar de prioridades"** (aba Agentes → clicar no agente → *Configuração do agente*): agenda diária liga/desliga (desligada por padrão), horário (padrão 13:00), motor e modelo do resumo. `GET /api/agents/{id}` traz `config`; `POST /api/agents/{id}/config` grava. O agente é cadastrado na subida do servidor, então dá para configurar antes da primeira rodada. O gatilho e o motor exibidos no agente acompanham essa configuração.
+- **Investigação** (card *Nova investigação* → botão *Motor: …*): motor e modelo. `GET/POST /api/ai-settings` (chave `investigation`).
 - **Motores:** `Claude Code CLI` (assinatura; padrão) ou `API da Anthropic` (SDK oficial `anthropic`, cobrança por token na conta da API). Modelos: Claude Opus 5.5, Sonnet 5.5 e Haiku 5.5.
 
 Pela CLI, cada chamada carrega o contexto do próprio Claude Code (cerca de 25 mil tokens de cache). Pela API vai só o pedido: no resumo do radar, algumas centenas a poucos milhares de tokens. Na API, o radar usa esforço `low` e teto de 2.048 tokens; a investigação, esforço `medium` e 16.000. Com Opus 5.5 ou Sonnet 5.5 a chamada liga o fallback do servidor (`fallbacks: "default"`), que refaz o pedido em outro modelo se o primeiro recusar.
@@ -158,7 +158,7 @@ Pela CLI, cada chamada carrega o contexto do próprio Claude Code (cerca de 25 m
 1. Em `console.anthropic.com`, crie uma chave em *API Keys* (e cadastre forma de pagamento ou créditos).
 2. No arquivo `.env` do Forge (fora do Git), adicione `FORGE_ANTHROPIC_API_KEY=<SEGREDO>`.
 3. Recrie só o backend: `docker compose -f docker-compose.forge.yml up -d forge_backend`.
-4. Em **Motor e agenda**, a API aparece como "Configurada"; escolha "API da Anthropic" no radar e/ou na investigação.
+4. A API passa a aparecer como "Configurada"; escolha "API da Anthropic" na configuração do agente do radar e/ou no motor da investigação.
 
 A chave nunca aparece na tela, no log, no banco nem no Git. Para desligar, remova a linha do `.env` e recrie o backend; o uso que estiver em "API" passa a falhar com `anthropic_not_configured` até voltar para "Claude Code CLI".
 

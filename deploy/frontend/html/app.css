@@ -2087,3 +2087,15 @@ ul.pending { margin: var(--space-1) 0 var(--space-2); padding-left: var(--space-
 .radar-schedule .status { white-space: normal; }
 .agent-section .segmented { margin-bottom: var(--space-1); }
 .segmented-option:disabled { opacity: 0.55; }
+
+/* Configuração própria do agente (no detalhe, aba Agentes). */
+.agent-config {
+  padding: var(--space-4) var(--space-5) var(--space-5);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface-2);
+}
+.agent-config .segmented-option { background: var(--card); }
+.agent-config .segmented-option.active { background: var(--card); }
+.agent-config > label:first-of-type { margin-top: 0; }
+.agent-config .actions { margin-top: var(--space-4); }

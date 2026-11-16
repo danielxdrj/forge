@@ -11,7 +11,7 @@ from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field
 
 from ..agent_catalog.service import AgentCatalogService
-from ..ai_settings import AiSettings
+from ..ai_settings import AiSettings, SettingsError
 from ..auth.github import DeviceFlow, DeviceFlowError, Transport, UrllibTransport
 from ..auth.store import AuthStore, Principal
 from ..config import Settings
@@ -27,6 +27,7 @@ from ..issues.importer import CompletedIssueImporter
 from ..logging import redact
 from ..notes.service import NoteService
 from ..obsidian.vault import ObsidianVault
+from ..radar.service import AGENT_NAME as RADAR_AGENT_NAME
 from ..radar.service import RadarScheduler, RadarService
 from ..storage.sql import SqlRepository
 from .agents import register_agent_catalog_routes
@@ -559,12 +560,37 @@ def create_app(
         json_error=_json_error,
         need_editor_or_owner=_need_editor_or_owner,
     )
+    def _agent_config(principal: Principal, agent: dict) -> dict | None:
+        """Configuração própria do agente. Hoje só o Radar de prioridades tem."""
+        if agent.get("name") != RADAR_AGENT_NAME:
+            return None
+        view = ai_settings.view(principal)
+        return {
+            "kind": "radar",
+            **view["radar"],
+            "models": view["models"],
+            "server_engine": view["server_engine"],
+            "api": view["api"],
+            "can_edit": view["can_edit"],
+            "timezone": settings.radar_timezone,
+        }
+
+    def _save_agent_config(principal: Principal, agent: dict, body: dict):
+        try:
+            ai_settings.update(principal, {"radar": body})
+        except SettingsError as exc:
+            return _json_error(400, exc.code, hint=exc.hint or None)
+        radar.sync_agent()
+        return _agent_config(principal, agent)
+
     register_agent_catalog_routes(
         app,
         agent_catalog,
         json_error=_json_error,
         need_editor_or_owner=_need_editor_or_owner,
         need_owner=_need_owner,
+        agent_config=_agent_config,
+        save_agent_config=_save_agent_config,
     )
 
     return app

@@ -38,6 +38,9 @@ def main() -> int:
         indexer = getattr(app.state, "graphs", None)
         if indexer is not None:
             indexer.start()
+        radar = getattr(app.state, "radar", None)
+        if radar is not None:
+            radar.ensure_agent()
         radar_scheduler = getattr(app.state, "radar_scheduler", None)
         if radar_scheduler is not None:
             radar_scheduler.start()

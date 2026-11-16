@@ -3,7 +3,7 @@
 Fluxo de uma rodada (agendada ou manual):
 1. lê os itens abertos do board Backlog de TI via `gh` (somente leitura);
 2. pontua com `scoring.analyze` (regra fixa, auditável);
-3. pede ao motor configurado (aba Investigação → Motor e agenda) um resumo curto do topo.
+3. pede ao motor configurado no próprio agente (aba Agentes) um resumo curto do topo.
    Se as listas forem as mesmas da última rodada com resumo, reaproveita o resumo e não
    chama o motor. Se o motor falhar, o relatório sai sem resumo: a ordem nunca depende da IA;
 4. grava o relatório em `radar_reports` (append-only) e uma execução em `agent_executions`.
@@ -354,6 +354,10 @@ class RadarService:
                 (new_trigger, new_engine, self._clock().isoformat(), agent_id),
             )
             tx.audit("sistema:radar", "agent.sync", f"agent:{agent_id}", "ok: gatilho e motor atualizados")
+
+    def ensure_agent(self) -> str:
+        """Cadastra o agente na aba Agentes (idempotente). Chamado na subida do servidor."""
+        return self._ensure_agent()
 
     def _ensure_agent(self) -> str:
         rows = self._repo.fetch("SELECT id FROM agents WHERE name = ?", (AGENT_NAME,))

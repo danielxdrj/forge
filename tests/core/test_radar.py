@@ -403,3 +403,33 @@ def test_radar_routes(tmp_path):
     assert client.get("/api/radar/reports/xyz", headers=HOST).status_code == 404
     started = client.post("/api/radar/run", headers=_h(csrf))
     assert started.status_code in (202, 409)
+
+
+def test_agent_detail_exposes_and_protects_radar_config(tmp_path):
+    pytest.importorskip("fastapi")
+    from fastapi.testclient import TestClient
+    from test_web_investigations import HOST, Scripted, _h, _login
+
+    from forge_core.storage import open_repository
+    from forge_core.web.app import create_app
+
+    settings = _settings(tmp_path, FORGE_DATABASE_URL=f"sqlite:///{tmp_path / 'c.db'}",
+                         FORGE_WEB_HOSTS="127.0.0.1:8090,localhost:8090")
+    repo = open_repository(settings.database_url)
+    seed_allowed_repos(repo)
+    owner = bootstrap(repo, FakeGitHub())
+    person(repo, owner, FakeGitHub(), "maria", 42, "editor")
+    app = create_app(repo, settings, transport=Scripted(), gh=FakeBoardGh(), radar_provider=FakeSummary(),
+                     drafts_dir=tmp_path / "drafts")
+    agent_id = app.state.radar.ensure_agent()
+    client = TestClient(app, base_url="http://127.0.0.1:8090")
+    csrf = _login(client)
+    detail = client.get(f"/api/agents/{agent_id}", headers=HOST).json()
+    assert detail["config"]["kind"] == "radar"
+    assert detail["config"]["auto"] is False
+    assert detail["config"]["time"] == "13:00"
+    assert detail["config"]["can_edit"] is False
+    assert detail["agent"]["trigger"] == "manual (agenda automática desligada)"
+    denied = client.post(f"/api/agents/{agent_id}/config", headers=_h(csrf), json={"auto": True})
+    assert denied.status_code == 403
+    assert app.state.radar.schedule() == (False, "13:00")
