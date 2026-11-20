@@ -90,7 +90,9 @@
       pollTimer: null,
       modal: null,
     },
+    areas: { catalog: null, error: "" },
     agentes: {
+      filter: { status: "", query: "" },
       items: [],
       metrics: null,
       approvals: [],
@@ -461,13 +463,38 @@
       await loadEditorData();
       render();
     }
-    if (canEditNotes() && activeTab() === "investigacao") {
-      await loadInvestigacao();
-      render();
+    await loadForTab();
+  }
+
+  async function loadForTab() {
+    if (!canEditNotes()) {
+      return;
     }
-    if (canEditNotes() && activeTab() === "teia") {
+    const tab = activeTab();
+    if (tab === "investigacao") {
+      await loadInvestigacao();
+    } else if (tab === "teia") {
       await loadTeia();
-      render();
+    } else if (tab === "agentes") {
+      await Promise.all([loadAgentes(), loadAreas()]);
+    } else if (tab === "soon") {
+      await loadAreas();
+    } else {
+      return;
+    }
+    render();
+  }
+
+  async function loadAreas() {
+    if (state.areas.catalog) {
+      return;
+    }
+    const res = await api("/api/areas");
+    if (res.ok) {
+      state.areas.catalog = res.data;
+      state.areas.error = "";
+    } else {
+      state.areas.error = (res.data && res.data.error) || "error";
     }
   }
 
@@ -735,12 +762,35 @@
     return text;
   }
 
-  function activeTab() {
-    const hash = (window.location.hash || "").replace(/^#/, "");
-    if (hash === "investigacao" || hash === "teia" || hash === "agentes") {
-      return hash;
+  // Rota "area/aba" (nav.js). activeTab() devolve o que a tela desenha:
+  // tarefas, investigacao, teia, agentes (de qualquer área), soon ("em breve") ou config.
+  function route() {
+    if (window.ForgeNav) {
+      return window.ForgeNav.parse(window.location.hash);
     }
-    return "tarefas";
+    return { key: "dev/tarefas", area: "dev", tab: "tarefas", item: null };
+  }
+
+  function activeTab() {
+    const r = route();
+    if (r.area === "configuracoes") {
+      return "config";
+    }
+    if (r.item && r.item.soon) {
+      return "soon";
+    }
+    return r.tab;
+  }
+
+  function routeSector() {
+    return window.ForgeNav ? window.ForgeNav.sectorOf(route().area) : "desenvolvimento";
+  }
+
+  function redirectLegacyHash() {
+    const raw = (window.location.hash || "").replace(/^#/, "");
+    if (window.ForgeNav && raw && Object.prototype.hasOwnProperty.call(window.ForgeNav.legacy, raw)) {
+      window.history.replaceState(null, "", "#" + window.ForgeNav.legacy[raw]);
+    }
   }
 
   function setPageTitle(text) {
@@ -814,28 +864,16 @@
   }
 
   function renderNav() {
-    const tab = activeTab();
-    document.querySelectorAll("[data-nav]").forEach(function (link) {
-      const name = link.getAttribute("data-nav");
-      link.classList.toggle("current", name === tab);
+    if (!window.ForgeNav) {
+      return;
+    }
+    window.ForgeNav.render(document.getElementById("nav"), route().key, {
+      loggedIn: !!state.who,
+      owner: isOwner(),
+      reader: canEditNotes(),
     });
-    const conn = document.getElementById("nav-conexoes");
-    if (conn) {
-      if (isOwner()) {
-        conn.removeAttribute("hidden");
-      } else {
-        conn.setAttribute("hidden", "");
-      }
-    }
-    const agentes = document.getElementById("nav-agentes");
-    if (agentes) {
-      if (canEditNotes()) {
-        agentes.removeAttribute("hidden");
-      } else {
-        agentes.setAttribute("hidden", "");
-      }
-    }
   }
+
 
   function statusPill(draftStatus, status) {
     const left = draftStatus || "";
@@ -3363,12 +3401,17 @@
     ]));
   }
 
-  function renderAgentsTable(root) {
+  function renderAgentsTable(root, items) {
+    const count = countLabel(items.length);
+    count.id = "agent-count";
     const card = el("section", { class: "card" }, [
-      cardHead("Agentes", [countLabel(state.agentes.items.length)]),
+      cardHead("Ativos", [count]),
     ]);
-    if (!state.agentes.items.length) {
-      card.appendChild(emptyState("Nenhum agente cadastrado", "Use \"Novo agente\" para criar o primeiro."));
+    if (!items.length) {
+      card.appendChild(emptyState(
+        "Nenhum agente ativo neste setor",
+        routeSector() === "desenvolvimento" ? "Use \"Novo agente\" para criar o primeiro." : "Os agentes planejados estão logo abaixo.",
+      ));
       root.appendChild(card);
       return;
     }
@@ -3381,10 +3424,13 @@
       el("th", { text: "Sucesso" }),
     ])]));
     const tbody = el("tbody");
-    state.agentes.items.forEach(function (agent) {
+    items.forEach(function (agent) {
       const selected = agent.id === state.agentes.selectedId;
       tbody.appendChild(el("tr", {
         class: "agent-row" + (selected ? " selected" : ""),
+        "data-agent-row": "",
+        "data-status": agent.status || "",
+        "data-search": ((agent.name || "") + " " + (agent.description || "")).toLocaleLowerCase("pt-BR"),
         tabindex: "0",
         "aria-selected": selected ? "true" : "false",
         title: "Ver detalhes do agente",
@@ -3400,14 +3446,15 @@
           el("strong", { text: agent.name }),
           el("span", { text: agent.description || "" }),
         ])]),
-        el("td", null, [scopeChip(agent.scope)]),
-        el("td", null, [agentStatusPill(agent.status)]),
-        el("td", { class: "muted", text: relativeTime(agent.last_execution_at) }),
-        el("td", null, [successMeter(agent.success_rate)]),
+        el("td", { "data-label": "Escopo" }, [scopeChip(agent.scope)]),
+        el("td", { "data-label": "Status" }, [agentStatusPill(agent.status)]),
+        el("td", { class: "muted", "data-label": "Última execução", text: relativeTime(agent.last_execution_at) }),
+        el("td", { "data-label": "Sucesso" }, [successMeter(agent.success_rate)]),
       ]));
     });
     table.appendChild(tbody);
     card.appendChild(el("div", { class: "table-wrap" }, [table]));
+    card.appendChild(el("p", { class: "muted agent-none", id: "agent-none", hidden: "hidden", text: "Nenhum agente com esses filtros." }));
     card.appendChild(el("p", { class: "table-foot", text: "Agentes do sistema da empresa rodam isolados e só alteram dados com aprovação humana." }));
     root.appendChild(card);
   }
@@ -3710,8 +3757,8 @@
     root.appendChild(card);
   }
 
-  function renderApprovals(root) {
-    const pending = state.agentes.approvals.filter(function (a) { return a.status === "pending"; });
+  function renderApprovals(root, approvals) {
+    const pending = (approvals || state.agentes.approvals).filter(function (a) { return a.status === "pending"; });
     const card = el("section", { class: "card" }, [
       cardHead("Aprovações pendentes", [countLabel(pending.length)]),
     ]);
@@ -3771,10 +3818,14 @@
 
   function renderAgentes(root) {
     const canCreate = canEditNotes();
+    const sector = routeSector();
+    const isDev = sector === "desenvolvimento";
     root.appendChild(pageHeader(
-      "Agentes",
-      "Agentes que trabalham no desenvolvimento e no sistema da empresa, com permissões explícitas e aprovação humana para escrita.",
-      canCreate ? [el("button", {
+      isDev ? "Agentes" : "Agentes · " + window.ForgeNav.areaLabel(route().area),
+      isDev
+        ? "Agentes que trabalham no desenvolvimento e no sistema da empresa, com permissões explícitas e aprovação humana para escrita."
+        : "Os agentes deste setor ainda estão no plano. Abra um para ver o que ele vai fazer.",
+      canCreate && isDev ? [el("button", {
         type: "button", class: "primary", text: "Novo agente",
         onClick: function () { openNewAgentModal(); },
       })] : null,
@@ -3787,13 +3838,299 @@
       showToast(state.agentes.notice);
       state.agentes.notice = "";
     }
-    renderAgentMetrics(root);
+    const items = state.agentes.items.filter(function (agent) { return agentSector(agent) === sector; });
+    if (isDev) {
+      renderAgentMetrics(root);
+    }
+    root.appendChild(agentFilters(sector));
     const left = el("div", null, []);
-    renderAgentsTable(left);
-    const right = el("div", { class: "agents-right" }, []);
-    renderApprovals(right);
-    renderSelectedAgent(right);
-    root.appendChild(el("div", { class: "agents-layout" }, [left, right]));
+    renderAgentsTable(left, items);
+    const ids = {};
+    items.forEach(function (agent) { ids[agent.id] = true; });
+    const approvals = state.agentes.approvals.filter(function (a) { return ids[a.agent_id]; });
+    if (isDev || approvals.length) {
+      const right = el("div", { class: "agents-right" }, []);
+      renderApprovals(right, approvals);
+      renderSelectedAgent(right);
+      root.appendChild(el("div", { class: "agents-layout" }, [left, right]));
+    } else {
+      root.appendChild(left);
+    }
+    root.appendChild(plannedAgentsCard(sector));
+    applyAgentFilter();
+  }
+
+  // Setor do agente. Até a coluna própria (Fase 1), todo agente cadastrado é de Desenvolvimento.
+  function agentSector(agent) {
+    return agent.sector || "desenvolvimento";
+  }
+
+  function agentFilters(sector) {
+    const f = state.agentes.filter;
+    const sectorSel = el("select", {
+      id: "agent-filter-sector",
+      onChange: function (ev) {
+        const area = window.ForgeNav.areaOfSector(ev.target.value);
+        if (area) {
+          window.location.hash = area + "/agentes";
+        }
+      },
+    }, window.ForgeNav.areas().map(function (a) {
+      return el("option", { value: a.sector, selected: a.sector === sector ? "selected" : null, text: a.label });
+    }));
+    const statusSel = el("select", {
+      id: "agent-filter-status",
+      onChange: function (ev) {
+        f.status = ev.target.value;
+        applyAgentFilter();
+      },
+    }, [["", "Todos"], ["active", "Ativo"], ["paused", "Pausado"], ["error", "Com erro"]].map(function (opt) {
+      return el("option", { value: opt[0], selected: f.status === opt[0] ? "selected" : null, text: opt[1] });
+    }));
+    const query = el("input", {
+      id: "agent-filter-query",
+      type: "search",
+      placeholder: "Nome ou descrição",
+      value: f.query,
+      autocomplete: "off",
+      onInput: function (ev) {
+        f.query = ev.target.value;
+        applyAgentFilter();
+      },
+    });
+    return el("div", { class: "filter-bar", role: "search", "aria-label": "Filtrar agentes" }, [
+      el("div", { class: "filter-field" }, [el("label", { for: "agent-filter-sector", text: "Setor" }), sectorSel]),
+      el("div", { class: "filter-field" }, [el("label", { for: "agent-filter-status", text: "Status" }), statusSel]),
+      el("div", { class: "filter-field filter-grow" }, [el("label", { for: "agent-filter-query", text: "Buscar" }), query]),
+    ]);
+  }
+
+  // Filtra no DOM, sem re-render: a busca não perde o foco a cada tecla.
+  function applyAgentFilter() {
+    const f = state.agentes.filter;
+    const q = f.query.trim().toLocaleLowerCase("pt-BR");
+    let shown = 0;
+    let total = 0;
+    document.querySelectorAll("[data-agent-row]").forEach(function (row) {
+      total += 1;
+      const okStatus = !f.status || row.getAttribute("data-status") === f.status;
+      const okQuery = !q || (row.getAttribute("data-search") || "").indexOf(q) !== -1;
+      row.hidden = !(okStatus && okQuery);
+      if (!row.hidden) {
+        shown += 1;
+      }
+    });
+    document.querySelectorAll("[data-planned-row]").forEach(function (row) {
+      row.hidden = !!q && (row.getAttribute("data-search") || "").indexOf(q) === -1;
+    });
+    const count = document.getElementById("agent-count");
+    if (count) {
+      count.textContent = shown === total ? String(total) : shown + " de " + total;
+    }
+    const none = document.getElementById("agent-none");
+    if (none) {
+      none.hidden = shown > 0 || total === 0;
+    }
+  }
+
+  function engineLabel(code) {
+    const cat = state.areas.catalog;
+    return (cat && cat.engines && cat.engines[code]) || code;
+  }
+
+  function plannedFor(ids) {
+    const cat = state.areas.catalog;
+    if (!cat) {
+      return [];
+    }
+    return ids.map(function (id) {
+      return cat.planned.find(function (a) { return a.id === id; });
+    }).filter(Boolean);
+  }
+
+  function plannedAgentsCard(sector) {
+    const card = el("section", { class: "card" }, [cardHead("Planejados")]);
+    const cat = state.areas.catalog;
+    if (!cat) {
+      card.appendChild(el("p", { class: "muted", text: state.areas.error ? "Não foi possível carregar o catálogo." : "Carregando o catálogo…" }));
+      return card;
+    }
+    const own = cat.planned.filter(function (a) { return a.sector === sector; });
+    const common = cat.planned.filter(function (a) { return a.sector === cat.common; });
+    card.appendChild(plannedList(own));
+    if (common.length) {
+      card.appendChild(el("p", { class: "teia-k planned-sub", text: "Comuns a todos os setores" }));
+      card.appendChild(plannedList(common));
+    }
+    return card;
+  }
+
+  function plannedList(agents) {
+    return el("ul", { class: "planned-list" }, agents.map(function (agent) {
+      const search = (agent.name + " " + agent.summary).toLocaleLowerCase("pt-BR");
+      return el("li", { "data-planned-row": "", "data-search": search }, [el("button", {
+        type: "button",
+        class: "planned-row",
+        onClick: function () { openPlannedAgent(agent); },
+      }, [
+        el("span", { class: "planned-main" }, [
+          el("strong", { text: agent.name }),
+          el("span", { class: "muted", text: agent.summary }),
+        ]),
+        el("span", { class: "planned-meta" }, [
+          el("span", { text: agent.trigger }),
+          el("span", { text: engineLabel(agent.engine) }),
+          el("span", { class: "pill pill-outline", text: "Fase " + agent.phase }),
+        ]),
+      ])]);
+    }));
+  }
+
+  function sectorLabel(sector) {
+    const cat = state.areas.catalog;
+    if (cat && sector === cat.common) {
+      return "Comum a todos os setores";
+    }
+    const area = window.ForgeNav.areaOfSector(sector);
+    return area ? window.ForgeNav.areaLabel(area) : sector;
+  }
+
+  function openPlannedAgent(agent) {
+    openModal({
+      title: agent.name,
+      subtitle: sectorLabel(agent.sector) + " · planejado",
+      variant: "sheet",
+      build: function (body) {
+        body.appendChild(el("p", { class: "planned-desc", text: agent.description }));
+        body.appendChild(el("dl", { class: "meta-list" }, [
+          el("dt", { text: "Gatilho" }), el("dd", { text: agent.trigger }),
+          el("dt", { text: "Motor" }), el("dd", { text: engineLabel(agent.engine) }),
+          el("dt", { text: "Escreve fora do Forge" }), el("dd", { text: agent.writes }),
+          el("dt", { text: "Previsto para" }), el("dd", { text: "Fase " + agent.phase + " do plano mestre" }),
+        ]));
+        body.appendChild(el("p", { class: "muted", text: "Toda escrita fora do Forge passa por aprovação humana. O resultado fica registrado com tokens e custo." }));
+      },
+    });
+  }
+
+  // --- Telas "em breve" ---------------------------------------------------------------------
+  function renderSoon(root) {
+    const r = route();
+    const sector = routeSector();
+    const cat = state.areas.catalog;
+    const info = cat ? cat.tabs.find(function (t) { return t.sector === sector && t.id === r.tab; }) : null;
+    root.appendChild(pageHeader(r.item.label, window.ForgeNav.areaLabel(r.area), [
+      el("span", { class: "pill pill-outline", text: info ? "Em breve · Fase " + info.phase : "Em breve" }),
+    ]));
+    const card = el("section", { class: "card soon-card" });
+    if (!cat) {
+      card.appendChild(el("p", { class: "muted", text: state.areas.error ? "Não foi possível carregar o catálogo." : "Carregando…" }));
+      root.appendChild(card);
+      return;
+    }
+    card.appendChild(el("p", { class: "soon-lead", text: info ? info.summary : "Esta tela ainda não tem conteúdo." }));
+    const agents = info ? plannedFor(info.agents || []) : [];
+    if (agents.length) {
+      card.appendChild(el("p", { class: "teia-k planned-sub", text: "Agentes planejados para esta tela" }));
+      card.appendChild(plannedList(agents));
+    }
+    root.appendChild(card);
+  }
+
+  // --- Configurações ------------------------------------------------------------------------
+  const CONFIG_SECTIONS = [
+    ["conta", "Conta"],
+    ["lembretes", "Lembretes"],
+    ["usuarios", "Usuários e permissões"],
+    ["ia", "IA e custos"],
+    ["aparencia", "Aparência"],
+  ];
+
+  function settingRow(title, desc, control) {
+    return el("div", { class: "setting-row" }, [
+      el("div", { class: "setting-text" }, [
+        el("strong", { text: title }),
+        desc ? el("span", { class: "muted", text: desc }) : null,
+      ]),
+      el("div", { class: "setting-control" }, [control]),
+    ]);
+  }
+
+  function soonButton(label, phase) {
+    return el("button", { type: "button", disabled: "disabled", title: "Disponível na Fase " + phase, text: label });
+  }
+
+  function soonNote(phase, text) {
+    return el("p", { class: "setting-note", text: (text ? text + " " : "") + "Disponível na Fase " + phase + "." });
+  }
+
+  function renderConfig(root) {
+    const current = route().tab;
+    root.appendChild(pageHeader("Configurações", "Conta, lembretes, usuários, IA e aparência."));
+    const menu = el("nav", { class: "settings-menu", "aria-label": "Seções de configurações" }, CONFIG_SECTIONS.map(function (sec) {
+      return el("a", {
+        href: "#configuracoes/" + sec[0],
+        class: "settings-link" + (sec[0] === current ? " current" : ""),
+        "aria-current": sec[0] === current ? "page" : null,
+        text: sec[1],
+      });
+    }));
+    const body = el("section", { class: "card settings-body" });
+    const label = (CONFIG_SECTIONS.find(function (sec) { return sec[0] === current; }) || CONFIG_SECTIONS[0])[1];
+    body.appendChild(cardHead(label));
+    if (current === "conta") {
+      const who = state.who || {};
+      body.appendChild(settingRow("Identidade", "Hoje o acesso é pela conta do GitHub.", el("span", { class: "mono", text: who.login || "—" })));
+      body.appendChild(settingRow("Senha", "Login próprio com e-mail e senha.", soonButton("Trocar senha", 2)));
+      body.appendChild(settingRow("Verificação em duas etapas", "Código de um app autenticador a cada login.", soonButton("Ativar", 2)));
+      body.appendChild(settingRow("Sessões ativas", "Ver e encerrar sessões abertas em outros navegadores.", soonButton("Ver sessões", 2)));
+      body.appendChild(soonNote(2, "Senha, verificação em duas etapas e sessões chegam com o login próprio."));
+    } else if (current === "lembretes") {
+      [["Prazos e vencimentos", "Aviso antes de um prazo ou conta vencer."],
+        ["Resumo do dia", "Um resumo curto pela manhã."],
+        ["Aprovações pendentes", "Quando um agente pede aprovação."]].forEach(function (row) {
+        body.appendChild(settingRow(row[0], row[1], el("input", { type: "checkbox", disabled: "disabled", "aria-label": row[0] })));
+      });
+      body.appendChild(soonNote(5, "Os avisos chegam no sistema e, se você quiser, por e-mail."));
+    } else if (current === "usuarios") {
+      if (!isOwner()) {
+        body.appendChild(el("p", { class: "muted", text: "Só master gerencia usuários e permissões." }));
+      } else {
+        const roles = (state.who && state.who.roles) || [];
+        body.appendChild(settingRow("Seus papéis", "Hoje os papéis são concedidos pela linha de comando.", el("span", { text: roles.join(", ") || "—" })));
+        body.appendChild(settingRow("Convidar pessoa", "Convite por e-mail, com papel e setores.", soonButton("Convidar", 2)));
+        body.appendChild(settingRow("Setores", "Desenvolvimento, Jurídico e Financeiro: cada pessoa vê os seus.", soonButton("Gerenciar", 2)));
+      }
+    } else if (current === "ia") {
+      body.appendChild(settingRow("Motor e agenda", "Ficam na configuração de cada agente.", el("a", { href: "#dev/agentes", text: "Abrir Agentes" })));
+      body.appendChild(settingRow("Tetos de custo", "Limite por execução, por agente por dia e por mês.", soonButton("Definir", 1)));
+      body.appendChild(settingRow("Consumo do mês", "Tokens e custo somados de todos os agentes.", soonButton("Ver", 1)));
+    } else {
+      body.appendChild(settingRow("Tema", "Claro, escuro ou igual ao do sistema.", themeChoice()));
+    }
+    root.appendChild(el("div", { class: "settings-layout" }, [menu, body]));
+  }
+
+  function themeChoice() {
+    const current = window.ForgeTheme ? window.ForgeTheme.preference() : "system";
+    const options = [["light", "Claro"], ["dark", "Escuro"], ["system", "Sistema"]];
+    const group = el("div", { class: "segmented segmented-compact", role: "radiogroup", "aria-label": "Tema" });
+    options.forEach(function (opt) {
+      const active = current === opt[0];
+      group.appendChild(el("button", {
+        type: "button",
+        role: "radio",
+        "aria-checked": active ? "true" : "false",
+        class: "segmented-option" + (active ? " active" : ""),
+        onClick: function () {
+          if (window.ForgeTheme) {
+            window.ForgeTheme.set(opt[0]);
+          }
+          render({ keepState: true });
+        },
+      }, [el("span", { class: "segmented-title", text: opt[1] })]));
+    });
+    return group;
   }
 
   function render(opts) {
@@ -3839,8 +4176,18 @@
       return;
     }
     if (tab === "agentes") {
-      setPageTitle("Agentes");
+      setPageTitle(route().area === "dev" ? "Agentes" : "Agentes · " + window.ForgeNav.areaLabel(route().area));
       renderAgentes(app);
+      return;
+    }
+    if (tab === "soon") {
+      setPageTitle(route().item.label);
+      renderSoon(app);
+      return;
+    }
+    if (tab === "config") {
+      setPageTitle("Configurações");
+      renderConfig(app);
       return;
     }
     setPageTitle("Tarefas");
@@ -3855,23 +4202,11 @@
       await loadWhoami();
       state.loading = false;
       render();
-      const tab = activeTab();
       if (isEditor()) {
         await loadEditorData();
         render();
       }
-      if (canEditNotes() && tab === "investigacao") {
-        await loadInvestigacao();
-        render();
-      }
-      if (canEditNotes() && tab === "teia") {
-        await loadTeia();
-        render();
-      }
-      if (canEditNotes() && tab === "agentes") {
-        await loadAgentes();
-        render();
-      }
+      await loadForTab();
     } catch (err) {
       state.error = "api_unreachable";
       state.loading = false;
@@ -3880,7 +4215,6 @@
   }
 
   window.addEventListener("hashchange", async function () {
-    const tab = activeTab();
     [state.agentes.detailModal, state.radar.modal, state.ai.modal].forEach(function (modal) {
       if (modal) {
         modal.close();
@@ -3888,17 +4222,10 @@
     });
     state.error = "";
     state.errorDetail = null;
+    redirectLegacyHash();
     render();
-    if (tab === "investigacao" && canEditNotes()) {
-      await loadInvestigacao();
-    }
-    if (tab === "teia" && canEditNotes()) {
-      await loadTeia();
-    }
-    if (tab === "agentes" && canEditNotes()) {
-      await loadAgentes();
-    }
-    render();
+    await loadForTab();
   });
+  redirectLegacyHash();
   boot();
 })();

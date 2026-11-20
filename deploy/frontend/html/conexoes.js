@@ -461,26 +461,16 @@ state.notice = form.id ? "Conexão atualizada. O segredo não é exibido." : "Co
   }
 
   function renderNav() {
-    document.querySelectorAll("[data-nav]").forEach(function (link) {
-      link.classList.toggle("current", link.getAttribute("data-nav") === "conexoes");
+    if (!window.ForgeNav) {
+      return;
+    }
+    window.ForgeNav.render(document.getElementById("nav"), "dev/conexoes", {
+      loggedIn: !!state.who,
+      owner: isOwner(),
+      reader: isReader(),
     });
-    const conn = document.getElementById("nav-conexoes");
-    if (conn) {
-      if (isOwner()) {
-        conn.removeAttribute("hidden");
-      } else {
-        conn.setAttribute("hidden", "");
-      }
-    }
-    const agentes = document.getElementById("nav-agentes");
-    if (agentes) {
-      if (isReader()) {
-        agentes.removeAttribute("hidden");
-      } else {
-        agentes.setAttribute("hidden", "");
-      }
-    }
   }
+
 
   function pageHeader(title, subtitle) {
     return el("header", { class: "page-header" }, [
