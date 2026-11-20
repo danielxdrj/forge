@@ -25,6 +25,8 @@ GRANT SELECT, INSERT, UPDATE ON completed_issues TO <PAPEL_APP>;
 GRANT SELECT, INSERT, UPDATE ON agents, agent_approvals TO <PAPEL_APP>;
 -- Execuções do catálogo: append-only (sem UPDATE/DELETE).
 GRANT SELECT, INSERT ON agent_executions TO <PAPEL_APP>;
+-- Passos de cada execução (0023): append-only, gravados junto com a execução.
+GRANT SELECT, INSERT ON agent_execution_events TO <PAPEL_APP>;
 -- Radar de prioridades (0020): histórico append-only (sem UPDATE/DELETE).
 GRANT SELECT, INSERT ON radar_reports TO <PAPEL_APP>;
 -- Configurações do painel (0022): o owner altera pela tela. Sem DELETE.

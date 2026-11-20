@@ -17,8 +17,10 @@ from ..auth.store import AuthStore, Principal
 from ..errors import AuthorizationError, ForgeError
 from ..logging import redact
 from ..storage.sql import SqlRepository
+from .steps import ExecutionSteps, insert_steps, load_steps
 
 SCOPES = ("development", "company_system")
+SECTORS = ("desenvolvimento", "juridico", "financeiro")
 STATUSES = ("active", "paused", "error")
 EXECUTION_STATUSES = ("ok", "error", "running")
 APPROVAL_DECISIONS = ("approved", "rejected")
@@ -66,6 +68,7 @@ class AgentView:
     permissions_denied: tuple
     created_at: str
     updated_at: str
+    sector: str = "desenvolvimento"
 
     def as_json(self) -> dict:
         return {
@@ -73,6 +76,7 @@ class AgentView:
             "name": self.name,
             "description": self.description,
             "scope": self.scope,
+            "sector": self.sector,
             "status": self.status,
             "trigger": self.trigger,
             "engine": self.engine,
@@ -195,14 +199,14 @@ def _loads_list(raw) -> list:
 
 def _agent_from_row(row) -> AgentView:
     (ident, name, description, scope, status, trigger, engine,
-     read_json, write_json, denied_json, created_at, updated_at) = row
+     read_json, write_json, denied_json, created_at, updated_at, sector) = row
     return AgentView(
         id=ident, name=name, description=description, scope=scope, status=status,
         trigger=trigger, engine=engine,
         permissions_read=tuple(_loads_list(read_json)),
         permissions_write=tuple(_loads_list(write_json)),
         permissions_denied=tuple(_loads_list(denied_json)),
-        created_at=created_at, updated_at=updated_at,
+        created_at=created_at, updated_at=updated_at, sector=sector or "desenvolvimento",
     )
 
 
@@ -256,7 +260,7 @@ def _approval_from_row(row) -> ApprovalView:
 
 AGENT_COLUMNS = (
     "id, name, description, scope, status, trigger, engine, "
-    "permissions_read, permissions_write, permissions_denied, created_at, updated_at"
+    "permissions_read, permissions_write, permissions_denied, created_at, updated_at, sector"
 )
 
 
@@ -315,6 +319,7 @@ class AgentCatalogService:
             (agent_id, DETAIL_EXECUTIONS),
         )
         executions = [_execution_from_row(r) for r in rows]
+        steps = load_steps(self._repo, [e.id for e in executions])
         approvals = self._repo.fetch(
             "SELECT ap.id, ap.agent_id, a.name, ap.action, ap.details, ap.status, "
             "ap.requested_at, ap.decided_at, ap.decided_by "
@@ -324,7 +329,7 @@ class AgentCatalogService:
         )
         return {
             "agent": agent.as_json(),
-            "executions": [e.as_json() for e in executions],
+            "executions": [{**e.as_json(), "steps": steps.get(e.id, [])} for e in executions],
             "stats": self._usage_stats(agent_id),
             "approvals": [_approval_from_row(r).as_json() for r in approvals],
         }
@@ -389,6 +394,9 @@ class AgentCatalogService:
         scope = str(payload.get("scope") or "").strip()
         if scope not in SCOPES:
             raise AgentRuleError("invalid_scope")
+        sector = str(payload.get("sector") or "desenvolvimento").strip()
+        if sector not in SECTORS:
+            raise AgentRuleError("invalid_sector")
         status = str(payload.get("status") or "active").strip()
         if status not in STATUSES:
             raise AgentRuleError("invalid_status")
@@ -404,10 +412,10 @@ class AgentCatalogService:
         try:
             with self._repo.transaction() as tx:
                 tx.execute(
-                    f"INSERT INTO agents ({AGENT_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    f"INSERT INTO agents ({AGENT_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         agent_id, name, description, scope, status, trigger, engine,
-                        json.dumps(read), json.dumps(write), json.dumps(denied), ts, ts,
+                        json.dumps(read), json.dumps(write), json.dumps(denied), ts, ts, sector,
                     ),
                 )
                 if needs_approval:
@@ -418,7 +426,7 @@ class AgentCatalogService:
                     )
                 tx.audit(
                     principal.identity_id, "agent.create", f"agent:{agent_id}",
-                    f"ok: scope={scope} status={status} approval_pending={needs_approval}",
+                    f"ok: scope={scope} sector={sector} status={status} approval_pending={needs_approval}",
                 )
         except Exception as exc:
             if type(exc).__name__ in ("IntegrityError", "UniqueViolation"):
@@ -466,7 +474,7 @@ class AgentCatalogService:
     def record_execution(
         self, agent_id: str, *, status: str, event: str = "", log: str = "",
         duration_ms: int | None = None, started_at: str | None = None, finished_at: str | None = None,
-        usage: dict | None = None, cost: float | None = None,
+        usage: dict | None = None, cost: float | None = None, steps: ExecutionSteps | None = None,
     ) -> ExecutionView:
         """Registro de execução (chamado por quem orquestra de fato; aqui só persistimos)."""
         if status not in EXECUTION_STATUSES:
@@ -482,6 +490,7 @@ class AgentCatalogService:
                 (exec_id, agent_id, ts, finished_at, status, event, duration_ms, redact(log),
                  *usage_columns(usage, cost)),
             )
+            insert_steps(tx, exec_id, steps)
             tx.audit("sistema:agent_catalog", "agent.execution", f"agent:{agent_id}", f"ok: status={status}")
         rows = self._repo.fetch(
             f"SELECT {EXECUTION_COLUMNS} FROM agent_executions WHERE id = ?",

@@ -27,6 +27,7 @@ def register_investigation_routes(
             "cursor_cli_missing": 503,
             "gh_missing": 503,
             "issue_unavailable": 502,
+            "busy": 409,
         }.get(exc.code, 400)
         return json_error(status, exc.code, hint=exc.hint or None)
 

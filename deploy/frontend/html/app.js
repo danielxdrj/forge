@@ -710,6 +710,7 @@
       cursor_cli_missing: "Cursor CLI não está disponível no container.",
       claude_cli_error: "Falha ao rodar o Claude Code CLI.",
       provider_error: "Falha no motor de investigação.",
+      busy: "Já há uma investigação em andamento. Espere ela terminar.",
       confirm_mismatch: "Confirmação não bate com owner/repo#número.",
       issue_delete_forbidden: "Sem permissão de admin para apagar; é possível fechar como não planejada.",
       invalid_issue_delete: "Não foi possível identificar a issue.",
@@ -3549,11 +3550,34 @@
           el("div", null, [el("dt", { text: "Modelo" }), el("dd", { class: "mono", text: u.model || "—" })]),
         ]),
         u.total_tokens == null ? el("p", { class: "field-hint", text: "O motor não informou uso nesta execução (execução antiga, sem chamada ao motor ou motor sem esse dado)." }) : null,
+        execSteps(execu.steps || []),
         execu.log ? el("div", { class: "agent-log", text: execu.log }) : null,
       ]);
       rows.push(el("tr", { class: "exec-detail-row" }, [el("td", { colspan: "5" }, [detail])]));
     }
     return rows;
+  }
+
+  // Linha do tempo da execução (agent_execution_events). Execuções antigas não têm passos.
+  function execSteps(steps) {
+    if (!steps.length) {
+      return null;
+    }
+    const kinds = { step: "Passo", model: "Motor", error: "Erro" };
+    return el("ol", { class: "exec-steps", "aria-label": "Passos da execução" }, steps.map(function (s) {
+      const extra = [];
+      if (s.input_tokens != null || s.output_tokens != null) {
+        extra.push(fmtInt(s.input_tokens) + " entrada · " + fmtInt(s.output_tokens) + " saída");
+      }
+      if (s.duration_ms != null) {
+        extra.push(fmtDuration(s.duration_ms));
+      }
+      return el("li", { class: "exec-step exec-step-" + s.kind }, [
+        el("span", { class: "exec-step-kind", text: kinds[s.kind] || s.kind }),
+        el("span", { class: "exec-step-msg", text: s.message }),
+        extra.length ? el("span", { class: "exec-step-extra", text: extra.join(" · ") }) : null,
+      ]);
+    }));
   }
 
   function toggleExec(id) {
