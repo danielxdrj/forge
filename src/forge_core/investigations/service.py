@@ -18,11 +18,13 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 import time
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
+from ..agent_catalog.steps import ExecutionSteps, insert_steps
 from ..auth.store import AuthStore, Principal
 from ..draft.claude_cli import READONLY_DISALLOWED_TOOLS, ClaudeCliAdapter
 from ..draft.engine import select_engine_adapter
@@ -236,9 +238,19 @@ class InvestigationService:
         self._graph_prompt_max_chars = graph_prompt_max_chars
         self._claude_max_turns = claude_max_turns
         self._env = env
+        # Uma investigação por vez: cada uma pode custar caro e prende o motor por minutos.
+        self._running = threading.Lock()
 
     def run(self, principal: Principal, payload: dict) -> InvestigationView:
         _require_editor_or_owner(self._store, principal)
+        if not self._running.acquire(blocking=False):
+            raise InvestigationRuleError("busy")
+        try:
+            return self._run(principal, payload)
+        finally:
+            self._running.release()
+
+    def _run(self, principal: Principal, payload: dict) -> InvestigationView:
         if not isinstance(payload, dict):
             raise InvestigationRuleError("invalid_json")
         mode = _mode(payload.get("mode"))
@@ -262,19 +274,36 @@ class InvestigationService:
             description = _description(payload.get("description"))
             title = _title_from(description)
             prompt = self._build_prompt(description, repos, connection_meta)
+        steps = ExecutionSteps()
+        steps.step(
+            f"Pedido recebido ({'issue ' + issue_key if mode == 'issue' else 'texto livre'}): "
+            f"{len(repos)} repositório(s), {len(connection_ids)} conexão(ões)"
+        )
+        steps.step(f"Contexto montado: {_kb(prompt)} de prompt")
         adapter = self._adapter()
+        engine_name = getattr(adapter, "name", "") or ""
+        started = time.monotonic()
+        started_at = _now()
         try:
-            started = time.monotonic()
-            started_at = _now()
             response = adapter.complete(prompt)
-        except DraftError:
+        except DraftError as exc:
+            steps.error(f"Motor {engine_name or 'desconhecido'} falhou: {exc.code}")
+            self._record_execution(started_at, started, title, None, steps, error=exc.code)
             raise
         except Exception as exc:
+            steps.error(f"Motor {engine_name or 'desconhecido'} falhou: provider_error")
+            self._record_execution(started_at, started, title, None, steps, error="provider_error")
             raise InvestigationRuleError("provider_error") from exc
+        usage = getattr(response, "usage", None) or {}
+        model = str(usage.get("model") or "")
+        steps.model(
+            f"Resposta do motor {engine_name}".strip() + (f" ({model})" if model else ""),
+            usage=usage,
+            duration_ms=int((time.monotonic() - started) * 1000),
+        )
         result = _capped(redact_secrets(response.text), MAX_RESULT_BYTES)
         inv_id = str(uuid.uuid4())
         ts = _now()
-        engine_name = getattr(adapter, "name", "") or ""
         with self._repo.transaction() as tx:
             tx.execute(
                 "INSERT INTO investigation_notes "
@@ -293,7 +322,8 @@ class InvestigationService:
                 f"ok: mode={mode} repos={len(repos)} connections={len(connection_ids)} "
                 f"bytes={len(result.encode('utf-8'))}",
             )
-        self._record_execution(started_at, started, title, response)
+        steps.step(f"Resultado salvo: {_kb(result)}")
+        self._record_execution(started_at, started, title, response, steps)
         return self._load(inv_id)
 
     # --- agente na aba Agentes ---
@@ -333,19 +363,26 @@ class InvestigationService:
             tx.audit("sistema:investigacao", "agent.register", f"agent:{agent_id}", "ok: investigação")
         return agent_id
 
-    def _record_execution(self, started_at: str, started: float, title: str, response) -> None:
+    def _record_execution(
+        self, started_at: str, started: float, title: str, response, steps: ExecutionSteps, *, error: str = "",
+    ) -> None:
+        """Grava a execução (sucesso ou falha do motor) com os passos, na aba Agentes."""
         from ..agent_catalog.service import EXECUTION_COLUMNS, usage_columns
 
+        status = "error" if error else "ok"
+        event = f"falha: {error} · {title}" if error else title
         try:
             agent_id = self.ensure_agent()
+            exec_id = str(uuid.uuid4())
             with self._repo.transaction() as tx:
                 tx.execute(
                     f"INSERT INTO agent_executions ({EXECUTION_COLUMNS}) "
                     "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    (str(uuid.uuid4()), agent_id, started_at, _now(), "ok", title[:200],
+                    (exec_id, agent_id, started_at, _now(), status, event[:200],
                      int((time.monotonic() - started) * 1000), "",
                      *usage_columns(getattr(response, "usage", None), getattr(response, "cost", None))),
                 )
+                insert_steps(tx, exec_id, steps)
         except Exception:  # noqa: BLE001 - registro na aba Agentes não pode derrubar a investigação
             return
 
@@ -556,3 +593,8 @@ def _loads_list(raw) -> list:
     except (TypeError, json.JSONDecodeError):
         return []
     return data if isinstance(data, list) else []
+
+
+def _kb(text: str) -> str:
+    size = len((text or "").encode("utf-8"))
+    return f"{size / 1024:.1f} KB" if size >= 1024 else f"{size} B"

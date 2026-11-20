@@ -25,6 +25,7 @@ from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from ..agent_catalog.service import EXECUTION_COLUMNS, usage_columns
+from ..agent_catalog.steps import ExecutionSteps, insert_steps
 from ..ai_settings import AiSettings
 from ..auth.store import AuthStore, Principal
 from ..config import Settings
@@ -401,13 +402,37 @@ class RadarService:
             log_text = ""
         usage = dict(report.get("usage") or {})
         cost = usage.pop("cost_usd", None)
+        steps = _radar_steps(report, usage)
+        exec_id = str(uuid.uuid4())
         with self._repo.transaction() as tx:
             tx.execute(
                 f"INSERT INTO agent_executions ({EXECUTION_COLUMNS}) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (str(uuid.uuid4()), agent_id, started_at, self._clock().isoformat(), status, event,
+                (exec_id, agent_id, started_at, self._clock().isoformat(), status, event,
                  duration_ms, redact(log_text), *usage_columns(usage, cost)),
             )
+            insert_steps(tx, exec_id, steps)
+
+
+def _radar_steps(report: dict, usage: dict) -> ExecutionSteps:
+    """Linha do tempo da rodada, a partir do relatório já gravado."""
+    steps = ExecutionSteps()
+    if report["status"] != "ok":
+        steps.error(f"Falha ao ler o board: {report.get('error') or 'erro'}")
+        return steps
+    stats = report.get("stats") or {}
+    steps.step(f"Board lido: {stats.get('open', 0)} itens abertos")
+    steps.step(f"Análise por regra: {stats.get('now', 0)} para concluir já, {stats.get('stale', 0)} paradas")
+    if report.get("reused_summary"):
+        steps.step("Sem mudanças desde a última rodada: resumo reaproveitado, motor não chamado")
+    elif report.get("summary_error"):
+        steps.error(f"Resumo não gerado: {report['summary_error']}")
+    elif usage:
+        model = str(usage.get("model") or "")
+        steps.model("Resumo pelo motor" + (f" ({model})" if model else ""), usage=usage)
+    elif not report.get("summary"):
+        steps.step("Nada para concluir nem parado: motor não chamado")
+    return steps
 
 
 def _report_from_row(row) -> dict:
