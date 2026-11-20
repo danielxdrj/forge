@@ -33,6 +33,7 @@ from ..radar.service import RadarScheduler, RadarService
 from ..storage.sql import SqlRepository
 from .agents import register_agent_catalog_routes
 from .ai_settings import register_ai_settings_routes
+from .areas import register_area_routes
 from .connections import register_connection_routes
 from .context_graph import register_context_graph_routes
 from .graphs import register_graph_routes
@@ -561,6 +562,7 @@ def create_app(
         json_error=_json_error,
         need_editor_or_owner=_need_editor_or_owner,
     )
+    register_area_routes(app, need_editor_or_owner=_need_editor_or_owner)
     def _agent_config(principal: Principal, agent: dict) -> dict | None:
         """Configuração própria do agente. Hoje só o Radar de prioridades tem."""
         view = ai_settings.view(principal)

@@ -42,6 +42,37 @@
 
   applyTheme(currentTheme());
 
+  // Preferência explícita ("light"/"dark") ou "system" (segue o sistema operacional).
+  window.ForgeTheme = {
+    preference: function () {
+      return readStored() || "system";
+    },
+    set: function (value) {
+      try {
+        if (value === "light" || value === "dark") {
+          window.localStorage.setItem(STORAGE_KEY, value);
+        } else {
+          window.localStorage.removeItem(STORAGE_KEY);
+        }
+      } catch (err) {
+        /* modo privado: vale só nesta página */
+      }
+      applyTheme(value === "light" || value === "dark" ? value : systemTheme());
+    },
+  };
+
+  if (window.matchMedia) {
+    var media = window.matchMedia("(prefers-color-scheme: dark)");
+    var onSystemChange = function () {
+      if (!readStored()) {
+        applyTheme(systemTheme());
+      }
+    };
+    if (media.addEventListener) {
+      media.addEventListener("change", onSystemChange);
+    }
+  }
+
   document.addEventListener("DOMContentLoaded", function () {
     applyTheme(currentTheme());
     var button = document.getElementById("theme-toggle");

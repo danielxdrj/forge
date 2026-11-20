@@ -174,6 +174,8 @@ def test_nginx_proxies_api_sets_forwarded_headers_and_csp():
     anchors = re.findall(r'el\("a", \{[^}]+\}', js)
     assert anchors
     for spec in anchors:
+        if 'href: "#' in spec:
+            continue  # link interno (rota da própria SPA) não abre outra aba
         assert 'target: "_blank"' in spec
         assert 'rel: "noopener noreferrer"' in spec
     assert "safeLink(state.pending.verification_uri)" in js
@@ -220,7 +222,7 @@ def test_frontend_shell_tabs_and_theme():
     assert ".pill-ok" in css
     assert ".pill-warn" in css
     assert ".teia-page" in css
-    assert "360px" in css
+    assert "grid-template-columns: 20rem minmax(0, 1fr)" in css
     assert ".teia-web" in css
     assert "#0E0E10" in css
     assert ".pill-danger" in css
@@ -253,13 +255,16 @@ def test_frontend_shell_tabs_and_theme():
     assert 'class="logo-amp"' in html
     assert "&amp;" in html
     assert "FORGE" in html
-    assert 'data-nav="tarefas"' in html
-    assert 'data-nav="investigacao"' in html
-    assert 'data-nav="teia"' in html
-    assert 'id="nav-conexoes"' in html
-    assert re.search(r'id="nav-conexoes"[^>]*\bhidden\b', html)
-    assert "Investigação" in html
-    assert "Teia de contexto" in html
+    # A sidebar é gerada por nav.js (áreas por setor), igual nas duas páginas.
+    nav_js = (ROOT / "deploy/frontend/html/nav.js").read_text(encoding="utf-8")
+    for page in (html, html_conn):
+        assert '<nav id="nav" aria-label="Navegação"></nav>' in page
+        assert '<script src="/nav.js" defer></script>' in page
+    for label in ("Desenvolvimento", "Jurídico", "Financeiro", "Configurações", "Investigação", "Teia de contexto"):
+        assert label in nav_js, label
+    assert 'access: "owner", href: "/conexoes"' in nav_js
+    assert "innerHTML" not in nav_js
+    assert "ForgeNav.render" in js and "ForgeNav.render" in conexoes
     assert 'id="session"' in html
     assert "Em construção" in js
     assert "issue-list-scroll" in js
@@ -291,8 +296,6 @@ def test_frontend_shell_tabs_and_theme():
     assert "statusPill" in js
     assert "Sair" in js
     assert "X-CSRF-Token" in js
-    assert 'id="nav-conexoes"' in html_conn
-    assert re.search(r'id="nav-conexoes"[^>]*\bhidden\b', html_conn)
     assert "isOwner" in conexoes
     assert "Carregando…" in conexoes
     assert "Sair" in conexoes
