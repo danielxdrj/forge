@@ -357,6 +357,10 @@ body.teia-open .workspace {
   border-top: 1px solid var(--border);
 }
 .nav-soon { color: var(--muted); }
+#nav { overflow-x: hidden; }
+.nav-item { min-width: 0; }
+.nav-item > span:not(.nav-icon):not(.nav-soon-tag) { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.nav-soon-tag { flex-shrink: 0; }
 .nav-soon-tag {
   margin-left: auto;
   font-size: var(--text-xs);
@@ -1780,7 +1784,7 @@ ul.pending { margin: var(--space-1) 0 var(--space-2); padding-left: var(--space-
   .nav-group-head { display: none; }
   .nav-group-items, .nav-group.is-open .nav-group-items { display: flex; flex-direction: row; margin: 0; }
   .nav-group-config, .nav-group-config.is-current { display: none; padding: 0; border: 0; }
-  .nav-soon-tag { display: none; }
+  .nav-item > .nav-soon-tag, .nav-item.current > .nav-soon-tag { display: none; }
   .teia-web { min-height: 26rem; }
   .nav-item { height: 2rem; padding: 0 var(--space-3); flex-shrink: 0; }
   .sidebar-bottom { margin: 0; padding: 0; flex-direction: row; flex-shrink: 0; }
@@ -2224,6 +2228,7 @@ ul.pending { margin: var(--space-1) 0 var(--space-2); padding-left: var(--space-
 }
 .planned-sub { margin: var(--space-5) 0 var(--space-2); }
 .planned-desc { margin-top: 0; line-height: 1.55; }
+.planned-note { margin-top: var(--space-5); padding-top: var(--space-3); border-top: 1px solid var(--border); font-size: var(--text-sm); }
 
 .soon-card { max-width: 46rem; }
 .soon-lead { margin: 0; font-size: var(--text-lg); line-height: 1.5; color: var(--fg-2); }

@@ -90,7 +90,7 @@
       pollTimer: null,
       modal: null,
     },
-    areas: { catalog: null, error: "" },
+    areas: { catalog: null, error: "", modal: null },
     agentes: {
       filter: { status: "", query: "" },
       items: [],
@@ -459,11 +459,15 @@
   async function afterLogin() {
     await loadWhoami();
     render();
-    if (isEditor()) {
-      await loadEditorData();
-      render();
-    }
-    await loadForTab();
+    await loadEditorAndTab();
+  }
+
+  // Dados de Tarefas (dependem do GitHub e podem demorar) não seguram a aba aberta.
+  async function loadEditorAndTab() {
+    await Promise.all([
+      isEditor() ? loadEditorData().then(function () { render(); }) : null,
+      loadForTab(),
+    ]);
   }
 
   async function loadForTab() {
@@ -3996,7 +4000,8 @@
   }
 
   function openPlannedAgent(agent) {
-    openModal({
+    state.areas.modal = openModal({
+      onClose: function () { state.areas.modal = null; },
       title: agent.name,
       subtitle: sectorLabel(agent.sector) + " · planejado",
       variant: "sheet",
@@ -4008,7 +4013,7 @@
           el("dt", { text: "Escreve fora do Forge" }), el("dd", { text: agent.writes }),
           el("dt", { text: "Previsto para" }), el("dd", { text: "Fase " + agent.phase + " do plano mestre" }),
         ]));
-        body.appendChild(el("p", { class: "muted", text: "Toda escrita fora do Forge passa por aprovação humana. O resultado fica registrado com tokens e custo." }));
+        body.appendChild(el("p", { class: "muted planned-note", text: "Toda escrita fora do Forge passa por aprovação humana. O resultado fica registrado com tokens e custo." }));
       },
     });
   }
@@ -4202,11 +4207,7 @@
       await loadWhoami();
       state.loading = false;
       render();
-      if (isEditor()) {
-        await loadEditorData();
-        render();
-      }
-      await loadForTab();
+      await loadEditorAndTab();
     } catch (err) {
       state.error = "api_unreachable";
       state.loading = false;
@@ -4215,7 +4216,7 @@
   }
 
   window.addEventListener("hashchange", async function () {
-    [state.agentes.detailModal, state.radar.modal, state.ai.modal].forEach(function (modal) {
+    [state.agentes.detailModal, state.radar.modal, state.ai.modal, state.areas.modal].forEach(function (modal) {
       if (modal) {
         modal.close();
       }

@@ -44,7 +44,7 @@
       id: "juridico", sector: "juridico", label: "Jurídico",
       items: [
         { tab: "agentes", label: "Agentes", icon: "bot", access: "reader" },
-        { tab: "pecas", label: "Peças e modelos", icon: "scale", access: "reader", soon: true },
+        { tab: "pecas", label: "Peças", icon: "scale", access: "reader", soon: true },
         { tab: "prazos", label: "Prazos", icon: "calendar", access: "reader", soon: true },
         { tab: "email", label: "E-mail", icon: "mail", access: "reader", soon: true },
         { tab: "notas", label: "Notas", icon: "note", access: "reader", soon: true },
@@ -54,7 +54,7 @@
       id: "financeiro", sector: "financeiro", label: "Financeiro",
       items: [
         { tab: "agentes", label: "Agentes", icon: "bot", access: "reader" },
-        { tab: "contas", label: "Contas e vencimentos", icon: "wallet", access: "reader", soon: true },
+        { tab: "contas", label: "Contas", icon: "wallet", access: "reader", soon: true },
         { tab: "relatorios", label: "Relatórios", icon: "chart", access: "reader", soon: true },
         { tab: "email", label: "E-mail", icon: "mail", access: "reader", soon: true },
         { tab: "notas", label: "Notas", icon: "note", access: "reader", soon: true },
