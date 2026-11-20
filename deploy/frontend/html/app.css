@@ -1388,6 +1388,60 @@ ul.pending { margin: var(--space-1) 0 var(--space-2); padding-left: var(--space-
   align-items: center;
   gap: var(--space-2);
 }
+.teia-full-btn {
+  position: absolute;
+  z-index: 3;
+  top: var(--space-3);
+  right: var(--space-3);
+  width: 2.5rem;
+  height: 2.5rem;
+  min-height: 0;
+  padding: 0;
+  display: inline-grid;
+  place-items: center;
+  background: var(--teia-legend-bg);
+  border: 1px solid var(--teia-legend-border);
+  color: var(--teia-legend-fg);
+}
+.teia-full-btn:hover { background: var(--teia-legend-bg); border-color: var(--teia-node-stroke-hover); }
+body.teia-full { overflow: hidden; }
+.teia-web.is-full {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  border: 0;
+  border-radius: 0;
+}
+.teia-float {
+  position: absolute;
+  z-index: 3;
+  top: calc(var(--space-3) * 2 + 2.5rem);
+  right: var(--space-3);
+  width: 20rem;
+  max-width: calc(100% - 1.5rem);
+  max-height: calc(100% - 9rem);
+  overflow: auto;
+  padding: var(--space-3) var(--space-4);
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+}
+.teia-float h3 { font-size: var(--text-md); margin: var(--space-1) 0; overflow-wrap: anywhere; }
+.teia-float p { overflow-wrap: anywhere; }
+.teia-float .teia-nlist { margin: 0 calc(-1 * var(--space-4)); }
+.teia-float .teia-nlist > a,
+.teia-float .teia-neighbor { padding-left: var(--space-4); padding-right: var(--space-4); }
+@media (max-width: 600px) {
+  .teia-float {
+    top: auto;
+    left: var(--space-3);
+    right: var(--space-3);
+    bottom: var(--space-3);
+    width: auto;
+    max-height: 45vh;
+  }
+  .teia-web.is-full .teia-legend { display: none; }
+}
 .teia-swatch {
   width: 0.5rem;
   height: 0.5rem;

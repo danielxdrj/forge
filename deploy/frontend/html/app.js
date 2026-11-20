@@ -58,6 +58,7 @@
     teiaQuery: "",
     teiaSelected: null,
     teiaExpanded: {},
+    teiaFull: false,
     relatedIssues: [],
     invest: {
       repos: [],
@@ -243,6 +244,24 @@
     path.setAttribute("stroke-linecap", "round");
     path.setAttribute("stroke-linejoin", "round");
     path.setAttribute("d", "M4 7.2h8v6H4zM5.6 7.2V5.4a2.4 2.4 0 014.8 0v1.8");
+    svg.appendChild(path);
+    return svg;
+  }
+
+  function strokeIcon(d) {
+    const ns = "http://www.w3.org/2000/svg";
+    const svg = document.createElementNS(ns, "svg");
+    svg.setAttribute("viewBox", "0 0 16 16");
+    svg.setAttribute("width", "16");
+    svg.setAttribute("height", "16");
+    svg.setAttribute("aria-hidden", "true");
+    const path = document.createElementNS(ns, "path");
+    path.setAttribute("fill", "none");
+    path.setAttribute("stroke", "currentColor");
+    path.setAttribute("stroke-width", "1.5");
+    path.setAttribute("stroke-linecap", "round");
+    path.setAttribute("stroke-linejoin", "round");
+    path.setAttribute("d", d);
     svg.appendChild(path);
     return svg;
   }
@@ -2034,6 +2053,13 @@
   }
 
   function fillTeiaDetail(panel) {
+    if (!panel) {
+      const float = document.getElementById("teia-float");
+      if (float) {
+        float.hidden = !teiaNodeById(state.teiaSelected);
+        fillTeiaDetail(float);
+      }
+    }
     const host = panel || document.getElementById("teia-detail");
     if (!host) {
       return;
@@ -2111,6 +2137,33 @@
       ]));
     });
     host.appendChild(nlist);
+  }
+
+  function setTeiaFull(on) {
+    state.teiaFull = !!on;
+    render({ keepState: true });
+    if (state.teiaFull) {
+      fillTeiaDetail();
+    }
+    const btn = document.querySelector(".teia-full-btn");
+    if (btn) {
+      btn.focus();
+    }
+  }
+
+  function teiaFullButton() {
+    const full = state.teiaFull;
+    const label = full ? "Sair da tela cheia (Esc)" : "Tela cheia";
+    return el("button", {
+      type: "button",
+      class: "teia-full-btn",
+      "aria-label": label,
+      "aria-pressed": full ? "true" : "false",
+      title: label,
+      onClick: function () { setTeiaFull(!state.teiaFull); },
+    }, [strokeIcon(full
+      ? "M6 2.5V6H2.5M10 2.5V6h3.5M6 13.5V10H2.5M10 13.5V10h3.5"
+      : "M2.5 6V2.5H6M13.5 6V2.5H10M2.5 10v3.5H6M13.5 10v3.5H10")]);
   }
 
   function teiaDataKey() {
@@ -3162,8 +3215,13 @@
       ]));
     });
 
-    const web = el("div", { class: "teia-web" });
+    const web = el("div", { class: "teia-web" + (state.teiaFull ? " is-full" : "") });
     web.appendChild(legend);
+    web.appendChild(teiaFullButton());
+    if (state.teiaFull) {
+      const float = el("aside", { class: "teia-float", id: "teia-float", "aria-label": "Nó selecionado" });
+      web.appendChild(float);
+    }
     mountTeiaWeb(web);
 
     const left = el("div", { class: "teia-left" }, [panel, graphCard]);
@@ -3810,6 +3868,10 @@
     app.classList.toggle("teia-layout", teiaOpen);
     app.classList.toggle("investigacao-layout", investOpen);
     document.body.classList.toggle("teia-open", teiaOpen);
+    if (!teiaOpen) {
+      state.teiaFull = false;
+    }
+    document.body.classList.toggle("teia-full", teiaOpen && state.teiaFull);
     if (state.loading) {
       setPageTitle("Forge");
       app.appendChild(stateCard("loading", "Carregando…"));
@@ -3878,6 +3940,13 @@
       render();
     }
   }
+
+  document.addEventListener("keydown", function (ev) {
+    if (ev.key !== "Escape" || !state.teiaFull || document.querySelector(".modal-overlay")) {
+      return;
+    }
+    setTeiaFull(false);
+  });
 
   window.addEventListener("hashchange", async function () {
     const tab = activeTab();
