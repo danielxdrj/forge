@@ -3,6 +3,9 @@
 Antes de propor código, leia [`AGENTS.md`](AGENTS.md) (regras de segurança, escopo e
 quando parar). Este arquivo só resume onde as coisas ficam e como rodar os testes.
 
+Evolução do produto (áreas por setor, login próprio, Forge Bot, servidor): siga a fase
+em andamento de [`docs/PLANO_MESTRE.md`](docs/PLANO_MESTRE.md) e atualize-o no mesmo PR.
+
 ## Não faça
 
 - Não varra o repositório inteiro. Use Grep/Glob focados nos módulos abaixo.
